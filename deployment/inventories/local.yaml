@@ -1,0 +1,6 @@
+all:
+  children:
+    homeassistant:
+      hosts:
+        homeassistant.local:
+          appdaemon_dir: /root/addon_configs/a0d7b954_appdaemon

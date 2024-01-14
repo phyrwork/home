@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "apps"
+version = "0.1.0"
+description = ""
+authors = ["Connor Newton <connor@ifthenelse.io>"]
+readme = "README.md"
+packages = [
+    {include = "bindicator"}
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+appdaemon = "^4.4.2"
+aiohttp = "3.8.6"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
