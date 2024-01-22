@@ -19,15 +19,11 @@ the next day.
      homeassistant:
        hosts:
          homeassistant.local:
-           appdaemon_dir: /root/addon_configs/a0d7b954_appdaemon
-   ``` 
-2. `make -C apps` to build my apps Python `requirements.txt`.
+           config_dir: /root/config
+   ```
 
-3. (For now) manually add these requirements to the Home Assistant AppDaemon python
-   packages and restart AppDaemon.
-
-4. Deploy apps.
+2. Deploy configuration.
    ```shell
    cd deployment
-   ansible-playbook -i inventories/local.yaml playbooks/apps.yaml
+   ansible-playbook -i inventories/local.yaml playbooks/config.yaml
    ```

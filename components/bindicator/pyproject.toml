@@ -1,18 +1,19 @@
 [tool.poetry]
-name = "apps"
+name = "bindicator"
 version = "0.1.0"
 description = ""
 authors = ["Connor Newton <connor@ifthenelse.io>"]
 readme = "README.md"
-packages = [
-    {include = "bindicator"}
-]
 
 [tool.poetry.dependencies]
-python = "^3.11"
-appdaemon = "^4.4.2"
-aiohttp = "3.8.6"
+python = ">=3.11,<3.13"
+marshmallow = "^3.20"
+marshmallow-dataclass = "^8.6"
+aiohttp = "^3.9"
 
+[tool.poetry.group.dev.dependencies]
+homeassistant = "^2024.1.5"
+jinja2-cli = "^0.8.2"
 
 [build-system]
 requires = ["poetry-core"]

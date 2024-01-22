@@ -1,0 +1,9 @@
+id: bindicator
+alias: 'Daily bin indicator update at 4 PM'
+description: 'Calls the bindicator update service daily at 4 PM'
+trigger:
+  - platform: time
+    at: '16:00:00'
+condition: []
+action:
+  - service: bindicator.update
