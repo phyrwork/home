@@ -45,6 +45,13 @@ async def next() -> Collection | None:
         async with session.get(CALENDAR_URL) as resp:
             data = await resp.json()
     calendar = cast(Calendar, Calendar.Schema().load(data))
-    if not calendar.collections:
+
+    # Only consider collections now or in the future
+    collections = [
+        collection for collection in calendar.collections
+        if collection.date >= datetime.now(collection.date.tzinfo)
+    ]
+
+    if not collections:
         return None
-    return calendar.collections[0]
+    return collections[0]

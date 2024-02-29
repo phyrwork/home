@@ -1,6 +1,0 @@
-appdaemon_apps:
-  - name: bindicator
-    modules:
-      - aiohttop
-      - marshmallow
-      - marshmallow-dataclass

@@ -47,9 +47,12 @@ class Controller:
 
     async def update(self, _call: ServiceCall) -> None:
         collection = await wc.next()
+        _LOGGER.info(f"next collection is {collection}")
 
         now = datetime.now(collection.date.tzinfo)
         threshold = timedelta(days=1)
+        _LOGGER.debug(f"{now=}, {threshold=}")
+
         if collection.date > now + threshold:
             _LOGGER.info(f"next collection is beyond threshold: ignoring")
             return
@@ -57,7 +60,7 @@ class Controller:
         color = next(
             (color for type, color in self.TYPE_COLOR.items() if type in collection.types),
             None
-            )
+        )
         if color is None:
             raise ValueError(f"color not found for collection types {collection.types}")
 

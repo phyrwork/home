@@ -25,5 +25,5 @@ the next day.
 2. Deploy configuration.
    ```shell
    cd deployment
-   ansible-playbook -i inventories/local.yaml playbooks/config.yaml
+   ansible-playbook -i inventory/local.yaml config.yaml
    ```

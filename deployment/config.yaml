@@ -1,0 +1,52 @@
+- hosts: homeassistant
+  tasks:
+    # TODO: Restart appropriate parts of homeassistant according to what has changed deployment
+    - name: install components
+      ansible.builtin.synchronize:
+        src: "../../components/{{ component }}/{{ component }}"
+        dest: "{{ config_dir }}/custom_components/"
+        recursive: yes
+        delete: yes
+      loop:
+        - bindicator
+      loop_control:
+        loop_var: component
+      notify: restart
+    - name: remove default automations file
+      file:
+        dest: "{{ config_dir }}/automations.yaml"
+        state: absent
+      notify: reload configurations
+    - name: install automations dir
+      ansible.builtin.synchronize:
+        src: "automations"
+        dest: "{{ config_dir }}"
+        recursive: yes
+        delete: yes
+      notify: reload configuration
+    - name: install configuration
+      copy:
+        src: configuration.yaml
+        dest: "{{ config_dir }}/configuration.yaml"
+      notify: reload configuration
+  handlers:
+    - name: reload configuration
+      uri:
+        url: "http://{{ inventory_hostname }}:8123/api/services/homeassistant/reload_core_config"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ lookup('env', 'HOME_HOMEASSISTANT_AUTH ') }}"
+          Content-Type: "application/json"
+        status_code: 200
+        validate_certs: no
+      delegate_to: localhost
+    - name: restart
+      uri:
+        url: "http://{{ inventory_hostname }}:8123/api/services/homeassistant/restart"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ lookup('env', 'HOME_HOMEASSISTANT_AUTH ') }}"
+          Content-Type: "application/json"
+        status_code: 200
+        validate_certs: no
+      delegate_to: localhost
