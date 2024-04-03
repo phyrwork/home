@@ -1,0 +1,5 @@
+platform: waste_collection_schedule
+name: days_to_blue_bin_collection
+types:
+  - Blue Bin
+value_template: '{{value.daysTo}}'

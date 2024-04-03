@@ -1,0 +1,5 @@
+platform: waste_collection_schedule
+name: days_to_black_bin_collection
+types:
+  - Black Bin
+value_template: '{{value.daysTo}}'

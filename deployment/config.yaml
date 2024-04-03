@@ -1,52 +1,40 @@
 - hosts: homeassistant
+
+  handlers:
+    # n.b. Play-level handlers are callable from roles included by the play.
+
+    # Restart Home Assistant. This is required for reloading custom_components and a
+    # very heavy-handed way for reloading configuration, though currently the only
+    # (trivial) way we have to do it.
+    - name: restart ha
+      command: ha core restart
+
+  roles:
+    # Bin collection schedule lookup component.
+    - role: waste_collection_schedule
+
   tasks:
-    # TODO: Restart appropriate parts of homeassistant according to what has changed deployment
-    - name: install components
-      ansible.builtin.synchronize:
-        src: "../../components/{{ component }}/{{ component }}"
-        dest: "{{ config_dir }}/custom_components/"
-        recursive: yes
-        delete: yes
-      loop:
-        - bindicator
-      loop_control:
-        loop_var: component
-      notify: restart
+    # TODO: Restart appropriate parts of homeassistant according to what has changed in deployment
+
     - name: remove default automations file
       file:
-        dest: "{{ config_dir }}/automations.yaml"
+        dest: "{{ ha_config_dir }}/automations.yaml"
         state: absent
-      notify: reload configurations
-    - name: install automations dir
+      notify: restart ha
+
+    - name: install configuration sub-directories
       ansible.builtin.synchronize:
-        src: "automations"
-        dest: "{{ config_dir }}"
+        src: "{{ item }}"
+        dest: "{{ ha_config_dir }}"
         recursive: yes
         delete: yes
-      notify: reload configuration
+      notify: restart ha
+      loop:
+        - automations
+        - sensors
+
     - name: install configuration
       copy:
         src: configuration.yaml
-        dest: "{{ config_dir }}/configuration.yaml"
-      notify: reload configuration
-  handlers:
-    - name: reload configuration
-      uri:
-        url: "http://{{ inventory_hostname }}:8123/api/services/homeassistant/reload_core_config"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ lookup('env', 'HOME_HOMEASSISTANT_AUTH ') }}"
-          Content-Type: "application/json"
-        status_code: 200
-        validate_certs: no
-      delegate_to: localhost
-    - name: restart
-      uri:
-        url: "http://{{ inventory_hostname }}:8123/api/services/homeassistant/restart"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ lookup('env', 'HOME_HOMEASSISTANT_AUTH ') }}"
-          Content-Type: "application/json"
-        status_code: 200
-        validate_certs: no
-      delegate_to: localhost
+        dest: "{{ ha_config_dir }}/configuration.yaml"
+      notify: restart ha
