@@ -1,0 +1,5 @@
+platform: integration
+source: sensor.washing_machine_socket_power
+name: washing_machine_socket_energy
+unit_prefix: k
+round: 2

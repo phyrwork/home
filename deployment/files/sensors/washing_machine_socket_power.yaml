@@ -1,0 +1,6 @@
+platform: template
+sensors:
+  washing_machine_socket_power:
+    friendly_name: Washing Machine Socket Power
+    unit_of_measurement: W
+    value_template: "{{ states.switch.washing_machine_socket.attributes.current_consumption }}"
