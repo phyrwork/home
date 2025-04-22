@@ -2,5 +2,6 @@ platform: template
 sensors:
   dishwasher_socket_power:
     friendly_name: Dishwasher Socket Power
+    device_class: power
     unit_of_measurement: W
     value_template: "{{ states.switch.dishwasher_socket.attributes.current_consumption }}"
