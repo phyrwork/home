@@ -1,0 +1,7 @@
+platform: template
+sensors:
+  connors_desk_socket_power:
+    friendly_name: Connor's Desk Socket Power
+    device_class: power
+    unit_of_measurement: W
+    value_template: "{{ states.switch.connors_desk_socket.attributes.current_consumption }}"

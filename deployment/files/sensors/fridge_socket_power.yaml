@@ -1,0 +1,7 @@
+platform: template
+sensors:
+  fridge_socket_power:
+    friendly_name: Fridge Socket Power
+    device_class: power
+    unit_of_measurement: W
+    value_template: "{{ states.switch.fridge_socket.attributes.current_consumption }}"
