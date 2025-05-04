@@ -17,3 +17,9 @@ waste_collection_schedule:
       args:
         post_code: "CB241BY"
         number: "18"
+
+# HTTPS only access
+http:
+  server_port: 443
+  ssl_certificate: /ssl/fullchain.pem
+  ssl_key: /ssl/privkey.pem
