@@ -1,0 +1,10 @@
+alias: "Turn on pantry light when door opens"
+description: "Turns on the pantry light when the pantry door is opened."
+trigger:
+  - platform: state
+    entity_id: binary_sensor.pantry_door
+    to: "on"
+action:
+  - service: light.turn_on
+    target:
+      entity_id: light.pantry_light
