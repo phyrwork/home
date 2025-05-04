@@ -38,3 +38,9 @@
         src: configuration.yaml
         dest: "{{ ha_config_dir }}/configuration.yaml"
       notify: restart ha
+
+    - name: install worxlandroid sensor
+      template:
+        src: worxlandroid.yaml.j2
+        dest: "{{ ha_config_dir }}/sensors/worxlandroid.yaml"
+      notify: restart ha
