@@ -1,0 +1,8 @@
+# This sensor fakes a current accumulative export sensor by integrating the faked
+# current export sensor.
+platform: integration
+name: Current Accumulative Consumption Export Electricity ({{ electricity_meter_serial_number }}/{{ electricity_meter_mpan_export }})
+source: sensor.{{ ("octopus_energy_electricity_" ~ electricity_meter_serial_number ~ "_" ~ electricity_meter_mpan_export ~ "_current_export") | lower }}
+unit_prefix: k
+round: 2
+method: trapezoidal

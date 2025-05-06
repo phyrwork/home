@@ -1,0 +1,14 @@
+# This sensor fakes a current export sensor by taking the current demand sensor,
+# inverting it, and clamping it above 0.
+platform: template
+sensors:
+  {{ ("octopus_energy_electricity_" ~ electricity_meter_serial_number ~ "_" ~ electricity_meter_mpan_export ~ "_current_export") | lower }}:
+    friendly_name: Current Export Electricity ({{ electricity_meter_serial_number }}/{{ electricity_meter_mpan_export }})
+    unit_of_measurement: "W"
+    value_template: >
+      {% raw %}{% set demand = states('sensor.octopus_energy_electricity_{% endraw %}{{ electricity_meter_serial_number }}_{{ electricity_meter_mpan_import }}{% raw %}_current_demand') | float %}
+      {% if demand < 0 %}
+        {{ -demand }}
+      {% else %}
+        0
+      {% endif %}{% endraw %}

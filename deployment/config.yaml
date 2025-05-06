@@ -39,8 +39,12 @@
         dest: "{{ ha_config_dir }}/configuration.yaml"
       notify: restart ha
 
-    - name: install worxlandroid sensor
+    - name: install templated sensors
       template:
-        src: worxlandroid.yaml.j2
-        dest: "{{ ha_config_dir }}/sensors/worxlandroid.yaml"
+        src: "{{ item }}.yaml.j2"
+        dest: "{{ ha_config_dir }}/sensors/{{ item }}.yaml"
       notify: restart ha
+      loop:
+        - worxlandroid
+        - octopus_energy_electricity_current_export
+        - octopus_energy_electricity_export_current_accumulative_consumption
