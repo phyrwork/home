@@ -1,3 +1,4 @@
+id: pantry_light_on
 alias: "Turn on pantry light when door opens"
 description: "Turns on the pantry light when the pantry door is opened."
 trigger:

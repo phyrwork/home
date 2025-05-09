@@ -1,3 +1,4 @@
+id: letsencrypt
 alias: Renew Let's Encrypt Certificates
 description: Run the Let's Encrypt add-on every Saturday at 03:00 AM
 trigger:

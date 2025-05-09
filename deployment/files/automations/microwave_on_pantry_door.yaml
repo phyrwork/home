@@ -1,3 +1,4 @@
+id: microwave_off_pantry_door
 alias: 'Turn on microwave when pantry door opens'
 trigger:
   - platform: state

@@ -47,6 +47,7 @@
       notify: restart ha
       loop:
         - family_room_lamp_button
+        - family_room_lamp_button_double
 
     - name: install templated sensors
       template:

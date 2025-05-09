@@ -1,3 +1,4 @@
+id: pantry_light_off
 alias: "Turn off pantry light when door closes"
 description: "Turns off the pantry light when the pantry door is closed."
 trigger:
