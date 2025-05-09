@@ -1,0 +1,18 @@
+family_room_lamp_restore:
+  alias: Restore Family Room Lamp state
+  sequence:
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ states('input_text.family_room_lamp_state') == 'on' }}"
+          sequence:
+            - service: light.turn_on
+              target:
+                entity_id: light.family_room_lamp
+              data:
+                brightness: "{{ states('input_number.family_room_lamp_brightness') | int }}"
+                rgb_color: "{{ states('input_text.family_room_lamp_color') | from_json }}"
+      default:
+        - service: light.turn_off
+          target:
+            entity_id: light.family_room_lamp

@@ -1,0 +1,9 @@
+alias: Restore Family Room Lamp state when button pressed
+trigger:
+  - platform: event
+    event_type: zha_event
+    event_data:
+      device_id: "{{ family_room_lamp_button_device_id }}"
+      command: toggle
+action:
+  - service: script.family_room_lamp_restore

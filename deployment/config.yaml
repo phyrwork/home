@@ -31,6 +31,7 @@
       notify: restart ha
       loop:
         - automations
+        - scripts
         - sensors
 
     - name: install configuration
@@ -38,6 +39,14 @@
         src: configuration.yaml
         dest: "{{ ha_config_dir }}/configuration.yaml"
       notify: restart ha
+
+    - name: install templated automations
+      template:
+        src: "{{ item }}.yaml.j2"
+        dest: "{{ ha_config_dir }}/automations/{{ item }}.yaml"
+      notify: restart ha
+      loop:
+        - family_room_lamp_button
 
     - name: install templated sensors
       template:

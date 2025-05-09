@@ -6,7 +6,7 @@ frontend:
   themes: !include_dir_merge_named themes
 
 automation: !include_dir_list automations/
-script: !include scripts.yaml
+script: !include_dir_merge_named scripts/
 scene: !include scenes.yaml
 sensor: !include_dir_list sensors/
 
@@ -23,3 +23,18 @@ http:
   server_port: 443
   ssl_certificate: /ssl/fullchain.pem
   ssl_key: /ssl/privkey.pem
+
+input_text:
+  family_room_lamp_state:
+    name: Family Room Lamp State
+    initial: 'off'
+  family_room_lamp_color:
+    name: Family Room Lamp Color
+    initial: 'white'
+
+input_number:
+  family_room_lamp_brightness:
+    name: Family Room Lamp Brightness
+    min: 0
+    max: 255
+    initial: 0
