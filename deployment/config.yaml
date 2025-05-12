@@ -33,6 +33,7 @@
         - automations
         - scripts
         - sensors
+        - groups
 
     - name: install configuration
       copy:

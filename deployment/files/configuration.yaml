@@ -9,6 +9,7 @@ automation: !include_dir_list automations/
 script: !include_dir_merge_named scripts/
 scene: !include scenes.yaml
 sensor: !include_dir_list sensors/
+group: !include_dir_merge_named groups/
 
 # Bindicator data source.
 waste_collection_schedule:

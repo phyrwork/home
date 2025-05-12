@@ -1,0 +1,5 @@
+master_bedroom_covers:
+  name: Master Bedroom Blinds
+  entities:
+      - cover.master_bedroom_blind_left
+      - cover.master_bedroom_blind_right
