@@ -3,3 +3,8 @@ master_bedroom_covers:
   entities:
       - cover.master_bedroom_blind_left
       - cover.master_bedroom_blind_right
+
+covers:
+  name: All Blinds
+  entities:
+    - group.master_bedroom_covers

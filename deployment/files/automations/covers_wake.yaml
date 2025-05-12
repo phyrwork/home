@@ -1,0 +1,10 @@
+alias: Open blinds to 20% at 7am
+trigger:
+  - platform: time
+    at: "07:00:00"
+action:
+  - service: cover.set_cover_position
+    target:
+      entity_id: group.covers
+    data:
+      position: 20

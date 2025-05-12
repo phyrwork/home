@@ -1,0 +1,10 @@
+alias: Open blinds to 80% at 9am
+trigger:
+  - platform: time
+    at: "09:00:00"
+action:
+  - service: cover.set_cover_position
+    target:
+      entity_id: group.covers
+    data:
+      position: 80

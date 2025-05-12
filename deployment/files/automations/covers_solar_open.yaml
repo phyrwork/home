@@ -1,0 +1,20 @@
+alias: Open blinds when solar output is no longer high
+description: Re-opens covers when solar generation returns below threshold for more than 5 minutes
+trigger:
+  - platform: numeric_state
+    entity_id: sensor.solar_generation_meter_power_consumption
+    below: 1500
+    for: "00:05:00"
+condition:
+  - condition: state
+    entity_id: input_boolean.covers_closed_by_solar
+    state: "on"
+action:
+  - service: cover.set_cover_position
+    target:
+      entity_id: group.covers
+    data:
+      position: 80
+  - service: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.covers_closed_by_solar

@@ -1,0 +1,10 @@
+alias: Close blinds at sunset
+trigger:
+  - platform: sun
+    event: sunset
+action:
+  - service: cover.set_cover_position
+    target:
+      entity_id: group.covers
+    data:
+      position: 0
