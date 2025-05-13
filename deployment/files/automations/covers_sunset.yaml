@@ -6,5 +6,3 @@ action:
   - service: cover.set_cover_position
     target:
       entity_id: group.covers
-    data:
-      position: 0
