@@ -6,10 +6,9 @@
   ansible.builtin.git:
     repo: "{{ wcs_git_url }}"
     dest: "{{ wcs_src_dir }}"
-    version: 1.46.0
+    version: 2.8.0
     clone: yes
-    update: no
-  register: repository
+    update: yes
   notify: restart ha
 
 - name: Create custom_components directory
