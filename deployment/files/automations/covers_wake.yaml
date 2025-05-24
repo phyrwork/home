@@ -1,7 +1,31 @@
-alias: Open blinds to 20% at 7am
+alias: Open blinds to 20% at 7am on weekdays and 9am on weekends
 trigger:
   - platform: time
     at: "07:00:00"
+  - platform: time
+    at: "09:00:00"
+condition:
+  - condition: or
+    conditions:
+      - condition: and
+        conditions:
+          - condition: time
+            weekday:
+              - mon
+              - tue
+              - wed
+              - thu
+              - fri
+          - condition: time
+            before: "09:00:00"
+      - condition: and
+        conditions:
+          - condition: time
+            weekday:
+              - sat
+              - sun
+          - condition: time
+            after: "09:00:00"
 action:
   - service: cover.set_cover_position
     target:

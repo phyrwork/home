@@ -1,11 +1,34 @@
-alias: Open blinds to 80% at 9am
+alias: Open blinds to 80% at 9am on weekdays and 11am on weekends
 trigger:
   - platform: time
     at: "09:00:00"
+  - platform: time
+    at: "11:00:00"
 condition:
   - condition: state
     entity_id: input_boolean.covers_closed_by_solar
     state: "off"
+  - condition: or
+    conditions:
+      - condition: and
+        conditions:
+          - condition: time
+            weekday:
+              - mon
+              - tue
+              - wed
+              - thu
+              - fri
+          - condition: time
+            before: "09:00:00"
+      - condition: and
+        conditions:
+          - condition: time
+            weekday:
+              - sat
+              - sun
+          - condition: time
+            after: "09:00:00"
 action:
   - service: cover.set_cover_position
     target:
