@@ -16,14 +16,14 @@ condition:
             entity_id: binary_sensor.is_workday
             state: "on"
           - condition: time
-            before: "09:00:00"
+            before: "11:00:00"
       - condition: and
         conditions:
           - condition: state
             entity_id: binary_sensor.is_workday
             state: "off"
           - condition: time
-            after: "09:00:00"
+            after: "11:00:00"
 action:
   - service: cover.set_cover_position
     target:
