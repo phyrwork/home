@@ -4,7 +4,14 @@ master_bedroom_covers:
       - cover.master_bedroom_blind_left
       - cover.master_bedroom_blind_right
 
+guest_bedroom_covers:
+  name: Guest Bedroom Blinds
+  entities:
+    - cover.guest_bedroom_blind_left
+    - cover.guest_bedroom_blind_right
+
 covers:
   name: All Blinds
   entities:
     - group.master_bedroom_covers
+    - group.guest_bedroom_covers
