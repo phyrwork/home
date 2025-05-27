@@ -34,6 +34,7 @@
         - scripts
         - sensors
         - groups
+        - templates
 
     - name: install configuration
       copy:
@@ -43,7 +44,7 @@
 
     - name: install templated automations
       template:
-        src: "{{ item }}.yaml.j2"
+        src: "automations/{{ item }}.yaml.j2"
         dest: "{{ ha_config_dir }}/automations/{{ item }}.yaml"
       notify: restart ha
       loop:
@@ -52,10 +53,17 @@
 
     - name: install templated sensors
       template:
-        src: "{{ item }}.yaml.j2"
+        src: "sensors/{{ item }}.yaml.j2"
         dest: "{{ ha_config_dir }}/sensors/{{ item }}.yaml"
       notify: restart ha
       loop:
         - worxlandroid
-        - octopus_energy_electricity_current_export
         - octopus_energy_electricity_export_current_accumulative_consumption
+
+    - name: install templated template entities
+      template:
+        src: "templates/{{ item }}.yaml.j2"
+        dest: "{{ ha_config_dir }}/templates/{{ item }}.yaml"
+      notify: restart ha
+      loop:
+        - octopus_energy_electricity_current_export
