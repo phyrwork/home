@@ -1,0 +1,6 @@
+sensor:
+  - unique_id: washing_machine_socket_power
+    name: Washing Machine Socket Power
+    device_class: power
+    unit_of_measurement: W
+    state: "{{ states.switch.washing_machine_socket.attributes.current_consumption }}"

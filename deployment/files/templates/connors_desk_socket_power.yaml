@@ -1,0 +1,6 @@
+sensor:
+  - unique_id: connors_desk_socket_power
+    name: Connor's Desk Socket Power
+    device_class: power
+    unit_of_measurement: W
+    state: "{{ states.switch.connors_desk_socket.attributes.current_consumption }}"
