@@ -66,4 +66,5 @@
         dest: "{{ ha_config_dir }}/templates/{{ item }}.yaml"
       notify: restart ha
       loop:
+        - covers_battery_low
         - octopus_energy_electricity_current_export

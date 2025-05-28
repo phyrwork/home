@@ -51,3 +51,14 @@ gas_meter_mpan: !vault |
   3266
 
 family_room_lamp_button_device_id: 126e2f6852deb5457919ddd987f34c21
+
+cover_battery_low_threshold: 30
+cover_battery_low_sensors:
+  - id: master_bedroom_blind_left
+    name: Master Bedroom Left Blind
+  - id: master_bedroom_blind_right
+    name: Master Bedroom Right Blind
+  - id: guest_bedroom_blind_left
+    name: Guest Bedroom Left Blind
+  - id: guest_bedroom_blind_right
+    name: Guest Bedroom Right Blind
