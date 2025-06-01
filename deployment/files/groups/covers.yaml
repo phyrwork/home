@@ -1,8 +1,8 @@
 master_bedroom_covers:
   name: Master Bedroom Blinds
   entities:
-      - cover.master_bedroom_blind_left
-      - cover.master_bedroom_blind_right
+    - cover.master_bedroom_blind_left
+    - cover.master_bedroom_blind_right
 
 guest_bedroom_covers:
   name: Guest Bedroom Blinds
@@ -13,5 +13,10 @@ guest_bedroom_covers:
 covers:
   name: All Blinds
   entities:
-    - group.master_bedroom_covers
-    - group.guest_bedroom_covers
+    # n.b. This is a deliberately flat list of all covers, because expansion of groups
+    # in templates is not recursive and walking the group hierarchy in templates is
+    # super verbose.
+    - cover.master_bedroom_blind_left
+    - cover.master_bedroom_blind_right
+    - cover.guest_bedroom_blind_left
+    - cover.guest_bedroom_blind_right
