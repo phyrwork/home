@@ -2,5 +2,7 @@ binary_sensor:
 {% for cover in cover_battery_low_sensors %}
   - unique_id: {{ cover.id }}_battery_low
     state: >
-      {% raw %}{{ states('{% endraw %}{{ cover.id }}{% raw %}') | int > {% endraw %}{{ cover_battery_low_threshold }}{% raw %}}}"
-{% endfor %}
+      {% raw %}{{ states('{% endraw %}{{ cover.id }}{% raw %}') | int > {% endraw %}{{ cover_battery_low_threshold }}{% raw %} }}{% endraw %}
+{# This newline required to stop endfor gobbling newline preceding each list item #}
+
+{% endfor +%}
