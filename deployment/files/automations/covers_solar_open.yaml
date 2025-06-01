@@ -1,20 +1,41 @@
-alias: Open blinds when solar output is no longer high
-description: Re-opens covers when solar generation returns below threshold for more than 5 minutes
+alias: Restore covers closed due to high solar output
+description: >
+  Re-open covers that were closed due to high solar output. Don't re-open covers that
+  are currently closed more than the saved position as these were likely closed for
+  privacy.
+
 trigger:
   - platform: numeric_state
     entity_id: sensor.solar_generation_meter_power_consumption
-    below: 1500
+    below: 1300
     for: "00:05:00"
-condition:
-  - condition: state
-    entity_id: input_boolean.covers_closed_by_solar
-    state: "on"
+
 action:
-  - service: cover.set_cover_position
-    target:
-      entity_id: group.covers
+  - variables:
+      close_position: 20
+      previous_open: "{{ states('input_text.covers_closed_by_solar') | from_json }}"
+
+      # List of covers to re-open. Only select those that are currently open more than
+      # the solar closed position.
+      open_covers: >
+        {% set covers = previous_open %}
+        {{ covers
+           | select("state_attr(item, 'current_position') | int >= close_position")
+           | list
+        }}
+
+  # Open the covers
+  - repeat:
+      for_each: "{{ open_covers }}"
+      sequence:
+        - service: cover.set_cover_position
+          target:
+            entity_id: "{{ repeat.item }}"
+          data:
+            position: "{{ previous_open[repeat.item] }}"
+
+  # Clear the set of covers closed by solar
+  - service: input_text.set_value
     data:
-      position: 80
-  - service: input_boolean.turn_off
-    target:
-      entity_id: input_boolean.covers_closed_by_solar
+      entity_id: input_text.covers_closed_by_solar
+      value: "{}"

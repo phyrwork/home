@@ -34,6 +34,10 @@ input_text:
   family_room_lamp_color:
     name: Family Room Lamp Color
     initial: 'white'
+  covers_closed_by_solar:
+    name: Covers Closed by Solar
+    max: 8192
+    initial: "{}"
 
 input_number:
   family_room_lamp_brightness:
@@ -42,6 +46,7 @@ input_number:
     max: 255
     initial: 0
 
+# TODO: Remove this input_boolean once the automation is working correctly
 input_boolean:
   covers_closed_by_solar:
     name: Blinds closed because of high solar output
