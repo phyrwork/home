@@ -30,6 +30,7 @@
         delete: yes
       notify: restart ha
       loop:
+        - alerts
         - automations
         - scripts
         - sensors
@@ -60,7 +61,7 @@
         - worxlandroid
         - octopus_energy_electricity_export_current_accumulative_consumption
 
-    - name: install templated template entities
+    - name: install templated templates
       template:
         src: "templates/{{ item }}.yaml.j2"
         dest: "{{ ha_config_dir }}/templates/{{ item }}.yaml"
@@ -68,3 +69,11 @@
       loop:
         - covers_battery_low
         - octopus_energy_electricity_current_export
+
+    - name: install templated alerts
+      template:
+        src: "alerts/{{ item }}.yaml.j2"
+        dest: "{{ ha_config_dir }}/alerts/{{ item }}.yaml"
+      notify: restart ha
+      loop:
+        - covers_battery_low

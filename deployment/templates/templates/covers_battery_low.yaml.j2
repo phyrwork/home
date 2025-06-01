@@ -1,8 +1,11 @@
 binary_sensor:
-{% for cover in cover_battery_low_sensors %}
-  - name: {{ cover.name }}
+{% for sensor in cover_battery_low_sensors %}
+  # n.b. Resulting entity ID will be the slugified version of 'name'.
+  #   Frustratingly, there is no way to override this so that the entity ID prefixes
+  #   match the source sensors.
+  - name: {{ sensor.name }}
     state: >
-      {% raw %}{{ states('{% endraw %}{{ cover.sensor_id }}{% raw %}') | int < {% endraw %}{{ cover_battery_low_threshold }}{% raw %} }}{% endraw %}
+      {% raw %}{{ states('{% endraw %}{{ sensor.entity_id }}{% raw %}') | int < {% endraw %}{{ cover_battery_low_threshold }}{% raw %} }}{% endraw %}
 {# This newline required to stop endfor gobbling newline preceding each list item #}
 
-{% endfor +%}
+{% endfor %}
