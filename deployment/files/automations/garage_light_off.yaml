@@ -1,0 +1,11 @@
+id: garage_light_off
+alias: "Turn off garage light when door closes"
+description: "Turns off the garage light when the garage door is closed."
+trigger:
+  - platform: state
+    entity_id: binary_sensor.garage_door
+    to: "off"
+action:
+  - service: light.turn_off
+    target:
+      entity_id: light.garage_light

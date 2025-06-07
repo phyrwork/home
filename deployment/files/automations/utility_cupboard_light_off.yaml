@@ -1,0 +1,11 @@
+id: utility_cupboard_light_off
+alias: "Turn off utility cupboard light when door closes"
+description: "Turns off the utility cupboard light when the utility cupboard door is closed."
+trigger:
+  - platform: state
+    entity_id: binary_sensor.utility_cupboard_door
+    to: "off"
+action:
+  - service: light.turn_off
+    target:
+      entity_id: light.utility_cupboard_light

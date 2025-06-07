@@ -1,0 +1,11 @@
+id: utility_cupboard_light_on
+alias: "Turn on utility cupboard light when door opens"
+description: "Turns on the utility cupboard light when the utility cupboard door is opened."
+trigger:
+  - platform: state
+    entity_id: binary_sensor.utility_cupboard_door
+    to: "on"
+action:
+  - service: light.turn_on
+    target:
+      entity_id: light.utility_cupboard_light
