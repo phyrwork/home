@@ -1,10 +1,10 @@
-id: microwave_off_pantry_door
-alias: 'Turn on microwave when pantry door opens'
-trigger:
-  - platform: state
-    entity_id: binary_sensor.pantry_door
-    to: 'on'
-action:
-  - service: switch.turn_on
-    target:
-      entity_id: switch.microwave_socket
+- id: microwave_off_pantry_door
+  alias: 'Turn on microwave when pantry door opens'
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.pantry_door
+      to: 'on'
+  action:
+    - service: switch.turn_on
+      target:
+        entity_id: switch.microwave_socket

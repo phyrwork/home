@@ -1,29 +1,29 @@
-id: bindicator
-alias: Bindicator
-trigger:
-  - platform: time
-    at: '16:00:00'
-action:
-  - choose:
-      - conditions:
-          - condition: numeric_state
-            entity_id: sensor.days_to_black_bin_collection
-            below: 2  # i.e. Tomorrow or sooner
-        sequence:
-          - service: script.family_room_lamp_save
-          - service: light.turn_on
-            target:
-              entity_id: light.family_room_lamp
-            data:
-              color_name: magenta
-      - conditions:
-          - condition: numeric_state
-            entity_id: sensor.days_to_blue_bin_collection
-            below: 2  # i.e. Tomorrow or sooner
-        sequence:
-          - service: script.family_room_lamp_save
-          - service: light.turn_on
-            target:
-              entity_id: light.family_room_lamp
-            data:
-              color_name: blue
+- id: bindicator
+  alias: Bindicator
+  trigger:
+    - platform: time
+      at: '16:00:00'
+  action:
+    - choose:
+        - conditions:
+            - condition: numeric_state
+              entity_id: sensor.days_to_black_bin_collection
+              below: 2  # i.e. Tomorrow or sooner
+          sequence:
+            - service: script.family_room_lamp_save
+            - service: light.turn_on
+              target:
+                entity_id: light.family_room_lamp
+              data:
+                color_name: magenta
+        - conditions:
+            - condition: numeric_state
+              entity_id: sensor.days_to_blue_bin_collection
+              below: 2  # i.e. Tomorrow or sooner
+          sequence:
+            - service: script.family_room_lamp_save
+            - service: light.turn_on
+              target:
+                entity_id: light.family_room_lamp
+              data:
+                color_name: blue

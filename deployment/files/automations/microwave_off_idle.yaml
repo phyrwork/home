@@ -1,22 +1,22 @@
-id: microwave_off_idle
-alias: 'Turn off microwave when idle'
-trigger:
-  - platform: numeric_state
-    entity_id: sensor.microwave_socket_current_consumption
-    below: 5
-    for: '00:05:00'
-  - platform: homeassistant
-    event: start
-condition:
-  # Prevent turn off if the microwave is in use when Home Assistant starts
-  - condition: numeric_state
-    entity_id: sensor.microwave_socket_current_consumption
-    below: 5
-  # Prevent turn off if the pantry door is open - assume the microwave is about to be used
-  - condition: state
-    entity_id: binary_sensor.pantry_door
-    state: 'off'
-action:
-  - service: switch.turn_off
-    target:
-      entity_id: switch.microwave_socket
+- id: microwave_off_idle
+  alias: 'Turn off microwave when idle'
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.microwave_socket_current_consumption
+      below: 5
+      for: '00:05:00'
+    - platform: homeassistant
+      event: start
+  condition:
+    # Prevent turn off if the microwave is in use when Home Assistant starts
+    - condition: numeric_state
+      entity_id: sensor.microwave_socket_current_consumption
+      below: 5
+    # Prevent turn off if the pantry door is open - assume the microwave is about to be used
+    - condition: state
+      entity_id: binary_sensor.pantry_door
+      state: 'off'
+  action:
+    - service: switch.turn_off
+      target:
+        entity_id: switch.microwave_socket

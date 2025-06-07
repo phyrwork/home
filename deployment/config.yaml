@@ -28,6 +28,7 @@
         dest: "{{ ha_config_dir }}"
         recursive: yes
         delete: yes
+        links: yes
       notify: restart ha
       loop:
         - alerts

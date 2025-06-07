@@ -1,70 +1,70 @@
-alias: Open blinds to 80% at 9am on weekdays and 11am on weekends
-description: >
-  Open all blinds to 80% at 9am on weekdays and 11am on weekends. Don't open blinds if
-  
-  - They are already closed more than the wake position (assume they're closed for
-    privacy) or if
-  
-  - Solar output is high, and record which blinds would have been opened for if the sun
-    goes down later.
-  
+- alias: Open blinds to 80% at 9am on weekdays and 11am on weekends
+  description: >
+    Open all blinds to 80% at 9am on weekdays and 11am on weekends. Don't open blinds if
+    
+    - They are already closed more than the wake position (assume they're closed for
+      privacy) or if
+    
+    - Solar output is high, and record which blinds would have been opened for if the sun
+      goes down later.
+    
 
-trigger:
-  - platform: time
-    at: "09:00:00"
-  - platform: time
-    at: "11:00:00"
+  trigger:
+    - platform: time
+      at: "09:00:00"
+    - platform: time
+      at: "11:00:00"
 
-condition:
-  - condition: or
-    conditions:
-      - condition: and
-        conditions:
-          - condition: state
-            entity_id: binary_sensor.is_workday
-            state: "on"
-          - condition: time
-            before: "11:00:00"
-      - condition: and
-        conditions:
-          - condition: state
-            entity_id: binary_sensor.is_workday
-            state: "off"
-          - condition: time
-            after: "11:00:00"
+  condition:
+    - condition: or
+      conditions:
+        - condition: and
+          conditions:
+            - condition: state
+              entity_id: binary_sensor.is_workday
+              state: "on"
+            - condition: time
+              before: "11:00:00"
+        - condition: and
+          conditions:
+            - condition: state
+              entity_id: binary_sensor.is_workday
+              state: "off"
+            - condition: time
+              after: "11:00:00"
 
-action:
-  - variables:
-      wake_position: 20
-      day_position: 80
+  action:
+    - variables:
+        wake_position: 20
+        day_position: 80
 
-      # List of covers to close. Only select those that are not already closed more than
-      # the solar close position.
-      open_covers: >
-        {{ expand('group.covers')
-           | selectattr('attributes.current_position', 'gte', wake_position)
-           | map(attribute='entity_id')
-           | list
-        }}
+        # List of covers to close. Only select those that are not already closed more than
+        # the solar close position.
+        open_covers: >
+          {{ expand('group.covers')
+             | selectattr('attributes.current_position', 'gte', wake_position)
+             | map(attribute='entity_id')
+             | list
+          }}
 
-      # Read already closed covers
-      previous_closed: >
-        {{ states('input_text.covers_closed_by_solar') | from_json }}
+        # Read already closed covers
+        previous_closed: >
+          {{ states('input_text.covers_closed_by_solar') | from_json }}
 
-      # Read current positions of covers to be closed
-      extra_closed: >-
-        {% set R = {} %}
-        {% for cover in close_covers %}
-          {% set R = R | combine({ (cover): (state_attr(cover, 'current_position') | int) }) %}
-        {% endfor %}
-        {{ R }}
+        # Read current positions of covers to be closed
+        extra_closed: >-
+          {% set R = {} %}
+          {% for cover in close_covers %}
+            {% set R = R | combine({ (cover): (state_attr(cover, 'current_position') | int) }) %}
+          {% endfor %}
+          {{ R }}
 
-      # Merge
-      updated_closed: >
-        {{ previous_closed | combine(extra_closed) }}
+        # Merge
+        updated_closed: >
+          {{ previous_closed | combine(extra_closed) }}
 
-  - service: cover.set_cover_position
-    target:
-      entity_id: group.covers
-    data:
-      position: 80
+    - service: cover.set_cover_position
+      target:
+        entity_id: group.covers
+      data:
+        position: 80

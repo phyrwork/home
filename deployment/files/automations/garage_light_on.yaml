@@ -1,11 +1,11 @@
-id: garage_light_on
-alias: "Turn on garage light when door opens"
-description: "Turns on the garage light when the garage door is opened."
-trigger:
-  - platform: state
-    entity_id: binary_sensor.garage_door
-    to: "on"
-action:
-  - service: light.turn_on
-    target:
-      entity_id: light.garage_light
+- id: garage_light_on
+  alias: "Turn on garage light when door opens"
+  description: "Turns on the garage light when the garage door is opened."
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.garage_door
+      to: "on"
+  action:
+    - service: light.turn_on
+      target:
+        entity_id: light.garage_light

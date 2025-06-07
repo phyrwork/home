@@ -1,15 +1,15 @@
-id: letsencrypt
-alias: Renew Let's Encrypt Certificates
-description: Run the Let's Encrypt add-on daily at 03:00 AM or when the external IP changes
-trigger:
-  - platform: time
-    at: '03:00:00'
-  # Run the add-on when the external IP changes to get certbot to update the external
-  # access DNS entry, even if we don't need to renew certificates.
-  - platform: state
-    entity_id: sensor.external_ip
-action:
-  - service: hassio.addon_start
-    data:
-      addon: core_letsencrypt
-mode: single
+- id: letsencrypt
+  alias: Renew Let's Encrypt Certificates
+  description: Run the Let's Encrypt add-on daily at 03:00 AM or when the external IP changes
+  trigger:
+    - platform: time
+      at: '03:00:00'
+    # Run the add-on when the external IP changes to get certbot to update the external
+    # access DNS entry, even if we don't need to renew certificates.
+    - platform: state
+      entity_id: sensor.external_ip
+  action:
+    - service: hassio.addon_start
+      data:
+        addon: core_letsencrypt
+  mode: single
