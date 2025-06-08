@@ -16,12 +16,6 @@
   tasks:
     # TODO: Restart appropriate parts of homeassistant according to what has changed in deployment
 
-    - name: remove default automations file
-      file:
-        dest: "{{ ha_config_dir }}/automations.yaml"
-        state: absent
-      notify: restart ha
-
     - name: install configuration sub-directories
       ansible.builtin.synchronize:
         src: "{{ item }}"
