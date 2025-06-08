@@ -43,7 +43,7 @@
         # the solar close position.
         open_covers: >
           {{ expand('group.covers')
-             | selectattr('attributes.current_position', 'gte', wake_position)
+             | selectattr('attributes.current_position', 'ge', wake_position)
              | map(attribute='entity_id')
              | list
           }}
@@ -69,3 +69,8 @@
         entity_id: group.covers
       data:
         position: 80
+
+    - service: input_text.set_value
+      data:
+        entity_id: input_text.covers_closed_by_solar
+        value: "{{ updated_closed | tojson }}"
