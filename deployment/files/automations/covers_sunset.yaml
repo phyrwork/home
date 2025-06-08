@@ -1,4 +1,5 @@
-- alias: Close blinds at sunset
+- id: covers_sunset
+  alias: Close blinds at sunset
   trigger:
     - platform: sun
       event: sunset

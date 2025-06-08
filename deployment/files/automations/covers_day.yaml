@@ -1,4 +1,5 @@
-- alias: Open blinds to 80% at 9am on weekdays and 11am on weekends
+- id: covers_day
+  alias: Open blinds to 80% at 9am on weekdays and 11am on weekends
   description: >
     Open all blinds to 80% at 9am on weekdays and 11am on weekends. Don't open blinds if
     

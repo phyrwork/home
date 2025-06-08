@@ -1,4 +1,5 @@
-- alias: Close covers when solar output is high
+- id: covers_solar_close
+  alias: Close covers when solar output is high
   description: >
     Close covers to when solar output is consistently high. Only close covers which are
     not already closed more than the solar close position.

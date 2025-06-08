@@ -1,4 +1,5 @@
-- alias: Restore covers closed due to high solar output
+- id: covers_solar_open
+  alias: Restore covers closed due to high solar output
   description: >
     Re-open covers that were closed due to high solar output. Don't re-open covers that
     are currently closed more than the saved position as these were likely closed for
