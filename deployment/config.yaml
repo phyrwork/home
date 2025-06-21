@@ -31,6 +31,7 @@
         - sensors
         - groups
         - templates
+        - input_numbers
 
     - name: install configuration
       copy:
