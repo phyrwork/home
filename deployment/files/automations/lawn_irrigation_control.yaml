@@ -1,0 +1,38 @@
+- id: lawn_irrigation_failsafe
+  alias: "Turn off lawn irrigation when Home Assistant starts (failsafe)"
+  trigger:
+    - platform: homeassistant
+      event: start
+  action:
+    - service: switch.turn_off
+      target:
+        entity_id: switch.lawn_irrigation
+  mode: single
+
+- id: lawn_irrigation_control
+  alias: "Water lawn during watering days when rain is not forecast"
+  trigger:
+    - platform: time
+      at: '08:00:00'
+  condition:
+    - condition: state
+      entity_id: sensor.lawn_irrigation_today
+      state: 'yes'
+  action:
+    # Water for 1h in 2x 30m blocks with 30m reset inbetween
+    - service: switch.turn_on
+      target:
+        entity_id: switch.lawn_irrigation
+    - delay: '00:30:00'
+    - service: switch.turn_off
+      target:
+        entity_id: switch.lawn_irrigation
+    - delay: '00:30:00'
+    - service: switch.turn_on
+      target:
+        entity_id: switch.lawn_irrigation
+    - delay: '00:30:00'
+    - service: switch.turn_off
+      target:
+        entity_id: switch.lawn_irrigation
+  mode: single
