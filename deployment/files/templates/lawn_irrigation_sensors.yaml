@@ -19,9 +19,9 @@ sensor:
     state: >
       {% set plan = {
          0: [],
-         1: ['wed'],
-         2: ['mon','fri'],
-         3: ['mon','wed','fri']
+         1: ['tue'],
+         2: ['sun','thu'],
+         3: ['sun','tue','thu']
       } %}
       {{ plan[states('sensor.lawn_irrigation_frequency')|int] | join(',') }}
     icon: mdi:calendar-check
@@ -31,7 +31,7 @@ sensor:
     # id: lawn_irrigation_today
     state: >
       {% set thresh = states('input_number.lawn_irrigation_rain_threshold')|float %}
-      {% set p = states('sensor.home_precip_accumulation_0d')|default(0) %}
+      {% set p = states('sensor.home_precip_accumulation_0d')|default(0)|float %}
       {% set days = states('sensor.lawn_irrigation_days').split(',') %}
       {% set today = now().strftime('%a').lower() %}
       {{ 'yes' if (today in days and p < thresh) else 'no' }}
