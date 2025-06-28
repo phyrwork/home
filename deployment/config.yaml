@@ -16,6 +16,16 @@
   tasks:
     # TODO: Restart appropriate parts of homeassistant according to what has changed in deployment
 
+    - name: create zigpy ota directory
+      file:
+        state: directory
+        path: "{{ zigpy_ota_dir }}"
+
+    - name: install zha configuration
+      template:
+        src: zha.yaml.j2
+        dest: "{{ ha_config_dir }}/zha.yaml"
+
     - name: install configuration sub-directories
       ansible.builtin.synchronize:
         src: "{{ item }}"

@@ -1,6 +1,9 @@
 ha_src_dir: "{{ ha_root_dir }}/src"
 ha_config_dir: "{{ ha_root_dir }}/config"
+ha_data_dir: "{{ ha_root_dir }}/data"
 ha_custom_components_dir: "{{ ha_config_dir }}/custom_components"
+
+zigpy_ota_dir: "{{ ha_data_dir }}/zigpy/ota"
 
 worxlandroid_pin: !vault |
   $ANSIBLE_VAULT;1.1;AES256
