@@ -1,5 +1,0 @@
-platform: integration
-source: sensor.outside_tap_volume_flow_rate
-name: Outside Tap Volume Total
-round: 2
-unit_time: h
