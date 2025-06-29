@@ -1,0 +1,15 @@
+sensor:
+  - name: "7 Day Rainfall Forecast"
+    unit_of_measurement: "cm"
+    state: >
+      {% set sensors = [
+        states('sensor.home_precip_accumulation_0d') | float(0),
+        states('sensor.home_precip_accumulation_1d') | float(0),
+        states('sensor.home_precip_accumulation_2d') | float(0),
+        states('sensor.home_precip_accumulation_3d') | float(0),
+        states('sensor.home_precip_accumulation_4d') | float(0),
+        states('sensor.home_precip_accumulation_5d') | float(0),
+        states('sensor.home_precip_accumulation_6d') | float(0)
+      ] %}
+      {{ (sensors | sum) | round(2) }}
+    icon: mdi:weather-rainy
