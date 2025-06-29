@@ -1,0 +1,30 @@
+lawn_irrigation:
+  alias: "Do Lawn Irrigation"
+  sequence:
+    - variables:
+        target_cm: "{{ states('input_number.lawn_irrigation_rainfall_equivalent_target') | float(0) }}"
+        lawn_size: "{{ states('input_number.lawn_size') | float(0) }}"
+        # target_volume (m³) = area (m²) * depth (cm) * 0.0001
+        target_volume: "{{ lawn_size * target_cm * 0.0001 }}"
+        volume_sensor_id: sensor.lawn_irrigation_volume_total
+        switch_id: switch.lawn_irrigation
+
+    - variables:
+        start_volume: "{{ states(volume_sensor_id) | float(0) }}"
+        stop_volume: "{{ start_volume + target_volume }}"
+
+    - service: switch.turn_on
+      target:
+        entity_id: "{{ switch_id }}"
+
+    - repeat:
+        while:
+          - condition: template
+            value_template: >
+              {{ (states(volume_sensor_id) | float(0)) < stop_volume }}
+        sequence:
+          - delay: "00:01:00"
+
+    - service: switch.turn_off
+      target:
+        entity_id: "{{ switch_id }}"

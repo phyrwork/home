@@ -9,30 +9,53 @@
         entity_id: switch.lawn_irrigation
   mode: single
 
-- id: lawn_irrigation_control
-  alias: "Water lawn during watering days when rain is not forecast"
+- alias: "Turn on lawn irrigation at sunrise if needed"
   trigger:
-    - platform: time
-      at: '08:00:00'
+    # Water early in the day to avoid evaporation, but not too early when it's cold to avoid frost/fungus
+    - platform: sun
+      event: sunrise
   condition:
-    - condition: state
-      entity_id: sensor.lawn_irrigation_today
-      state: 'yes'
+    # Limit so that watering should always stop before 10 AM; the lawnmower is set to not mow before 10 AM.
+    - condition: time
+      before: "08:30:00"
   action:
-    # Water for 1h in 2x 30m blocks with 30m reset inbetween
-    - service: switch.turn_on
-      target:
-        entity_id: switch.lawn_irrigation
-    - delay: '00:30:00'
-    - service: switch.turn_off
-      target:
-        entity_id: switch.lawn_irrigation
-    - delay: '00:30:00'
-    - service: switch.turn_on
-      target:
-        entity_id: switch.lawn_irrigation
-    - delay: '00:30:00'
-    - service: switch.turn_off
-      target:
-        entity_id: switch.lawn_irrigation
-  mode: single
+    - choose:
+# TODO: Enable when soil moisture sensor is installed
+#      # Soil is already wet; no need to water
+#      - conditions:
+#          - condition: numeric_state
+#            entity_id: sensor.lawn_soil_moisture
+#            above: 35
+#        sequence: []
+
+# TODO: Enable when soil moisture sensor is installed
+#      # Soil is too dry; emergency watering unless rain is coming
+#      - conditions:
+#          - condition: numeric_state
+#            entity_id: sensor.lawn_soil_moisture
+#            below: 28
+# TODO: Enable when 2-day rain forecast is installed
+#          - condition: numeric_state
+#            entity_id: sensor.2_day_rain_forecast
+#            below: 1
+#        sequence:
+#          - service: script.lawn_irrigation
+
+      # 7d last/forecast rainfall equivalent is low; watering unless rain is coming
+      - conditions:
+# TODO: Enable when soil moisture sensor is installed
+#          - condition: numeric_state
+#            entity_id: sensor.lawn_soil_moisture
+#            below: 35
+          - condition: template
+            value_template: >
+              {{ states('sensor.lawn_irrigation_rainfall_equivalent_last_forecast_7_days') | float(0)
+                 < states('input_number.lawn_irrigation_rainfall_equivalent_target') | float(0) }}
+# TODO: Enable when 2-day rain forecast is installed
+#          - condition: numeric_state
+#            entity_id: sensor.2_day_rain_forecast
+#            below: 1
+        sequence:
+          - service: script.lawn_irrigation
+
+      default: []
