@@ -8,6 +8,16 @@ sensor:
       {% set area = states('input_number.lawn_size') | float(0) %}
       {{ (volume / area * 100) | round(2) }}
 
+  # Actual plus forecast rainfall in a 7-day bracket around today.
+  - name: Lawn Irrigation Rainfall Equivalent Last/Forecast 7 Days
+    unit_of_measurement: "cm"
+    icon: mdi:rain
+    state: >
+      {{
+        (states('sensor.lawn_irrigation_rainfall_equivalent_last_7_days')|float(0)) +
+        (states('sensor.7_day_rainfall_forecast')|float(0))
+      }}
+
   # 1) Seasonal frequency
   - name: "Lawn Irrigation Frequency"
     # id: lawn_irrigation_frequency
