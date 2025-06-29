@@ -1,0 +1,6 @@
+platform: statistics
+name: "Lawn Irrigation Rainfall Equivalent Last 7 Days"
+entity_id: sensor.lawn_irrigation_rainfall_equivalent_total
+state_characteristic: sum_differences_nonnegative
+max_age:
+  days: 7

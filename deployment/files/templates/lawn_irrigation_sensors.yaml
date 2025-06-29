@@ -1,4 +1,13 @@
 sensor:
+  # Convert actual irrigation volume to rainfall equivalent to be used in irrigation
+  # decision.
+  - name: Lawn Irrigation Rainfall Equivalent Total
+    unit_of_measurement: "cm"
+    state: >
+      {% set volume = states('sensor.lawn_irrigation_volume_total') | float(0) %}
+      {% set area = states('input_number.lawn_size') | float(0) %}
+      {{ (volume / area * 100) | round(2) }}
+
   # 1) Seasonal frequency
   - name: "Lawn Irrigation Frequency"
     # id: lawn_irrigation_frequency
