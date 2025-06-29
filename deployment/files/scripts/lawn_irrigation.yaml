@@ -4,8 +4,8 @@ lawn_irrigation:
     - variables:
         target_cm: "{{ states('input_number.lawn_irrigation_rainfall_equivalent_target') | float(0) }}"
         lawn_size: "{{ states('input_number.lawn_size') | float(0) }}"
-        # target_volume (m³) = area (m²) * depth (cm) * 0.0001
-        target_volume: "{{ lawn_size * target_cm * 0.0001 }}"
+        # target_volume (m³) = area (m²) * depth (cm) * 0.01
+        target_volume: "{{ lawn_size * target_cm * 0.01 }}"
         volume_sensor_id: sensor.lawn_irrigation_volume_total
         switch_id: switch.lawn_irrigation
 
