@@ -31,6 +31,7 @@ lawn_irrigation:
     - repeat:
         while:
           - "{{ states(volume_sensor_id)|float(0) < total_stop_volume }}"
+          # TODO: Look at stopping when 7d +/- forecast goes above target?
         sequence:
           
           # Turn on the valve
