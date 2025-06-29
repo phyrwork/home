@@ -1,9 +1,0 @@
-lawn_irrigation_rain_threshold:
-  name: Lawn Irrigation Rain Threshold (cm)
-  min: 0
-  max: 20
-  step: 0.1
-  unit_of_measurement: cm
-  mode: box
-  icon: mdi:water
-  initial: 1.0
