@@ -2,29 +2,63 @@ lawn_irrigation:
   alias: "Do Lawn Irrigation"
   sequence:
     - variables:
-        target_cm: "{{ states('input_number.lawn_irrigation_rainfall_equivalent_target') | float(0) }}"
-        lawn_size: "{{ states('input_number.lawn_size') | float(0) }}"
-        # target_volume (m³) = area (m²) * depth (cm) * 0.01
+        lawn_size: "{{ states('input_number.lawn_size')|float(0) }}"
+
+        # Total volume to deliver (m³)
+        target_cm: >
+          {{ states('input_number.lawn_irrigation_rainfall_equivalent_target')|float(0) }}
         target_volume: "{{ lawn_size * target_cm * 0.01 }}"
+
+        # Soil penetration rate - used to determine how much water we can put down in
+        # one pass without running the risk of water running off or pooling.
+        soak_rate: 0.4  # cm/h
+
+        # Max volume we may put down in one pass
+        max_cycle_volume: "{{ lawn_size * soak_rate * 0.01 }}"  # m³
+
+        # Time to wait after each cycle to allow the soil to soak up the water
+        soak_delay: "{{ states('input_number.soak_delayutes')|int(60) }}"  # Minutes
+
+        # Control entities
         volume_sensor_id: sensor.lawn_irrigation_volume_total
         switch_id: switch.lawn_irrigation
-
-    - variables:
-        start_volume: "{{ states(volume_sensor_id) | float(0) }}"
-        stop_volume: "{{ start_volume + target_volume }}"
-
-    - service: switch.turn_on
-      target:
-        entity_id: "{{ switch_id }}"
-
+    
+        # Remember where the flow-meter stands at the beginning
+        total_start_volume: "{{ states(volume_sensor_id)|float(0) }}"
+        total_stop_volume: "{{ total_start_volume + target_volume }}"
+    
+    # Outer loop – keep irrigating until the full target is reached
     - repeat:
         while:
+          - "{{ states(volume_sensor_id)|float(0) < total_stop_volume }}"
+        sequence:
+          
+          # Turn on the valve
+          - service: switch.turn_on
+            target:
+              entity_id: "{{ switch_id }}"
+          
+          # Determine where this cycle must stop
+          - variables:
+              cycle_start_volume: "{{ states(volume_sensor_id)|float(0) }}"
+              cycle_stop_volume: >
+                {{ min(cycle_start_volume + max_cycle_volume, total_stop_volume) }}
+          
+          # Keep running until we delivered the allowed cycle volume
+          - repeat:
+              while:
+                - "{{ states(volume_sensor_id)|float(0) < cycle_stop_volume }}"
+              sequence:
+                - delay: "00:01:00"  # Check once a minute
+          
+          # Turn valve off
+          - service: switch.turn_off
+            target:
+              entity_id: "{{ switch_id }}"
+          
+          # If more water still needs to be applied, wait for soak
           - condition: template
             value_template: >
-              {{ (states(volume_sensor_id) | float(0)) < stop_volume }}
-        sequence:
-          - delay: "00:01:00"
-
-    - service: switch.turn_off
-      target:
-        entity_id: "{{ switch_id }}"
+              {{ states(volume_sensor_id)|float(0) < total_stop_volume }}
+          - delay:
+              minutes: "{{ soak_delay }}"
