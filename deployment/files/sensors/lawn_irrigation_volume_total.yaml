@@ -4,3 +4,12 @@ name: Lawn Irrigation Volume Total
 # id: lawn_irrigation_volume_total
 round: 2
 unit_time: h
+
+# Use rectangular integration to avoid large jumps when activated.
+# See https://www.home-assistant.io/integrations/integration/.
+method: left
+
+# If sensor doesn't update, possibly because rate value hasn't updated, update assuming
+# the same rate value more frequently to avoid water wastage.
+max_sub_interval:
+  minutes: 1
