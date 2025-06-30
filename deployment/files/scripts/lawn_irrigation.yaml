@@ -17,7 +17,7 @@ lawn_irrigation:
         max_cycle_volume: "{{ lawn_size * soak_rate * 0.01 }}"  # m³
 
         # Time to wait after each cycle to allow the soil to soak up the water
-        soak_delay: "{{ states('input_number.soak_delayutes')|int(60) }}"  # Minutes
+        soak_delay: 45  # Minutes
 
         # Control entities
         volume_sensor_id: sensor.lawn_irrigation_volume_total
