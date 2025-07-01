@@ -4,9 +4,18 @@ sensor:
   - name: Lawn Irrigation Rainfall Equivalent Total
     unit_of_measurement: "cm"
     state: >
-      {% set volume = states('sensor.lawn_irrigation_volume_total') | float(0) %}
-      {% set area = states('input_number.lawn_size') | float(0) %}
-      {{ (volume / area * 100) | round(2) }}
+      {% set volume = states('sensor.lawn_irrigation_volume_total') %}
+      {% set area = states('input_number.lawn_size') %}
+      {% if volume in ['unknown', 'unavailable', None]
+         or area in ['unknown', 'unavailable', None]
+         or area | float == 0
+      %}
+        unavailable
+      {% else %}
+          {% set volume = volume | float(0) %}
+          {% set area = area | float(0) %}
+          (volume / area * 100) | round(2)
+      {% endif %}
 
   # Actual plus forecast rainfall in a 7-day bracket around today.
   - name: Lawn Irrigation Rainfall Equivalent Last/Forecast 7 Days
