@@ -10,8 +10,8 @@ family_room_lamp_restore:
               target:
                 entity_id: light.family_room_lamp
               data:
-                brightness: "{{ states('input_number.family_room_lamp_brightness') | int }}"
-                rgb_color: "{{ states('input_text.family_room_lamp_color') | from_json }}"
+                brightness: "{{ states('input_number.family_room_lamp_brightness') | int(0) }}"
+                rgb_color: "{{ states('input_text.family_room_lamp_color') | default('[0, 0, 0]') | from_json }}"
       default:
         - service: light.turn_off
           target:

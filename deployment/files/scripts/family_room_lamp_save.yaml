@@ -10,9 +10,9 @@ family_room_lamp_save:
       target:
         entity_id: input_number.family_room_lamp_brightness
       data:
-        value: "{{ state_attr('light.family_room_lamp', 'brightness') | default(255) }}"
+        value: "{{ state_attr('light.family_room_lamp', 'brightness') | default(255, true) }}"
     - service: input_text.set_value
       target:
         entity_id: input_text.family_room_lamp_color
       data:
-        value: "{{ state_attr('light.family_room_lamp', 'rgb_color') | default('(255, 255, 255)') | to_json }}"
+        value: "{{ state_attr('light.family_room_lamp', 'rgb_color') | default('(255, 255, 255, true)') | to_json }}"
