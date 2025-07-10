@@ -1,12 +1,12 @@
-id: family_room_lamp_button_double
-alias: Run Bindicator when Family Room Lamp Button double pressed
-trigger:
-  - platform: event
-    event_type: zha_event
-    event_data:
-      device_id: "{{ family_room_lamp_button_device_id }}"
-      command: off  # Double click
-action:
-  - service: automation.trigger
-    target:
-      entity_id: automation.bindicator
+- id: family_room_lamp_button_double
+  alias: Run Bindicator when Family Room Lamp Button double pressed
+  trigger:
+    - platform: event
+      event_type: zha_event
+      event_data:
+        device_id: "{{ family_room_lamp_button_device_id }}"
+        command: off  # Double click
+  action:
+    - service: automation.trigger
+      target:
+        entity_id: automation.bindicator
