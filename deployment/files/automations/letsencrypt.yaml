@@ -6,6 +6,8 @@
       at: '03:00:00'
     # Run the add-on when the external IP changes to get certbot to update the external
     # access DNS entry, even if we don't need to renew certificates.
+    # TODO: This will never work because Namecheap API requires a whitelisted IP. Maybe
+    #   need to change DNS provider to one that supports dynamic DNS updates.
     - platform: state
       entity_id: sensor.external_ip
   action:

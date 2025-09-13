@@ -24,6 +24,7 @@ waste_collection_schedule:
         number: "18"
 
 # HTTPS only access
+# n.b. Comment out this block if SSL certificate renewal fails locking us out of the UI.
 http:
   server_port: 443
   ssl_certificate: /ssl/fullchain.pem
