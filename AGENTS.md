@@ -1,0 +1,28 @@
+# AGENTS
+
+## Home Assistant access
+
+- SSH: `root@homeassistant.local`
+  - Example: `ssh root@homeassistant.local`
+- API token (long-lived access token): stored in 1Password
+  - Read with: `op read "op://kkhhbqqw4nsn3zq4yxywwjl4ou/kepd6paqqz6ayp55jwdxt7ic5i/password"`
+  - Note: the HA TLS cert is for `home.newtonho.me`, so `https://homeassistant.local` may require skipping verification or using the `home.newtonho.me` hostname.
+
+## Deployment
+
+- See `README.md` for full instructions.
+- Quick deploy:
+  ```sh
+  cd deployment
+  ansible-playbook --vault-id op-client.py -i inventory/local config.yaml
+  ```
+- Inventory default user is root (see `deployment/inventory/local/00-main.yaml`).
+
+## Automation conventions
+
+- YAML automations live in `deployment/files/automations/*.yaml`.
+  - Each file contains a YAML list of automations (`- id: ...`).
+  - Keep related automations together (e.g., `closet_light.yaml` for closet motion + button behavior).
+- Templated automations live in `deployment/templates/automations/*.yaml.j2` and are rendered by Ansible.
+- Use existing files as reference for style and structure; prefer adding to the most specific file rather than creating a new one.
+- Home Assistant derives the automation `entity_id` from the `alias` (friendly name). If you reference an automation in templates (e.g., `state_attr('automation.<entity_id>', 'last_triggered')`), make sure the alias stays stable.
