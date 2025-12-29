@@ -3,4 +3,5 @@ all:
     homeassistant:
       hosts:
         homeassistant.local:
+          ansible_user: root
           ha_root_dir: /root

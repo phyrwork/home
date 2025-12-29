@@ -27,3 +27,36 @@
       target:
         entity_id: light.closet
   mode: single
+
+- id: closet_light_toggle_remote
+  alias: Toggle closet light when closet remote "Turn on" is pressed
+  description: Toggles the closet light, but skips turning off if motion just turned it on.
+  trigger:
+    - platform: device
+      device_id: 49ce61bb15de1135a901820489781474
+      domain: zha
+      type: remote_button_short_press
+      subtype: turn_on
+  action:
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: light.closet
+              state: 'off'
+          sequence:
+            - service: light.turn_on
+              target:
+                entity_id: light.closet
+        - conditions:
+            - condition: state
+              entity_id: light.closet
+              state: 'on'
+            - condition: template
+              value_template: >
+                {% set last = state_attr('automation.turn_on_closet_light_when_motion_detected_and_is_dark', 'last_triggered') %}
+                {{ last is none or (now() - last).total_seconds() > 15 }}
+          sequence:
+            - service: light.turn_off
+              target:
+                entity_id: light.closet
+  mode: single
