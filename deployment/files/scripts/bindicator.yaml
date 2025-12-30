@@ -1,0 +1,43 @@
+bindicator_save_state:
+  alias: Bindicator Save Family Room Lamp State
+  sequence:
+    # Snapshot the lamp state so we can restore after dismissal.
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.family_room_lamp_state
+      data:
+        value: "{{ states('light.family_room_lamp') }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.family_room_lamp_color
+      data:
+        value: "{{ state_attr('light.family_room_lamp', 'rgb_color') | default('(255, 255, 255, true)') | to_json }}"
+
+bindicator_restore_state:
+  alias: Bindicator Restore Family Room Lamp State
+  sequence:
+    # Restore color/brightness without forcing power-off if the lamp is on now.
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ states('input_text.family_room_lamp_state') == 'on' }}"
+          sequence:
+            - service: light.turn_on
+              target:
+                entity_id: light.family_room_lamp
+              data:
+                rgb_color: "{{ states('input_text.family_room_lamp_color') | default('[0, 0, 0]') | from_json }}"
+        - conditions:
+            - condition: state
+              entity_id: light.family_room_lamp
+              state: 'on'
+          sequence:
+            - service: light.turn_on
+              target:
+                entity_id: light.family_room_lamp
+              data:
+                rgb_color: "{{ states('input_text.family_room_lamp_color') | default('[0, 0, 0]') | from_json }}"
+      default:
+        - service: light.turn_off
+          target:
+            entity_id: light.family_room_lamp

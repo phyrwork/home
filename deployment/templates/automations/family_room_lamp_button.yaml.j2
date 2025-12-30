@@ -7,4 +7,5 @@
         device_id: "{{ family_room_lamp_button_device_id }}"
         command: toggle  # Single click
   action:
-    - service: script.family_room_lamp_restore
+    # Single click dismisses bindicator and restores lamp state.
+    - service: script.bindicator_restore_state
