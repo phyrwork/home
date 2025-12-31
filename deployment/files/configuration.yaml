@@ -2,8 +2,7 @@
 default_config:
 
 # Load frontend themes from the themes folder.
-frontend:
-  themes: !include_dir_merge_named themes
+frontend: !include frontend.yaml
 
 alert: !include_dir_merge_named alerts/
 automation manual: !include_dir_merge_list automations/
@@ -16,36 +15,15 @@ template: !include_dir_list templates/
 zha: !include zha.yaml
 
 # Bindicator data source.
-waste_collection_schedule:
-  sources:
-    - name: scambs_gov_uk
-      args:
-        post_code: "CB241BY"
-        number: "18"
+waste_collection_schedule: !include waste_collection_schedule.yaml
 
 # HTTPS only access
 # n.b. Comment out this block if SSL certificate renewal fails locking us out of the UI.
-http:
-  server_port: 443
-  ssl_certificate: /ssl/fullchain.pem
-  ssl_key: /ssl/privkey.pem
+http: !include http.yaml
 
-input_text:
-  family_room_lamp_state:
-    name: Family Room Lamp State
-    initial: 'off'
-  family_room_lamp_color:
-    name: Family Room Lamp Color
-    initial: 'white'
-  covers_closed_by_solar:
-    name: Covers Closed by Solar
-    max: 8192
-    initial: "{}"
+input_text: !include_dir_merge_named input_texts/
 
 input_number: !include_dir_merge_named input_numbers/
 
 # TODO: Remove this input_boolean once the automation is working correctly
-input_boolean:
-  covers_closed_by_solar:
-    name: Blinds closed because of high solar output
-    initial: no
+input_boolean: !include_dir_merge_named input_booleans/

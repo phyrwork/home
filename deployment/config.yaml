@@ -1,11 +1,130 @@
 - hosts: homeassistant
+  vars:
+    ha_base_url: "https://home.newtonho.me"
+    ha_api_url: "{{ ha_base_url }}/api"
+
+  pre_tasks:
+    - name: read home assistant api token
+      command: op read "op://kkhhbqqw4nsn3zq4yxywwjl4ou/kepd6paqqz6ayp55jwdxt7ic5i/password"
+      delegate_to: localhost
+      run_once: true
+      register: ha_api_token_cmd
+      changed_when: false
+      no_log: true
+
+    - name: cache home assistant api token
+      set_fact:
+        ha_api_token: "{{ ha_api_token_cmd.stdout }}"
+      no_log: true
 
   handlers:
     # n.b. Play-level handlers are callable from roles included by the play.
 
+    # Reload architecture:
+    # - Use Home Assistant reload services for file-level changes where possible.
+    # - Reserve full restarts for custom_components and config that cannot reload.
+    # - Reload calls go via the HA API using the 1Password token.
+    - name: reload core config
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/homeassistant/reload_core_config"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload automations
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/automation/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload scripts
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/script/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload templates
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/template/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload groups
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/group/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload alerts
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/alert/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload input numbers
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/input_number/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload input texts
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/input_text/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload input booleans
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/input_boolean/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
     # Restart Home Assistant. This is required for reloading custom_components and a
-    # very heavy-handed way for reloading configuration, though currently the only
-    # (trivial) way we have to do it.
+    # heavy-handed fallback for config that cannot reload.
     - name: restart ha
       command: ha core restart
 
@@ -14,8 +133,6 @@
     - role: waste_collection_schedule
 
   tasks:
-    # TODO: Restart appropriate parts of homeassistant according to what has changed in deployment
-
     - name: create zigpy ota directory
       file:
         state: directory
@@ -25,35 +142,120 @@
       template:
         src: zha.yaml.j2
         dest: "{{ ha_config_dir }}/zha.yaml"
+      notify: restart ha
 
-    - name: install configuration sub-directories
+    - name: install alert configuration
       ansible.builtin.synchronize:
-        src: "{{ item }}"
+        src: alerts
         dest: "{{ ha_config_dir }}"
         recursive: yes
         delete: yes
         links: yes
-      notify: restart ha
-      loop:
-        - alerts
-        - automations
-        - scripts
-        - sensors
-        - groups
-        - templates
-        - input_numbers
+      notify: reload alerts
+
+    - name: install automation configuration
+      ansible.builtin.synchronize:
+        src: automations
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload automations
+
+    - name: install script configuration
+      ansible.builtin.synchronize:
+        src: scripts
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload scripts
+
+    - name: install sensor configuration
+      ansible.builtin.synchronize:
+        src: sensors
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      # Sensor YAML reloads via core config, but some integrations may still need restart.
+      notify: reload core config
+
+    - name: install group configuration
+      ansible.builtin.synchronize:
+        src: groups
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload groups
+
+    - name: install template configuration
+      ansible.builtin.synchronize:
+        src: templates
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload templates
+
+    - name: install input number configuration
+      ansible.builtin.synchronize:
+        src: input_numbers
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload input numbers
+
+    - name: install input text configuration
+      ansible.builtin.synchronize:
+        src: input_texts
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload input texts
+
+    - name: install input boolean configuration
+      ansible.builtin.synchronize:
+        src: input_booleans
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload input booleans
 
     - name: install configuration
       copy:
         src: configuration.yaml
         dest: "{{ ha_config_dir }}/configuration.yaml"
+      # Keep this file static and push most changes into includes for targeted reloads.
+      notify: reload core config
+
+    - name: install frontend configuration
+      copy:
+        src: frontend.yaml
+        dest: "{{ ha_config_dir }}/frontend.yaml"
+      notify: reload themes
+
+    - name: install waste collection schedule configuration
+      copy:
+        src: waste_collection_schedule.yaml
+        dest: "{{ ha_config_dir }}/waste_collection_schedule.yaml"
+      notify: restart ha
+
+    - name: install http configuration
+      copy:
+        src: http.yaml
+        dest: "{{ ha_config_dir }}/http.yaml"
       notify: restart ha
 
     - name: install templated automations
       template:
         src: "automations/{{ item }}.yaml.j2"
         dest: "{{ ha_config_dir }}/automations/{{ item }}.yaml"
-      notify: restart ha
+      notify: reload automations
       loop:
         - family_room_lamp_button
         - family_room_lamp_button_double
@@ -62,7 +264,7 @@
       template:
         src: "sensors/{{ item }}.yaml.j2"
         dest: "{{ ha_config_dir }}/sensors/{{ item }}.yaml"
-      notify: restart ha
+      notify: reload core config
       loop:
         - worxlandroid
         - octopus_energy_electricity_export_current_accumulative_consumption
@@ -71,7 +273,7 @@
       template:
         src: "templates/{{ item }}.yaml.j2"
         dest: "{{ ha_config_dir }}/templates/{{ item }}.yaml"
-      notify: restart ha
+      notify: reload templates
       loop:
         - covers_battery_low
         - octopus_energy_electricity_current_export
@@ -80,6 +282,6 @@
       template:
         src: "alerts/{{ item }}.yaml.j2"
         dest: "{{ ha_config_dir }}/alerts/{{ item }}.yaml"
-      notify: restart ha
+      notify: reload alerts
       loop:
         - covers_battery_low

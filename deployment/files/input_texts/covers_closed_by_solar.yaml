@@ -1,0 +1,4 @@
+covers_closed_by_solar:
+  name: Covers Closed by Solar
+  max: 8192
+  initial: "{}"
