@@ -1,0 +1,19 @@
+- id: waste_collection_schedule_update_available
+  alias: Waste Collection Schedule Update Available
+  description: Notify when a newer waste_collection_schedule release is available.
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.waste_collection_schedule_update_available
+      to: "on"
+  action:
+    - service: persistent_notification.create
+      data:
+        title: Waste Collection Schedule update available
+        message: >-
+          Installed: {{
+            state_attr('binary_sensor.waste_collection_schedule_update_available', 'installed_version')
+          }}
+          Latest: {{
+            state_attr('binary_sensor.waste_collection_schedule_update_available', 'latest_version')
+          }}
+        notification_id: waste_collection_schedule_update

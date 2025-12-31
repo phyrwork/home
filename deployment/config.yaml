@@ -188,6 +188,24 @@
         links: yes
       notify: reload templates
 
+    - name: install rest configuration
+      ansible.builtin.synchronize:
+        src: rest
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload core config
+
+    - name: install command line configuration
+      ansible.builtin.synchronize:
+        src: command_line
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload core config
+
     - name: install input number configuration
       ansible.builtin.synchronize:
         src: input_numbers

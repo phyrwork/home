@@ -1,0 +1,9 @@
+resource: https://api.github.com/repos/mampfes/hacs_waste_collection_schedule/releases/latest
+headers:
+  User-Agent: homeassistant
+# 6 hours in seconds.
+scan_interval: 21600
+sensor:
+  - name: waste_collection_schedule_latest_release
+    unique_id: waste_collection_schedule_latest_release
+    value_template: "{{ value_json.tag_name }}"

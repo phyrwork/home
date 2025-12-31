@@ -12,6 +12,8 @@ scene: !include scenes.yaml
 sensor: !include_dir_list sensors/
 group: !include_dir_merge_named groups/
 template: !include_dir_list templates/
+rest: !include_dir_list rest/
+command_line: !include_dir_list command_line/
 zha: !include zha.yaml
 
 # Bindicator data source.
