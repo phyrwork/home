@@ -79,17 +79,6 @@
         body_format: json
       no_log: true
 
-    - name: reload alerts
-      ansible.builtin.uri:
-        url: "{{ ha_api_url }}/services/alert/reload"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ ha_api_token }}"
-          Content-Type: "application/json"
-        body: {}
-        body_format: json
-      no_log: true
-
     - name: reload input numbers
       ansible.builtin.uri:
         url: "{{ ha_api_url }}/services/input_number/reload"
@@ -151,7 +140,7 @@
         recursive: yes
         delete: yes
         links: yes
-      notify: reload alerts
+      notify: reload core config
 
     - name: install automation configuration
       ansible.builtin.synchronize:
@@ -237,7 +226,6 @@
       copy:
         src: frontend.yaml
         dest: "{{ ha_config_dir }}/frontend.yaml"
-      notify: reload themes
 
     - name: install waste collection schedule configuration
       copy:
@@ -282,6 +270,6 @@
       template:
         src: "alerts/{{ item }}.yaml.j2"
         dest: "{{ ha_config_dir }}/alerts/{{ item }}.yaml"
-      notify: reload alerts
+      notify: reload core config
       loop:
         - covers_battery_low
