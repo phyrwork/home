@@ -1,0 +1,6 @@
+binary_sensor:
+  - name: Dishwasher Recently Active
+    unique_id: dishwasher_recently_active
+    device_class: running
+    state: "{{ states('sensor.dishwasher_socket_power')|float(0) > 5 }}"
+    delay_off: "00:15:00"

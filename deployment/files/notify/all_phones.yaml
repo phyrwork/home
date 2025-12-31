@@ -1,0 +1,6 @@
+- platform: group
+  name: all_phones
+  services:
+    # Service names are based on HA app device names (including underscores).
+    - service: notify.mobile_app_connor_s_phone
+    - service: notify.mobile_app_sonia_s_phone

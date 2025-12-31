@@ -1,0 +1,17 @@
+- id: dishwasher_done_notification
+  alias: Dishwasher Done Notification
+  description: Notify when the dishwasher finishes and the door is opened.
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.dishwasher_door
+      to: "on"
+  condition:
+    - condition: state
+      entity_id: binary_sensor.dishwasher_recently_active
+      state: "on"
+  action:
+    - service: notify.all_phones
+      data:
+        title: Dishwasher finished
+        message: Dishwasher door opened after a recent cycle.
+  mode: single

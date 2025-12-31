@@ -188,6 +188,15 @@
         links: yes
       notify: reload templates
 
+    - name: install notify configuration
+      ansible.builtin.synchronize:
+        src: notify
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload core config
+
     - name: install rest configuration
       ansible.builtin.synchronize:
         src: rest

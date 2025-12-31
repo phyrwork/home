@@ -14,6 +14,7 @@ group: !include_dir_merge_named groups/
 template: !include_dir_list templates/
 rest: !include_dir_list rest/
 command_line: !include_dir_list command_line/
+notify: !include_dir_merge_list notify/
 zha: !include zha.yaml
 
 # Bindicator data source.
