@@ -60,3 +60,9 @@ then add the variable to the appropriate file.
    cd deployment
    ansible-playbook --vault-id op-client.py -i inventory/local config.yaml
    ```
+
+Notes:
+- The deploy playbook uses the `op` CLI to read the Home Assistant API token, so ensure
+  `op` is authenticated before running.
+- Most config changes use targeted Home Assistant reload services; full restarts are
+  reserved for custom components and non-reloadable config (e.g. HTTP/ZHA).
