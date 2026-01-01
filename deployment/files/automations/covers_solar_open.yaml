@@ -7,7 +7,7 @@
 
   trigger:
     - platform: numeric_state
-      entity_id: sensor.solar_generation_meter_power_consumption
+      entity_id: sensor.solar_generation_meter_power
       below: 1300
       for: "00:05:00"
 

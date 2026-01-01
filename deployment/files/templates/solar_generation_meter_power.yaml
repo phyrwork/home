@@ -1,0 +1,19 @@
+sensor:
+  - name: Solar Generation Meter Power
+    unique_id: solar_generation_meter_power
+    device_class: power
+    state_class: measurement
+    unit_of_measurement: W
+    state: >-
+      {% set raw = states('sensor.solar_generation_meter_power_raw') | float(0) %}
+      {% set max_w = states('input_number.solar_installed_size') | float(0) %}
+      {% if max_w > 0 %}
+        {{ [raw, max_w] | min | round(0) }}
+      {% else %}
+        {{ raw | round(0) }}
+      {% endif %}
+    availability: >-
+      {{
+        states('sensor.solar_generation_meter_power_raw')
+          not in ['unknown', 'unavailable', 'none']
+      }}

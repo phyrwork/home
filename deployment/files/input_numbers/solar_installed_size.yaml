@@ -1,0 +1,9 @@
+solar_installed_size:
+  name: Solar Installed Size
+  min: 0
+  max: 20000
+  step: 10
+  unit_of_measurement: W
+  mode: box
+  initial: 2400
+  icon: mdi:solar-power
