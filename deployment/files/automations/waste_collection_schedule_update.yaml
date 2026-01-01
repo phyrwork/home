@@ -3,7 +3,7 @@
   description: Notify when a newer waste_collection_schedule release is available.
   trigger:
     - platform: state
-      entity_id: binary_sensor.waste_collection_schedule_update_available
+      entity_id: update.waste_collection_schedule
       to: "on"
   action:
     - service: persistent_notification.create
@@ -11,9 +11,10 @@
         title: Waste Collection Schedule update available
         message: >-
           Installed: {{
-            state_attr('binary_sensor.waste_collection_schedule_update_available', 'installed_version')
+            state_attr('update.waste_collection_schedule', 'installed_version')
           }}
           Latest: {{
-            state_attr('binary_sensor.waste_collection_schedule_update_available', 'latest_version')
+            state_attr('update.waste_collection_schedule', 'latest_version')
           }}
+          Note: Make a PR at https://github.com/phyrwork/home to update.
         notification_id: waste_collection_schedule_update

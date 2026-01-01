@@ -1,7 +1,6 @@
-binary_sensor:
-  - name: Waste Collection Schedule Update Available
-    unique_id: waste_collection_schedule_update_available
-    device_class: update
+update:
+  - name: Waste Collection Schedule
+    unique_id: waste_collection_schedule_update
     state: >-
       {% set installed = states('sensor.waste_collection_schedule_installed_version') %}
       {% set latest = states('sensor.waste_collection_schedule_latest_release') %}
@@ -10,6 +9,6 @@ binary_sensor:
           and latest not in ['unknown', 'unavailable', None]
           and installed != latest
       }}
-    attributes:
-      installed_version: "{{ states('sensor.waste_collection_schedule_installed_version') }}"
-      latest_version: "{{ states('sensor.waste_collection_schedule_latest_release') }}"
+    installed_version: "{{ states('sensor.waste_collection_schedule_installed_version') }}"
+    latest_version: "{{ states('sensor.waste_collection_schedule_latest_release') }}"
+    release_url: "https://github.com/mampfes/hacs_waste_collection_schedule/releases/latest"
