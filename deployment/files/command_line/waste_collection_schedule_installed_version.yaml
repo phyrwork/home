@@ -1,7 +1,0 @@
-sensor:
-  name: waste_collection_schedule_installed_version
-  unique_id: waste_collection_schedule_installed_version
-  command: >-
-    python3 -c "import json; print(json.load(open('/config/custom_components/waste_collection_schedule/manifest.json'))['version'])"
-  # 6 hours in seconds.
-  scan_interval: 21600

@@ -118,8 +118,54 @@
       command: ha core restart
 
   roles:
-    # Bin collection schedule lookup component.
-    - role: waste_collection_schedule
+    - role: custom_component
+      vars:
+        component_name: HACS
+        component_full_name: hacs/integration
+        component_domain: hacs
+        component_version: "2.0.5"
+
+    - role: custom_component
+      vars:
+        component_name: Local Tuya
+        component_full_name: rospogrigio/localtuya
+        component_domain: localtuya
+        component_version: "v5.2.4"
+
+    - role: custom_component
+      vars:
+        component_name: Octopus Energy
+        component_full_name: BottlecapDave/HomeAssistant-OctopusEnergy
+        component_domain: octopus_energy
+        component_version: "v17.1.1"
+
+    - role: custom_component
+      vars:
+        component_name: Pirate Weather
+        component_full_name: Pirate-Weather/pirate-weather-ha
+        component_domain: pirateweather
+        component_version: "v1.8.3"
+
+    - role: custom_component
+      vars:
+        component_name: ZHA Toolkit
+        component_full_name: mdeweerd/zha-toolkit
+        component_domain: zha_toolkit
+        component_version: "v1.1.33"
+
+    - role: custom_component
+      vars:
+        component_name: Anglian Water
+        component_full_name: pantherale0/haanglianwater
+        component_domain: anglian_water
+        component_version: "2025.10.0"
+
+    - role: custom_component
+      vars:
+        component_name: Waste Collection Schedule
+        component_full_name: mampfes/hacs_waste_collection_schedule
+        component_domain: waste_collection_schedule
+        component_version: "2.8.0"
 
   tasks:
     - name: create zigpy ota directory
@@ -140,6 +186,9 @@
         recursive: yes
         delete: yes
         links: yes
+        rsync_opts:
+          - "--filter=merge\\ {{ playbook_dir }}/files/alerts/.rsync-filter"
+          - "--exclude=.rsync-filter"
       notify: reload core config
 
     - name: install automation configuration
@@ -149,6 +198,9 @@
         recursive: yes
         delete: yes
         links: yes
+        rsync_opts:
+          - "--filter=merge\\ {{ playbook_dir }}/files/automations/.rsync-filter"
+          - "--exclude=.rsync-filter"
       notify: reload automations
 
     - name: install script configuration
@@ -167,6 +219,9 @@
         recursive: yes
         delete: yes
         links: yes
+        rsync_opts:
+          - "--filter=merge\\ {{ playbook_dir }}/files/sensors/.rsync-filter"
+          - "--exclude=.rsync-filter"
       # Sensor YAML reloads via core config, but some integrations may still need restart.
       notify: reload core config
 
@@ -186,6 +241,9 @@
         recursive: yes
         delete: yes
         links: yes
+        rsync_opts:
+          - "--filter=merge\\ {{ playbook_dir }}/files/templates/.rsync-filter"
+          - "--exclude=.rsync-filter"
       notify: reload templates
 
     - name: install notify configuration
@@ -204,6 +262,9 @@
         recursive: yes
         delete: yes
         links: yes
+        rsync_opts:
+          - "--filter=merge\\ {{ playbook_dir }}/files/rest/.rsync-filter"
+          - "--exclude=.rsync-filter"
       notify: reload core config
 
     - name: install command line configuration
@@ -213,6 +274,9 @@
         recursive: yes
         delete: yes
         links: yes
+        rsync_opts:
+          - "--filter=merge\\ {{ playbook_dir }}/files/command_line/.rsync-filter"
+          - "--exclude=.rsync-filter"
       notify: reload core config
 
     - name: install input number configuration
@@ -292,6 +356,7 @@
       loop:
         - covers_battery_low
         - octopus_energy_electricity_current_export
+
 
     - name: install templated alerts
       template:

@@ -1,3 +1,0 @@
-wcs_git_url: https://github.com/mampfes/hacs_waste_collection_schedule.git
-wcs_src_dir: "{{ ha_src_dir }}/github.com/mampfes/hacs_waste_collection_schedule"
-wcs_install_dir: "{{ ha_custom_components_dir }}/waste_collection_schedule"

@@ -1,0 +1,6 @@
+update:
+  - name: {{ component_name }}
+    unique_id: {{ component_domain }}_update
+    installed_version: "{% raw %}{{ states('sensor.{% endraw %}{{ component_domain }}{% raw %}_installed_version') }}{% endraw %}"
+    latest_version: "{% raw %}{{ states('sensor.{% endraw %}{{ component_domain }}{% raw %}_latest_release') }}{% endraw %}"
+    release_url: "https://github.com/{{ component_full_name }}/releases/latest"

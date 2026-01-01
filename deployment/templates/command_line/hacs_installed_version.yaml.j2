@@ -1,0 +1,7 @@
+sensor:
+  name: {{ component_domain }}_installed_version
+  unique_id: {{ component_domain }}_installed_version
+  command: >-
+    python3 -c "import json; print(json.load(open('/config/custom_components/{{ component_domain }}/manifest.json'))['version'])"
+  # 6 hours in seconds.
+  scan_interval: 21600

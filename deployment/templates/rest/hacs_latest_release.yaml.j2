@@ -1,0 +1,9 @@
+resource: https://api.github.com/repos/{{ component_full_name }}/releases/latest
+headers:
+  User-Agent: homeassistant
+# 6 hours in seconds.
+scan_interval: 21600
+sensor:
+  - name: {{ component_domain }}_latest_release
+    unique_id: {{ component_domain }}_latest_release
+    value_template: "{% raw %}{{ value_json.tag_name }}{% endraw %}"

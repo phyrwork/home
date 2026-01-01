@@ -1,0 +1,50 @@
+- name: Check git is present
+  command: which git
+  changed_when: no
+
+- name: Ensure custom_components directory exists
+  ansible.builtin.file:
+    path: "{{ ha_custom_components_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure source root directory exists
+  ansible.builtin.file:
+    path: "{{ ha_src_dir }}/github.com/{{ component_full_name | regex_replace('/[^/]+$', '') }}"
+    state: directory
+    mode: "0755"
+
+- name: Clone repository
+  ansible.builtin.git:
+    repo: "https://github.com/{{ component_full_name }}.git"
+    dest: "{{ ha_src_dir }}/github.com/{{ component_full_name }}"
+    version: "{{ component_version }}"
+    clone: yes
+    update: yes
+  notify: restart ha
+
+- name: Install custom component
+  ansible.builtin.copy:
+    src: "{{ ha_src_dir }}/github.com/{{ component_full_name }}/custom_components/{{ component_domain }}/"
+    dest: "{{ ha_custom_components_dir }}/{{ component_domain }}"
+    remote_src: yes
+    mode: "0755"
+  notify: restart ha
+
+- name: Install latest release sensor
+  template:
+    src: "{{ playbook_dir }}/templates/rest/hacs_latest_release.yaml.j2"
+    dest: "{{ ha_config_dir }}/rest/{{ component_domain }}_latest_release.yaml"
+  notify: reload core config
+
+- name: Install installed version sensor
+  template:
+    src: "{{ playbook_dir }}/templates/command_line/hacs_installed_version.yaml.j2"
+    dest: "{{ ha_config_dir }}/command_line/{{ component_domain }}_installed_version.yaml"
+  notify: reload core config
+
+- name: Install update entity
+  template:
+    src: "{{ playbook_dir }}/templates/templates/hacs_component_update.yaml.j2"
+    dest: "{{ ha_config_dir }}/templates/{{ component_domain }}_update.yaml"
+  notify: reload templates
