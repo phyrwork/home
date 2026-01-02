@@ -1,0 +1,99 @@
+{% set ha_start = '{{' %}
+{% set ha_end = '}}' %}
+{% set ha_block_start = '{%' %}
+{% set ha_block_end = '%}' %}
+- id: family_room_lamp_mode_energy
+  alias: Family Room Lamp Mode Energy
+  trigger:
+    - platform: state
+      entity_id: input_select.family_room_lamp_mode
+      to: energy
+    - platform: state
+      entity_id:
+        - sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_rate
+        - event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates
+  condition:
+    - condition: state
+      entity_id: input_select.family_room_lamp_mode
+      state: energy
+    - condition: template
+      value_template: >-
+        {{ ha_block_start }} set rates_raw = state_attr('event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates', 'rates') | default('[]', true) {{ ha_block_end }}
+        {{ ha_block_start }} set rates = (rates_raw | from_json) if (rates_raw is string) else rates_raw {{ ha_block_end }}
+        {{ ha_start }} rates | count > 0 and states('sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_rate') not in ['unknown', 'unavailable', ''] {{ ha_end }}
+  action:
+    - variables:
+        rates: >-
+          {{ ha_block_start }} set rates_raw = state_attr('event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates', 'rates') | default('[]', true) {{ ha_block_end }}
+          {{ ha_start }} (rates_raw | from_json) if (rates_raw is string) else rates_raw {{ ha_end }}
+        current_rate: >-
+          {{ ha_start }} states('sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_rate') | float(none) {{ ha_end }}
+        min_rate: >-
+          {{ ha_block_start }} set rates_raw = state_attr('event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates', 'rates') | default('[]', true) {{ ha_block_end }}
+          {{ ha_block_start }} set rates = (rates_raw | from_json) if (rates_raw is string) else rates_raw {{ ha_block_end }}
+          {{ ha_block_start }} set values = rates | map(attribute='value_inc_vat') | map('float') | list {{ ha_block_end }}
+          {{ ha_start }} values | min if values | count > 0 else none {{ ha_end }}
+        max_rate: >-
+          {{ ha_block_start }} set rates_raw = state_attr('event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates', 'rates') | default('[]', true) {{ ha_block_end }}
+          {{ ha_block_start }} set rates = (rates_raw | from_json) if (rates_raw is string) else rates_raw {{ ha_block_end }}
+          {{ ha_block_start }} set values = rates | map(attribute='value_inc_vat') | map('float') | list {{ ha_block_end }}
+          {{ ha_start }} values | max if values | count > 0 else none {{ ha_end }}
+        quartile: >-
+          {{ ha_block_start }} if min_rate is none or max_rate is none or current_rate is none {{ ha_block_end }}
+            1
+          {{ ha_block_start }} elif max_rate <= min_rate {{ ha_block_end }}
+            1
+          {{ ha_block_start }} else {{ ha_block_end }}
+            {{ ha_block_start }} set step = (max_rate - min_rate) / 4 {{ ha_block_end }}
+            {{ ha_block_start }} if current_rate >= (max_rate - step) {{ ha_block_end }}
+              4
+            {{ ha_block_start }} elif current_rate >= (max_rate - (2 * step)) {{ ha_block_end }}
+              3
+            {{ ha_block_start }} elif current_rate >= (max_rate - (3 * step)) {{ ha_block_end }}
+              2
+            {{ ha_block_start }} else {{ ha_block_end }}
+              1
+            {{ ha_block_start }} endif {{ ha_block_end }}
+          {{ ha_block_start }} endif {{ ha_block_end }}
+        rgb_color: >-
+          {{ ha_block_start }} if quartile | int == 4 {{ ha_block_end }}
+            [255, 0, 0]
+          {{ ha_block_start }} elif quartile | int == 3 {{ ha_block_end }}
+            [255, 165, 0]
+          {{ ha_block_start }} elif quartile | int == 2 {{ ha_block_end }}
+            [255, 255, 0]
+          {{ ha_block_start }} else {{ ha_block_end }}
+            [0, 255, 0]
+          {{ ha_block_start }} endif {{ ha_block_end }}
+        is_night: >-
+          {{ ha_block_start }} set start = today_at(states('input_datetime.family_room_lamp_night_start')) {{ ha_block_end }}
+          {{ ha_block_start }} set end = today_at(states('input_datetime.family_room_lamp_night_end')) {{ ha_block_end }}
+          {{ ha_block_start }} if end < start {{ ha_block_end }}
+            {{ ha_start }} now() >= start or now() < end {{ ha_end }}
+          {{ ha_block_start }} else {{ ha_block_end }}
+            {{ ha_start }} now() >= start and now() < end {{ ha_end }}
+          {{ ha_block_start }} endif {{ ha_block_end }}
+        normal_brightness: >-
+          {{ ha_start }} states('input_number.family_room_lamp_normal_brightness') | float(100) {{ ha_end }}
+        brightness_pct: >-
+          {{ ha_block_start }} if is_night {{ ha_block_end }}
+            {{ ha_start }} normal_brightness | round(0) {{ ha_end }}
+          {{ ha_block_start }} else {{ ha_block_end }}
+            {{ ha_start }} [normal_brightness, 15] | max | round(0) {{ ha_end }}
+          {{ ha_block_start }} endif {{ ha_block_end }}
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ ha_start }} is_night and states('light.family_room_lamp') != 'on' {{ ha_end }}
+          sequence: []
+      default:
+        - service: light.turn_on
+          target:
+            entity_id: light.family_room_lamp
+          data:
+            rgb_color: >-
+              {{ ha_start }} rgb_color {{ ha_end }}
+            brightness_pct: >-
+              {{ ha_start }} brightness_pct | float(100) | round(0) {{ ha_end }}
+  mode: single

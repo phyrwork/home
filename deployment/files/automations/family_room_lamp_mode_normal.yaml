@@ -1,0 +1,22 @@
+- id: family_room_lamp_mode_normal
+  alias: Family Room Lamp Mode Normal
+  trigger:
+    - platform: state
+      entity_id: input_select.family_room_lamp_mode
+      to: normal
+    - platform: state
+      entity_id: input_text.family_room_lamp_normal_color
+  condition:
+    - condition: state
+      entity_id: input_select.family_room_lamp_mode
+      state: normal
+  action:
+    - service: light.turn_on
+      target:
+        entity_id: light.family_room_lamp
+      data:
+        rgb_color: >-
+          {{ states('input_text.family_room_lamp_normal_color') | default('[255, 255, 255]') | from_json }}
+        brightness_pct: >-
+          {{ states('input_number.family_room_lamp_normal_brightness') | float(100) | round(0) }}
+  mode: single

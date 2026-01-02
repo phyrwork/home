@@ -5,7 +5,7 @@
 - SSH: `root@homeassistant.local`
   - Example: `ssh root@homeassistant.local`
 - API token (long-lived access token): stored in 1Password
-  - Read with: `op read "op://kkhhbqqw4nsn3zq4yxywwjl4ou/kepd6paqqz6ayp55jwdxt7ic5i/password"`
+  - Read with: `op read "op://jxs6qrivegu7ekpzkt27seurvy/fgvzkd432x4xsjq7f3vu4zippu/password"`
   - Note: the HA TLS cert is for `home.newtonho.me`, so `https://homeassistant.local` may require skipping verification or using the `home.newtonho.me` hostname.
 
 ## Deployment
@@ -26,6 +26,9 @@
 - Templated automations live in `deployment/templates/automations/*.yaml.j2` and are rendered by Ansible.
 - Use existing files as reference for style and structure; prefer adding to the most specific file rather than creating a new one.
 - Home Assistant derives the automation `entity_id` from the `alias` (friendly name). If you reference an automation in templates (e.g., `state_attr('automation.<entity_id>', 'last_triggered')`), make sure the alias stays stable.
+- For `deployment/files/automations/.rsync-filter`:
+  - Add a `P <file>.yaml` entry when a templated automation is rendered into `deployment/files/automations/`.
+  - Remove the entry when the file is no longer templated (or should be deletable by sync).
 
 ## Development process
 

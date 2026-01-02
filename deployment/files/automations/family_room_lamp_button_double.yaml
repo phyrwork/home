@@ -4,7 +4,7 @@
     - platform: event
       event_type: zha_event
       event_data:
-        device_id: "{{ family_room_lamp_button_device_id }}"
+        device_id: 126e2f6852deb5457919ddd987f34c21
         command: off  # Double click
   action:
     - service: automation.trigger

@@ -1,0 +1,7 @@
+family_room_lamp_mode:
+  name: Family Room Lamp Mode
+  options:
+    - energy
+    - normal
+    - bindicator
+  initial: energy

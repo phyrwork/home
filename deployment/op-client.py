@@ -3,7 +3,7 @@ import argparse
 import subprocess
 import sys
 
-PASSWORD_URI = "op://kkhhbqqw4nsn3zq4yxywwjl4ou/ks5patba53w6kswg4x43szdmru/password"
+PASSWORD_URI = "op://jxs6qrivegu7ekpzkt27seurvy/gwarbmwzdfyk2t5iabrvz2b64q/password"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

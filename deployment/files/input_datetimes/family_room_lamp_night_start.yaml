@@ -1,0 +1,5 @@
+family_room_lamp_night_start:
+  name: Family Room Lamp Night Start
+  has_date: false
+  has_time: true
+  initial: "00:00:00"

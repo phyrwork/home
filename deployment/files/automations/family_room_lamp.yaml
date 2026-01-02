@@ -1,0 +1,47 @@
+- id: family_room_lamp_normal_color_capture
+  alias: Family Room Lamp Normal Color Capture
+  trigger:
+    - platform: state
+      entity_id: light.family_room_lamp
+      attribute: rgb_color
+  condition:
+    - condition: state
+      entity_id: input_select.family_room_lamp_mode
+      state: normal
+    - condition: template
+      value_template: >-
+        {{ state_attr('light.family_room_lamp', 'rgb_color') is not none }}
+  action:
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.family_room_lamp_normal_color
+      data:
+        value: >-
+          {{ state_attr('light.family_room_lamp', 'rgb_color')
+             | default([255, 255, 255])
+             | to_json }}
+  mode: single
+
+- id: family_room_lamp_normal_brightness_capture
+  alias: Family Room Lamp Normal Brightness Capture
+  trigger:
+    - platform: state
+      entity_id: light.family_room_lamp
+      attribute: brightness
+  condition:
+    - condition: state
+      entity_id: input_select.family_room_lamp_mode
+      state: normal
+    - condition: template
+      value_template: >-
+        {{ state_attr('light.family_room_lamp', 'brightness') is not none }}
+  action:
+    - variables:
+        brightness_pct: >-
+          {{ ((state_attr('light.family_room_lamp', 'brightness') | float(0)) / 255 * 100) | round(0) }}
+    - service: input_number.set_value
+      target:
+        entity_id: input_number.family_room_lamp_normal_brightness
+      data:
+        value: "{{ brightness_pct }}"
+  mode: single

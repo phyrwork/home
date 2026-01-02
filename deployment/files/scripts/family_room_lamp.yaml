@@ -1,0 +1,41 @@
+family_room_lamp_cycle_mode:
+  alias: Family Room Lamp Cycle Mode
+  sequence:
+    - variables:
+        has_bin_tomorrow: >-
+          {{ (states('sensor.days_to_black_bin_collection') | float(99)) < 2
+             or (states('sensor.days_to_blue_bin_collection') | float(99)) < 2 }}
+        current_mode: "{{ states('input_select.family_room_lamp_mode') }}"
+        next_mode: >-
+          {% if has_bin_tomorrow %}
+            {% if current_mode == 'bindicator' %}
+              energy
+            {% elif current_mode == 'energy' %}
+              normal
+            {% else %}
+              bindicator
+            {% endif %}
+          {% else %}
+            {% if current_mode == 'normal' %}
+              energy
+            {% else %}
+              normal
+            {% endif %}
+          {% endif %}
+    - service: input_select.select_option
+      target:
+        entity_id: input_select.family_room_lamp_mode
+      data:
+        option: "{{ next_mode }}"
+
+family_room_lamp_set_normal_color:
+  alias: Family Room Lamp Set Normal Color
+  sequence:
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.family_room_lamp_normal_color
+      data:
+        value: >-
+          {{ state_attr('light.family_room_lamp', 'rgb_color')
+             | default([255, 255, 255])
+             | to_json }}

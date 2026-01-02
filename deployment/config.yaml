@@ -5,7 +5,7 @@
 
   pre_tasks:
     - name: read home assistant api token
-      command: op read "op://kkhhbqqw4nsn3zq4yxywwjl4ou/kepd6paqqz6ayp55jwdxt7ic5i/password"
+      command: op read "op://jxs6qrivegu7ekpzkt27seurvy/fgvzkd432x4xsjq7f3vu4zippu/password"
       delegate_to: localhost
       run_once: true
       register: ha_api_token_cmd
@@ -101,9 +101,31 @@
         body_format: json
       no_log: true
 
+    - name: reload input selects
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/input_select/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
     - name: reload input booleans
       ansible.builtin.uri:
         url: "{{ ha_api_url }}/services/input_boolean/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload input datetimes
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/input_datetime/reload"
         method: POST
         headers:
           Authorization: "Bearer {{ ha_api_token }}"
@@ -314,6 +336,15 @@
         links: yes
       notify: reload input texts
 
+    - name: install input select configuration
+      ansible.builtin.synchronize:
+        src: input_selects
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload input selects
+
     - name: install input boolean configuration
       ansible.builtin.synchronize:
         src: input_booleans
@@ -322,6 +353,15 @@
         delete: yes
         links: yes
       notify: reload input booleans
+
+    - name: install input datetime configuration
+      ansible.builtin.synchronize:
+        src: input_datetimes
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload input datetimes
 
     - name: install pyscript configuration
       ansible.builtin.synchronize:
@@ -365,8 +405,7 @@
         dest: "{{ ha_config_dir }}/automations/{{ item }}.yaml"
       notify: reload automations
       loop:
-        - family_room_lamp_button
-        - family_room_lamp_button_double
+        - family_room_lamp_mode_energy
         - washing_machine_schedule
 
     - name: install templated sensors

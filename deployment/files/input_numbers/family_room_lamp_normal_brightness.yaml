@@ -1,0 +1,8 @@
+family_room_lamp_normal_brightness:
+  name: Family Room Lamp Normal Brightness
+  min: 1
+  max: 100
+  step: 1
+  unit_of_measurement: "%"
+  mode: slider
+  initial: 100

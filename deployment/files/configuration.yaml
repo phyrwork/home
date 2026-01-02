@@ -29,5 +29,9 @@ input_text: !include_dir_merge_named input_texts/
 
 input_number: !include_dir_merge_named input_numbers/
 
+input_select: !include_dir_merge_named input_selects/
+
+input_datetime: !include_dir_merge_named input_datetimes/
+
 # TODO: Remove this input_boolean once the automation is working correctly
 input_boolean: !include_dir_merge_named input_booleans/
