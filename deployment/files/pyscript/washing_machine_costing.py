@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from pyscript.washing_machine_constants import (
+from washing_machine_constants import (
     EXPORT_POWER_SENSOR,
     EXPORT_RATE_SENSOR,
     IMPORT_RATE_EVENTS,

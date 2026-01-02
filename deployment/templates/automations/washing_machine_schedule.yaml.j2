@@ -34,16 +34,20 @@
       state: "on"
     - condition: template
       value_template: >-
-        {% raw %}{{ states('select.washing_machine') != 'run' }}{% endraw %}
+        {% raw %}
+        {{ states('select.washing_machine') != 'run' }}
+        {% endraw %}
     - condition: template
       value_template: >-
-        {% raw %}{% set best = states('sensor.washing_machine_best_start_time') %}
+        {% raw %}
+        {% set best = states('sensor.washing_machine_best_start_time') %}
         {% set latest = state_attr('sensor.washing_machine_best_start_time', 'latest_start') %}
         {% if best in ['unknown', 'unavailable', ''] or latest in ['unknown', 'unavailable', None, ''] %}
           false
         {% else %}
           {{ now() >= as_datetime(best) or now() >= as_datetime(latest) }}
-        {% endif %}{% endraw %}
+        {% endif %}
+        {% endraw %}
   action:
     - service: select.select_option
       target:

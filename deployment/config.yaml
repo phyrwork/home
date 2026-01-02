@@ -389,11 +389,12 @@
 
     - name: install templated pyscript
       template:
-        src: "pyscript/{{ item }}.py.j2"
-        dest: "{{ ha_config_dir }}/pyscript/{{ item }}.py"
+        src: "pyscript/{{ item.src }}"
+        dest: "{{ item.dest }}"
       notify: reload pyscript
       loop:
-        - washing_machine_constants
+        - src: "modules/washing_machine_constants.py.j2"
+          dest: "{{ ha_config_dir }}/pyscript/modules/washing_machine_constants.py"
 
 
     - name: install templated alerts
