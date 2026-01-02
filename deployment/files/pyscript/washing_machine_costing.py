@@ -1,26 +1,18 @@
 from datetime import datetime, timedelta, timezone
 
+from pyscript.washing_machine_constants import (
+    EXPORT_POWER_SENSOR,
+    EXPORT_RATE_SENSOR,
+    IMPORT_RATE_EVENTS,
+    IMPORT_RATE_SENSOR,
+)
+
 PROFILE_SEGMENTS = [
     (timedelta(minutes=30), 2.5),
     (timedelta(minutes=150), 0.2),
 ]
 LATEST_FINISH_TIME = "06:00:00"
 # Note: Deployment edits trigger pyscript reloads for debugging.
-
-IMPORT_RATE_EVENTS = [
-    "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates",
-    "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_next_day_rates",
-]
-
-IMPORT_RATE_SENSOR = (
-    "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_rate"
-)
-EXPORT_RATE_SENSOR = (
-    "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_export_current_rate"
-)
-EXPORT_POWER_SENSOR = (
-    "sensor.current_export_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}"
-)
 
 SENSORS = {
     "sensor.washing_machine_start_now_cost": {

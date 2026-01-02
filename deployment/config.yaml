@@ -393,7 +393,7 @@
         dest: "{{ ha_config_dir }}/pyscript/{{ item }}.py"
       notify: reload pyscript
       loop:
-        - washing_machine_costing
+        - washing_machine_constants
 
 
     - name: install templated alerts

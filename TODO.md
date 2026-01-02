@@ -4,6 +4,8 @@
       `deployment/files/automations/covers_solar_open.yaml` appears broken and
       likely never selects covers to reopen.
 
+- [ ] Investigate why Ansible deployment runs are slow and optimize where possible.
+
 - [ ] Switch `sensor` and `template` includes to `!include_dir_merge_list` and
       consolidate related entries (e.g.,
       `sensors/waste_collection_schedule_version.yaml`,
