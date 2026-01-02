@@ -153,32 +153,47 @@ def washing_machine_costing():
 
     rates.sort(key=lambda item: item["start"])
 
-    latest_finish_local = next_finish_time(now_local)
-    latest_finish_utc = latest_finish_local.astimezone(timezone.utc)
     total_duration = timedelta()
     for segment in PROFILE_SEGMENTS:
         total_duration += segment[0]
-    latest_start_utc = latest_finish_utc - total_duration
-
-    candidate_starts = [
-        rate["start"]
-        for rate in rates
-        if now_utc <= rate["start"] <= latest_start_utc
-    ]
-
-    if not candidate_starts:
-        set_all_unavailable("no_candidate_starts")
-        return
 
     best_start = None
     best_cost = None
-    for start_dt in candidate_starts:
-        cost = total_cost(start_dt, rates)
-        if cost is None:
+    latest_finish_utc = None
+    latest_start_utc = None
+    evaluated_starts = 0
+    for _ in range(3):
+        latest_finish_local = next_finish_time(now_local)
+        latest_finish_utc = latest_finish_local.astimezone(timezone.utc)
+        latest_start_utc = latest_finish_utc - total_duration
+
+        candidate_starts = [
+            rate["start"]
+            for rate in rates
+            if now_utc <= rate["start"] <= latest_start_utc
+        ]
+
+        if not candidate_starts:
+            # Move to the next deadline when rate data does not cover this window.
+            now_local = latest_finish_local + timedelta(seconds=1)
             continue
-        if best_cost is None or cost < best_cost:
-            best_cost = cost
-            best_start = start_dt
+
+        for start_dt in candidate_starts:
+            cost = total_cost(start_dt, rates)
+            if cost is None:
+                continue
+            if best_cost is None or cost < best_cost:
+                best_cost = cost
+                best_start = start_dt
+        evaluated_starts = len(candidate_starts)
+        if best_start is not None:
+            break
+
+        now_local = latest_finish_local + timedelta(seconds=1)
+
+    if best_start is None or latest_finish_utc is None or latest_start_utc is None:
+        set_all_unavailable("no_candidate_starts")
+        return
 
     export_power_state = state.get(EXPORT_POWER_SENSOR)
     try:
@@ -233,23 +248,23 @@ def washing_machine_costing():
         attrs = SENSORS["sensor.washing_machine_best_start_time"].copy()
         attrs.update(common_attrs)
         attrs["error"] = "no_valid_start"
-        attrs["evaluated_starts"] = len(candidate_starts)
+        attrs["evaluated_starts"] = evaluated_starts
         state.set("sensor.washing_machine_best_start_time", "unavailable", attrs)
 
         attrs = SENSORS["sensor.washing_machine_best_cost"].copy()
         attrs.update(common_attrs)
         attrs["error"] = "no_valid_start"
-        attrs["evaluated_starts"] = len(candidate_starts)
+        attrs["evaluated_starts"] = evaluated_starts
         state.set("sensor.washing_machine_best_cost", "unavailable", attrs)
     else:
         attrs = SENSORS["sensor.washing_machine_best_start_time"].copy()
         attrs.update(common_attrs)
         attrs["best_cost"] = round(best_cost, 4)
-        attrs["evaluated_starts"] = len(candidate_starts)
+        attrs["evaluated_starts"] = evaluated_starts
         state.set("sensor.washing_machine_best_start_time", best_start.isoformat(), attrs)
 
         attrs = SENSORS["sensor.washing_machine_best_cost"].copy()
         attrs.update(common_attrs)
         attrs["best_start"] = best_start.isoformat()
-        attrs["evaluated_starts"] = len(candidate_starts)
+        attrs["evaluated_starts"] = evaluated_starts
         state.set("sensor.washing_machine_best_cost", round(best_cost, 4), attrs)
