@@ -22,7 +22,7 @@
 - [ ] Reintroduce washing machine power profile and latest finish helpers once pyscript
       or another parser is available.
 
-- [ ] Update zigpy config to replace deprecated `z2m_index` with `extra_providers`
+- [x] Update zigpy config to replace deprecated `z2m_index` with `extra_providers`
       (repeated warnings in `home-assistant.log.old`).
 
 - [x] Fix `automation.dishwasher_done_notification` unknown action `notify.all_phones`
