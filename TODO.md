@@ -15,7 +15,7 @@
 - [ ] Add debounce/lockout strategy for spare-solar-triggered automations to prevent
       simultaneous starts.
 
-- [ ] Octopus Energy entity IDs are dynamic (account/MPAN variables), so
+- [x] Octopus Energy entity IDs are dynamic (account/MPAN variables), so
       `deployment/files/pyscript/washing_machine_costing.py` should become a Jinja2
       template.
 

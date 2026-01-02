@@ -330,6 +330,9 @@
         recursive: yes
         delete: yes
         links: yes
+        rsync_opts:
+          - "--filter=merge\\ {{ playbook_dir }}/files/pyscript/.rsync-filter"
+          - "--exclude=.rsync-filter"
       notify: reload pyscript
 
     - name: install configuration
@@ -364,6 +367,7 @@
       loop:
         - family_room_lamp_button
         - family_room_lamp_button_double
+        - washing_machine_schedule
 
     - name: install templated sensors
       template:
@@ -382,6 +386,14 @@
       loop:
         - covers_battery_low
         - octopus_energy_electricity_current_export
+
+    - name: install templated pyscript
+      template:
+        src: "pyscript/{{ item }}.py.j2"
+        dest: "{{ ha_config_dir }}/pyscript/{{ item }}.py"
+      notify: reload pyscript
+      loop:
+        - washing_machine_costing
 
 
     - name: install templated alerts

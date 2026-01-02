@@ -8,17 +8,19 @@ LATEST_FINISH_TIME = "06:00:00"
 # Note: Deployment edits trigger pyscript reloads for debugging.
 
 IMPORT_RATE_EVENTS = [
-    "event.octopus_energy_electricity_21l4421345_2700007165105_current_day_rates",
-    "event.octopus_energy_electricity_21l4421345_2700007165105_next_day_rates",
+    "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates",
+    "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_next_day_rates",
 ]
 
 IMPORT_RATE_SENSOR = (
-    "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate"
+    "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_rate"
 )
 EXPORT_RATE_SENSOR = (
-    "sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate"
+    "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_export_current_rate"
 )
-EXPORT_POWER_SENSOR = "sensor.current_export_electricity_21l4421345_2700009249389"
+EXPORT_POWER_SENSOR = (
+    "sensor.current_export_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}"
+)
 
 SENSORS = {
     "sensor.washing_machine_start_now_cost": {
