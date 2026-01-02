@@ -1,0 +1,255 @@
+from datetime import datetime, timedelta, timezone
+
+PROFILE_SEGMENTS = [
+    (timedelta(minutes=30), 2.5),
+    (timedelta(minutes=150), 0.2),
+]
+LATEST_FINISH_TIME = "06:00:00"
+# Note: Deployment edits trigger pyscript reloads for debugging.
+
+IMPORT_RATE_EVENTS = [
+    "event.octopus_energy_electricity_21l4421345_2700007165105_current_day_rates",
+    "event.octopus_energy_electricity_21l4421345_2700007165105_next_day_rates",
+]
+
+IMPORT_RATE_SENSOR = (
+    "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate"
+)
+EXPORT_RATE_SENSOR = (
+    "sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate"
+)
+EXPORT_POWER_SENSOR = "sensor.current_export_electricity_21l4421345_2700009249389"
+
+SENSORS = {
+    "sensor.washing_machine_start_now_cost": {
+        "friendly_name": "Washing Machine Start Now Cost",
+        "unit_of_measurement": "GBP",
+    },
+    "sensor.washing_machine_best_start_time": {
+        "friendly_name": "Washing Machine Best Start Time",
+        "device_class": "timestamp",
+    },
+    "sensor.washing_machine_best_cost": {
+        "friendly_name": "Washing Machine Best Cost",
+        "unit_of_measurement": "GBP",
+    },
+}
+
+
+def set_all_unavailable(reason):
+    for entity_id, base_attrs in SENSORS.items():
+        attrs = base_attrs.copy()
+        attrs["error"] = reason
+        state.set(entity_id, "unavailable", attrs)
+
+
+def parse_iso(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def next_finish_time(now_local):
+    try:
+        hour_s, minute_s, second_s = LATEST_FINISH_TIME.split(":")
+        hour = int(hour_s)
+        minute = int(minute_s)
+        second = int(second_s)
+    except Exception:
+        hour, minute, second = 6, 0, 0
+
+    finish_local = now_local.replace(
+        hour=hour,
+        minute=minute,
+        second=second,
+        microsecond=0,
+    )
+    if finish_local <= now_local:
+        finish_local = finish_local + timedelta(days=1)
+    return finish_local
+
+
+def segment_cost(seg_start, seg_end, power_kw, rates, override_rate=None, override_start=None):
+    cost = 0.0
+    covered = 0.0
+    total = (seg_end - seg_start).total_seconds()
+
+    for rate in rates:
+        if rate["end"] <= seg_start:
+            continue
+        if rate["start"] >= seg_end:
+            break
+        overlap_start = max(seg_start, rate["start"])
+        overlap_end = min(seg_end, rate["end"])
+        if overlap_end <= overlap_start:
+            continue
+
+        rate_value = rate["value"]
+        if override_rate is not None and override_start is not None:
+            if rate["start"] <= override_start < rate["end"]:
+                rate_value = override_rate
+
+        hours = (overlap_end - overlap_start).total_seconds() / 3600.0
+        cost += power_kw * hours * rate_value
+        covered += (overlap_end - overlap_start).total_seconds()
+
+    if covered + 1e-6 < total:
+        return None
+    return cost
+
+
+def total_cost(start_dt, rates, override_rate=None, override_start=None):
+    total = 0.0
+    seg_start = start_dt
+    for duration, power_kw in PROFILE_SEGMENTS:
+        seg_end = seg_start + duration
+        cost = segment_cost(
+            seg_start,
+            seg_end,
+            power_kw,
+            rates,
+            override_rate=override_rate,
+            override_start=override_start,
+        )
+        if cost is None:
+            return None
+        total += cost
+        seg_start = seg_end
+    return total
+
+
+@service
+def washing_machine_costing():
+    now_local = datetime.now().astimezone()
+    now_utc = now_local.astimezone(timezone.utc)
+
+    rates = []
+    for entity_id in IMPORT_RATE_EVENTS:
+        attrs = state.getattr(entity_id)
+        if not attrs:
+            continue
+        for rate in attrs.get("rates", []):
+            start = parse_iso(rate.get("start"))
+            end = parse_iso(rate.get("end"))
+            value = rate.get("value_inc_vat")
+            if not start or not end or value is None:
+                continue
+            rates.append(
+                {
+                    "start": start.astimezone(timezone.utc),
+                    "end": end.astimezone(timezone.utc),
+                    "value": float(value),
+                }
+            )
+
+    if not rates:
+        set_all_unavailable("missing_rate_data")
+        return
+
+    rates.sort(key=lambda item: item["start"])
+
+    latest_finish_local = next_finish_time(now_local)
+    latest_finish_utc = latest_finish_local.astimezone(timezone.utc)
+    total_duration = timedelta()
+    for segment in PROFILE_SEGMENTS:
+        total_duration += segment[0]
+    latest_start_utc = latest_finish_utc - total_duration
+
+    candidate_starts = [
+        rate["start"]
+        for rate in rates
+        if now_utc <= rate["start"] <= latest_start_utc
+    ]
+
+    if not candidate_starts:
+        set_all_unavailable("no_candidate_starts")
+        return
+
+    best_start = None
+    best_cost = None
+    for start_dt in candidate_starts:
+        cost = total_cost(start_dt, rates)
+        if cost is None:
+            continue
+        if best_cost is None or cost < best_cost:
+            best_cost = cost
+            best_start = start_dt
+
+    export_power_state = state.get(EXPORT_POWER_SENSOR)
+    try:
+        export_power_w = float(export_power_state)
+    except Exception:
+        export_power_w = 0.0
+
+    override_rate = None
+    rate_source = "import"
+    try:
+        if export_power_w > 0:
+            override_rate = float(state.get(EXPORT_RATE_SENSOR))
+            rate_source = "export"
+        else:
+            override_rate = float(state.get(IMPORT_RATE_SENSOR))
+    except Exception:
+        override_rate = None
+
+    start_now_cost = None
+    if override_rate is not None:
+        start_now_cost = total_cost(
+            now_utc,
+            rates,
+            override_rate=override_rate,
+            override_start=now_utc,
+        )
+
+    profile_kwh = []
+    for duration, power_kw in PROFILE_SEGMENTS:
+        hours = duration.total_seconds() / 3600.0
+        profile_kwh.append(power_kw * hours)
+
+    common_attrs = {
+        "profile_kwh": profile_kwh,
+        "latest_finish": latest_finish_utc.isoformat(),
+        "latest_start": latest_start_utc.isoformat(),
+    }
+
+    if start_now_cost is None:
+        attrs = SENSORS["sensor.washing_machine_start_now_cost"].copy()
+        attrs.update(common_attrs)
+        attrs["error"] = "missing_start_now_rate"
+        state.set("sensor.washing_machine_start_now_cost", "unavailable", attrs)
+    else:
+        attrs = SENSORS["sensor.washing_machine_start_now_cost"].copy()
+        attrs.update(common_attrs)
+        attrs["rate_source"] = rate_source
+        attrs["start_now_time"] = now_utc.isoformat()
+        state.set("sensor.washing_machine_start_now_cost", round(start_now_cost, 4), attrs)
+
+    if best_start is None or best_cost is None:
+        attrs = SENSORS["sensor.washing_machine_best_start_time"].copy()
+        attrs.update(common_attrs)
+        attrs["error"] = "no_valid_start"
+        attrs["evaluated_starts"] = len(candidate_starts)
+        state.set("sensor.washing_machine_best_start_time", "unavailable", attrs)
+
+        attrs = SENSORS["sensor.washing_machine_best_cost"].copy()
+        attrs.update(common_attrs)
+        attrs["error"] = "no_valid_start"
+        attrs["evaluated_starts"] = len(candidate_starts)
+        state.set("sensor.washing_machine_best_cost", "unavailable", attrs)
+    else:
+        attrs = SENSORS["sensor.washing_machine_best_start_time"].copy()
+        attrs.update(common_attrs)
+        attrs["best_cost"] = round(best_cost, 4)
+        attrs["evaluated_starts"] = len(candidate_starts)
+        state.set("sensor.washing_machine_best_start_time", best_start.isoformat(), attrs)
+
+        attrs = SENSORS["sensor.washing_machine_best_cost"].copy()
+        attrs.update(common_attrs)
+        attrs["best_start"] = best_start.isoformat()
+        attrs["evaluated_starts"] = len(candidate_starts)
+        state.set("sensor.washing_machine_best_cost", round(best_cost, 4), attrs)

@@ -16,6 +16,7 @@ rest: !include_dir_list rest/
 command_line: !include_dir_list command_line/
 notify: !include_dir_merge_list notify/
 zha: !include zha.yaml
+pyscript: # Integration with no options; enables pyscript/
 
 # Bindicator data source.
 waste_collection_schedule: !include waste_collection_schedule.yaml

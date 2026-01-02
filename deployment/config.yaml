@@ -112,6 +112,16 @@
         body_format: json
       no_log: true
 
+    - name: reload pyscript
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/pyscript/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+
     # Restart Home Assistant. This is required for reloading custom_components and a
     # heavy-handed fallback for config that cannot reload.
     - name: restart ha
@@ -166,6 +176,13 @@
         component_full_name: mampfes/hacs_waste_collection_schedule
         component_domain: waste_collection_schedule
         component_version: "2.8.0"
+
+    - role: custom_component
+      vars:
+        component_name: Pyscript
+        component_full_name: custom-components/pyscript
+        component_domain: pyscript
+        component_version: "1.7.0"
 
   tasks:
     - name: create zigpy ota directory
@@ -305,6 +322,15 @@
         delete: yes
         links: yes
       notify: reload input booleans
+
+    - name: install pyscript configuration
+      ansible.builtin.synchronize:
+        src: pyscript
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload pyscript
 
     - name: install configuration
       copy:
