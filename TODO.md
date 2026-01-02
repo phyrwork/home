@@ -25,5 +25,5 @@
 - [ ] Update zigpy config to replace deprecated `z2m_index` with `extra_providers`
       (repeated warnings in `home-assistant.log.old`).
 
-- [ ] Fix `automation.dishwasher_done_notification` unknown action `notify.all_phones`
+- [x] Fix `automation.dishwasher_done_notification` unknown action `notify.all_phones`
       (service removed or typo).
