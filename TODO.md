@@ -21,7 +21,7 @@
       `deployment/files/pyscript/washing_machine_costing.py` should become a Jinja2
       template.
 
-- [ ] Reintroduce washing machine power profile and latest finish helpers once pyscript
+- [x] Reintroduce washing machine power profile and latest finish helpers once pyscript
       or another parser is available.
 
 - [x] Update zigpy config to replace deprecated `z2m_index` with `extra_providers`

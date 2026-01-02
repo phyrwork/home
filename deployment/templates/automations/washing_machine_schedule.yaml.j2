@@ -15,6 +15,21 @@
     - service: pyscript.washing_machine_costing
   mode: single
 
+- id: dishwasher_costing_update
+  alias: Dishwasher Costing Update
+  description: Update dishwasher cost sensors when prices or inputs change
+  trigger:
+    - platform: state
+      entity_id:
+        - sensor.current_export_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}
+        - sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_rate
+        - sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_export_current_rate
+        - event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates
+        - event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_next_day_rates
+  action:
+    - service: pyscript.dishwasher_costing
+  mode: single
+
 - id: washing_machine_start_when_optimal
   alias: Washing Machine Start When Optimal
   description: Start the washing machine at the best time before the deadline

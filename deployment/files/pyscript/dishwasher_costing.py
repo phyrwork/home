@@ -17,23 +17,23 @@ from washing_machine_constants import (
 )
 
 DEFAULT_PROFILE_SEGMENTS = [
-    (timedelta(minutes=30), 2.5),
-    (timedelta(minutes=150), 0.2),
+    (timedelta(minutes=30), 1.5),
+    (timedelta(minutes=90), 0.2),
 ]
 DEFAULT_LATEST_FINISH_TIME = "06:00:00"
 # Note: Deployment edits trigger pyscript reloads for debugging.
 
 SENSORS = {
-    "sensor.washing_machine_start_now_cost": {
-        "friendly_name": "Washing Machine Start Now Cost",
+    "sensor.dishwasher_start_now_cost": {
+        "friendly_name": "Dishwasher Start Now Cost",
         "unit_of_measurement": "GBP",
     },
-    "sensor.washing_machine_best_start_time": {
-        "friendly_name": "Washing Machine Best Start Time",
+    "sensor.dishwasher_best_start_time": {
+        "friendly_name": "Dishwasher Best Start Time",
         "device_class": "timestamp",
     },
-    "sensor.washing_machine_best_cost": {
-        "friendly_name": "Washing Machine Best Cost",
+    "sensor.dishwasher_best_cost": {
+        "friendly_name": "Dishwasher Best Cost",
         "unit_of_measurement": "GBP",
     },
 }
@@ -47,16 +47,16 @@ def set_all_unavailable(reason):
 
 
 @service
-def washing_machine_costing():
+def dishwasher_costing():
     now_local = datetime.now().astimezone()
     now_utc = now_local.astimezone(timezone.utc)
 
     profile_segments, profile_input, profile_error = read_profile_segments(
-        "input_text.washing_machine_profile_segments",
+        "input_text.dishwasher_profile_segments",
         DEFAULT_PROFILE_SEGMENTS,
     )
     latest_finish_time, finish_input, finish_error = read_finish_time(
-        "input_text.washing_machine_latest_finish_time",
+        "input_text.dishwasher_latest_finish_time",
         DEFAULT_LATEST_FINISH_TIME,
     )
 
@@ -109,38 +109,38 @@ def washing_machine_costing():
     }
 
     if start_now_cost is None:
-        attrs = SENSORS["sensor.washing_machine_start_now_cost"].copy()
+        attrs = SENSORS["sensor.dishwasher_start_now_cost"].copy()
         attrs.update(common_attrs)
         attrs["error"] = "missing_start_now_rate"
-        state.set("sensor.washing_machine_start_now_cost", "unavailable", attrs)
+        state.set("sensor.dishwasher_start_now_cost", "unavailable", attrs)
     else:
-        attrs = SENSORS["sensor.washing_machine_start_now_cost"].copy()
+        attrs = SENSORS["sensor.dishwasher_start_now_cost"].copy()
         attrs.update(common_attrs)
         attrs["rate_source"] = rate_source
         attrs["start_now_time"] = now_utc.isoformat()
-        state.set("sensor.washing_machine_start_now_cost", round(start_now_cost, 4), attrs)
+        state.set("sensor.dishwasher_start_now_cost", round(start_now_cost, 4), attrs)
 
     if best_start is None or best_cost is None:
-        attrs = SENSORS["sensor.washing_machine_best_start_time"].copy()
+        attrs = SENSORS["sensor.dishwasher_best_start_time"].copy()
         attrs.update(common_attrs)
         attrs["error"] = "no_valid_start"
         attrs["evaluated_starts"] = evaluated_starts
-        state.set("sensor.washing_machine_best_start_time", "unavailable", attrs)
+        state.set("sensor.dishwasher_best_start_time", "unavailable", attrs)
 
-        attrs = SENSORS["sensor.washing_machine_best_cost"].copy()
+        attrs = SENSORS["sensor.dishwasher_best_cost"].copy()
         attrs.update(common_attrs)
         attrs["error"] = "no_valid_start"
         attrs["evaluated_starts"] = evaluated_starts
-        state.set("sensor.washing_machine_best_cost", "unavailable", attrs)
+        state.set("sensor.dishwasher_best_cost", "unavailable", attrs)
     else:
-        attrs = SENSORS["sensor.washing_machine_best_start_time"].copy()
+        attrs = SENSORS["sensor.dishwasher_best_start_time"].copy()
         attrs.update(common_attrs)
         attrs["best_cost"] = round(best_cost, 4)
         attrs["evaluated_starts"] = evaluated_starts
-        state.set("sensor.washing_machine_best_start_time", best_start.isoformat(), attrs)
+        state.set("sensor.dishwasher_best_start_time", best_start.isoformat(), attrs)
 
-        attrs = SENSORS["sensor.washing_machine_best_cost"].copy()
+        attrs = SENSORS["sensor.dishwasher_best_cost"].copy()
         attrs.update(common_attrs)
         attrs["best_start"] = best_start.isoformat()
         attrs["evaluated_starts"] = evaluated_starts
-        state.set("sensor.washing_machine_best_cost", round(best_cost, 4), attrs)
+        state.set("sensor.dishwasher_best_cost", round(best_cost, 4), attrs)
