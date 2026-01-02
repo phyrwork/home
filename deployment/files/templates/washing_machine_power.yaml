@@ -1,0 +1,14 @@
+sensor:
+  - name: Washing Machine Power
+    unique_id: washing_machine_power
+    device_class: power
+    state_class: measurement
+    unit_of_measurement: W
+    state: >-
+      {% set kw = states('sensor.washing_machine_energy_rate') | float(0) %}
+      {{ (kw * 1000) | round(0) }}
+    availability: >-
+      {{
+        states('sensor.washing_machine_energy_rate')
+          not in ['unknown', 'unavailable', 'none']
+      }}
