@@ -17,6 +17,10 @@
 - [ ] Add debounce/lockout strategy for spare-solar-triggered automations to prevent
       simultaneous starts.
 
+- [ ] Switch washing machine costing profile input to a named profile selector (eg,
+      input_select) backed by a code-defined catalog; add a profile for
+      "AI Wash + Dry (90m)" and use the selected profile to drive cost sensors.
+
 - [x] Octopus Energy entity IDs are dynamic (account/MPAN variables), so
       `deployment/files/pyscript/washing_machine_costing.py` should become a Jinja2
       template.
