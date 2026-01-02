@@ -26,3 +26,13 @@
 - Templated automations live in `deployment/templates/automations/*.yaml.j2` and are rendered by Ansible.
 - Use existing files as reference for style and structure; prefer adding to the most specific file rather than creating a new one.
 - Home Assistant derives the automation `entity_id` from the `alias` (friendly name). If you reference an automation in templates (e.g., `state_attr('automation.<entity_id>', 'last_triggered')`), make sure the alias stays stable.
+
+## Development process
+
+### Committing
+
+- When committing, check `TODO.md` and tick off items that are fully resolved by the change.
+
+### Iteration speed
+
+- When developing files (e.g., config, scripts), push iterations directly (e.g., scp) and reload directly (e.g., via API). When complete, if a new file for deployment was added or deployment code changed, then run the Ansible deployment and verify.
