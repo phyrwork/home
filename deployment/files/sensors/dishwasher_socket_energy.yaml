@@ -1,5 +1,0 @@
-platform: integration
-source: sensor.dishwasher_socket_power
-name: dishwasher_socket_energy
-unit_prefix: k
-round: 2

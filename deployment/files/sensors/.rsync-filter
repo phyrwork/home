@@ -1,2 +1,6 @@
 P worxlandroid.yaml
 P octopus_energy_electricity_export_current_accumulative_consumption.yaml
+P connors_desk_socket_energy.yaml
+P kettle_socket_energy.yaml
+P dishwasher_socket_energy.yaml
+P fridge_socket_energy.yaml

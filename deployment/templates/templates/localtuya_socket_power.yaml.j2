@@ -1,0 +1,8 @@
+sensor:
+  - name: {{ name }}
+    unique_id: {{ unique_id }}
+    device_class: power
+    unit_of_measurement: W
+    state: "{{ "{{ state_attr('switch.%s', 'current_consumption') }}" | format(switch) }}"
+    availability: >-
+      {{ "{{ state_attr('switch.%s', 'current_consumption') not in [None, 'unknown', 'unavailable'] }}" | format(switch) }}

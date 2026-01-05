@@ -1,5 +1,0 @@
-platform: integration
-source: sensor.fridge_socket_power
-name: fridge_socket_energy
-unit_prefix: k
-round: 2

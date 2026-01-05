@@ -417,6 +417,24 @@
         - worxlandroid
         - octopus_energy_electricity_export_current_accumulative_consumption
 
+    - name: install templated localtuya socket sensors
+      template:
+        src: "sensors/localtuya_socket_energy.yaml.j2"
+        dest: "{{ ha_config_dir }}/sensors/{{ item.name }}.yaml"
+      vars:
+        name: "{{ item.name }}"
+        source: "{{ item.source }}"
+      notify: reload core config
+      loop:
+        - name: connors_desk_socket_energy
+          source: sensor.connors_desk_socket_power
+        - name: kettle_socket_energy
+          source: sensor.kettle_socket_power
+        - name: dishwasher_socket_energy
+          source: sensor.dishwasher_socket_power
+        - name: fridge_socket_energy
+          source: sensor.fridge_socket_power
+
     - name: install templated templates
       template:
         src: "templates/{{ item }}.yaml.j2"
@@ -425,6 +443,33 @@
       loop:
         - covers_battery_low
         - octopus_energy_electricity_current_export
+
+    - name: install templated localtuya socket templates
+      template:
+        src: "templates/localtuya_socket_power.yaml.j2"
+        dest: "{{ ha_config_dir }}/templates/{{ item.file }}.yaml"
+      vars:
+        name: "{{ item.name }}"
+        unique_id: "{{ item.unique_id }}"
+        switch: "{{ item.switch }}"
+      notify: reload templates
+      loop:
+        - file: connors_desk_socket_power
+          name: Connors Desk Socket Power
+          unique_id: connors_desk_socket_power
+          switch: connors_desk_socket
+        - file: kettle_socket_power
+          name: Kettle Socket Power
+          unique_id: kettle_socket_power
+          switch: kettle_socket
+        - file: dishwasher_socket_power
+          name: Dishwasher Socket Power
+          unique_id: dishwasher_socket_power
+          switch: dishwasher_socket
+        - file: fridge_socket_power
+          name: Fridge Socket Power
+          unique_id: fridge_socket_power
+          switch: fridge_socket
 
     - name: install templated pyscript
       template:

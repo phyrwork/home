@@ -1,6 +1,0 @@
-platform: integration
-source: sensor.connors_desk_socket_power
-name: connors_desk_socket_energy
-device_class: energy
-unit_prefix: k
-round: 2

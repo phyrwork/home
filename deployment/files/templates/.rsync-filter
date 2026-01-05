@@ -1,3 +1,7 @@
 P covers_battery_low.yaml
 P octopus_energy_electricity_current_export.yaml
+P connors_desk_socket_power.yaml
+P kettle_socket_power.yaml
+P dishwasher_socket_power.yaml
+P fridge_socket_power.yaml
 P *_update.yaml
