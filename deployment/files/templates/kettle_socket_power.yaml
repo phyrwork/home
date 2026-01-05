@@ -1,0 +1,11 @@
+sensor:
+  - name: Kettle Socket Power
+    unique_id: kettle_socket_power
+    device_class: power
+    unit_of_measurement: W
+    state: "{{ state_attr('switch.kettle_socket', 'current_consumption') }}"
+    availability: >-
+      {{
+        state_attr('switch.kettle_socket', 'current_consumption')
+          not in [None, 'unknown', 'unavailable']
+      }}

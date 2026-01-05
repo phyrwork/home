@@ -14,6 +14,10 @@
         area_id: "{{ area_id('Downstairs Room') }}"
     - service: homeassistant.update_entity
       data:
+        entity_id: sensor.kettle_socket_energy
+        area_id: "{{ area_id('Downstairs Room') }}"
+    - service: homeassistant.update_entity
+      data:
         entity_id: sensor.washing_machine_energy_rate
         area_id: "{{ area_id('Utility Cupboard') }}"
     - service: homeassistant.update_entity
