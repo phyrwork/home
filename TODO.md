@@ -17,6 +17,8 @@
 - [ ] Add debounce/lockout strategy for spare-solar-triggered automations to prevent
       simultaneous starts.
 
+- [ ] Deprecate/remove double-tap Bindicator automation (family room lamp button).
+
 - [ ] Switch washing machine costing profile input to a named profile selector (eg,
       input_select) backed by a code-defined catalog; add a profile for
       "AI Wash + Dry (90m)" and use the selected profile to drive cost sensors.
