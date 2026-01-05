@@ -1,6 +1,13 @@
 # Loads default set of integrations. Do not remove.
 default_config:
 
+# Customize entity attributes not supported by certain platforms (e.g. integration).
+homeassistant:
+  customize_glob:
+    "sensor.*_socket_energy":
+      device_class: energy
+      state_class: total_increasing
+
 # Load frontend themes from the themes folder.
 frontend: !include frontend.yaml
 
