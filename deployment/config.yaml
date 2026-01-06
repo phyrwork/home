@@ -406,6 +406,8 @@
       notify: reload automations
       loop:
         - family_room_lamp_mode_energy
+        - landing_thermostat_radiator_call_for_heat
+        - radiator_external_temperature
         - washing_machine_schedule
 
     - name: install templated sensors
