@@ -1,0 +1,138 @@
+{% set ha_start = '{{' %}
+{% set ha_end = '}}' %}
+{# Use a list so we can add more TRVs without duplicating template logic. #}
+{% set radiator_thermostats = [
+  'climate.middle_bathroom_radiator_thermostat',
+  'climate.kids_bedroom_radiator_thermostat',
+] %}
+
+# Baseline tracks the Landing setpoint whenever call-for-heat is inactive.
+- id: landing_thermostat_radiator_call_for_heat_baseline
+  alias: Landing radiator call for heat baseline
+  trigger:
+    - platform: state
+      entity_id: climate.landing
+      attribute: temperature
+  condition:
+    - condition: state
+      entity_id: input_boolean.landing_thermostat_radiator_call_for_heat
+      state: 'off'
+  action:
+    - service: input_number.set_value
+      target:
+        entity_id: input_number.landing_thermostat_baseline
+      data:
+        value: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) {{ ha_end }}"
+  mode: single
+
+# Start call-for-heat when any radiator TRV reports heating.
+- id: landing_thermostat_radiator_call_for_heat_start
+  alias: Call for heat when landing radiators need heat
+  trigger:
+    - platform: template
+      value_template: >
+        {{ ha_start }}
+        {% for trv in radiator_thermostats -%}
+        state_attr('{{ trv }}', 'hvac_action') == 'heating'{% if not loop.last %} or {% endif %}
+        {%- endfor %}
+        {{ ha_end }}
+  condition:
+    - condition: state
+      entity_id: input_boolean.landing_thermostat_radiator_call_for_heat
+      state: 'off'
+    - condition: template
+      value_template: "{{ ha_start }} state_attr('climate.landing', 'preset_mode') != 'eco' {{ ha_end }}"
+  action:
+    - variables:
+        # Incremental bump avoids polluting Nest schedule learning.
+        baseline: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) {{ ha_end }}"
+        call_target: "{{ ha_start }} (baseline + 0.5) | round(1) {{ ha_end }}"
+    - service: input_number.set_value
+      target:
+        entity_id: input_number.landing_thermostat_baseline
+      data:
+        value: "{{ ha_start }} baseline {{ ha_end }}"
+    - service: climate.set_temperature
+      target:
+        entity_id: climate.landing
+      data:
+        temperature: "{{ ha_start }} call_target {{ ha_end }}"
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.landing_thermostat_radiator_call_for_heat
+  mode: single
+
+# Stop call-for-heat when all TRVs are satisfied or Nest is in eco.
+- id: landing_thermostat_radiator_call_for_heat_stop
+  alias: Stop calling for heat when landing radiators are satisfied
+  trigger:
+    - platform: template
+      value_template: >
+        {{ ha_start }}
+        state_attr('climate.landing', 'preset_mode') == 'eco'
+        or
+        (
+        {% for trv in radiator_thermostats -%}
+        state_attr('{{ trv }}', 'hvac_action') != 'heating'{% if not loop.last %} and {% endif %}
+        {%- endfor %}
+        )
+        {{ ha_end }}
+  condition:
+    - condition: state
+      entity_id: input_boolean.landing_thermostat_radiator_call_for_heat
+      state: 'on'
+  action:
+    - variables:
+        baseline: "{{ ha_start }} states('input_number.landing_thermostat_baseline') | float(0) {{ ha_end }}"
+        call_target: "{{ ha_start }} (baseline + 0.5) | round(1) {{ ha_end }}"
+        current_target: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) {{ ha_end }}"
+    - choose:
+        # Only restore if we still own the setpoint (Landing is still at our call target).
+        - conditions:
+            - condition: template
+              value_template: >
+                {{ ha_start }}
+                state_attr('climate.landing', 'preset_mode') != 'eco'
+                and (current_target - call_target) | abs <= 0.1
+                {{ ha_end }}
+          sequence:
+            - service: climate.set_temperature
+              target:
+                entity_id: climate.landing
+              data:
+                temperature: "{{ ha_start }} baseline {{ ha_end }}"
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.landing_thermostat_radiator_call_for_heat
+  mode: single
+
+# Clear call-for-heat if Landing setpoint changes away from our call target.
+- id: landing_thermostat_radiator_call_for_heat_external_change
+  alias: Clear call for heat when landing setpoint changes externally
+  trigger:
+    - platform: state
+      entity_id: climate.landing
+      attribute: temperature
+  condition:
+    - condition: state
+      entity_id: input_boolean.landing_thermostat_radiator_call_for_heat
+      state: 'on'
+    - condition: template
+      value_template: >
+        {{ ha_start }}
+        (
+          (state_attr('climate.landing', 'temperature') | float(0))
+          -
+          (((states('input_number.landing_thermostat_baseline') | float(0)) + 0.5) | round(1))
+        ) | abs > 0.1
+        {{ ha_end }}
+  action:
+    - service: input_number.set_value
+      target:
+        entity_id: input_number.landing_thermostat_baseline
+      data:
+        value: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) {{ ha_end }}"
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.landing_thermostat_radiator_call_for_heat
+  mode: single
