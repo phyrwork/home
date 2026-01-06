@@ -1,12 +1,14 @@
 {% set ha_start = '{{' %}
 {% set ha_end = '}}' %}
 {# Use a list so we can add more TRVs without duplicating template logic. #}
+{% set call_for_heat_setpoint = 30 %}
+{% set call_for_heat_lower_bound = call_for_heat_setpoint - 0.01 %}
 {% set radiator_thermostats = [
   'climate.middle_bathroom_radiator_thermostat',
   'climate.kids_bedroom_radiator_thermostat',
 ] %}
 
-# Baseline tracks the Landing setpoint whenever call-for-heat is inactive (30C is the sentinel).
+# Baseline tracks the Landing setpoint whenever call-for-heat is inactive.
 - id: landing_thermostat_radiator_call_for_heat_baseline
   alias: Landing radiator call for heat baseline
   trigger:
@@ -15,7 +17,7 @@
       attribute: temperature
   condition:
     - condition: template
-      value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) != 30 {{ ha_end }}"
+      value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) < {{ call_for_heat_lower_bound }} {{ ha_end }}"
   action:
     - service: input_number.set_value
       target:
@@ -39,11 +41,11 @@
     - condition: template
       value_template: "{{ ha_start }} state_attr('climate.landing', 'preset_mode') != 'eco' {{ ha_end }}"
     - condition: template
-      value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) != 30 {{ ha_end }}"
+      value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) < {{ call_for_heat_lower_bound }} {{ ha_end }}"
   action:
     - variables:
         baseline: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) {{ ha_end }}"
-        call_target: 30
+        call_target: {{ call_for_heat_setpoint }}
     - service: input_number.set_value
       target:
         entity_id: input_number.landing_thermostat_baseline
@@ -73,7 +75,7 @@
         {{ ha_end }}
   condition:
     - condition: template
-      value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) == 30 {{ ha_end }}"
+      value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) >= {{ call_for_heat_lower_bound }} {{ ha_end }}"
   action:
     - variables:
         baseline: "{{ ha_start }} states('input_number.landing_thermostat_baseline') | float(0) {{ ha_end }}"
@@ -85,7 +87,7 @@
               value_template: >
                 {{ ha_start }}
                 state_attr('climate.landing', 'preset_mode') != 'eco'
-                and (current_target - 30) | abs <= 0.1
+                and (current_target - {{ call_for_heat_setpoint }}) | abs <= 0.1
                 {{ ha_end }}
           sequence:
             - service: climate.set_temperature

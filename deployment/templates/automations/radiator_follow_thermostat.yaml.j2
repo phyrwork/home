@@ -1,5 +1,7 @@
 {% set ha_start = '{{' %}
 {% set ha_end = '}}' %}
+{% set call_for_heat_setpoint = 30 %}
+{% set call_for_heat_lower_bound = call_for_heat_setpoint - 0.01 %}
 {% set radiator_thermostats = [
   'climate.middle_bathroom_radiator_thermostat',
   'climate.kids_bedroom_radiator_thermostat',
@@ -12,7 +14,7 @@
       entity_id: input_number.landing_thermostat_baseline
   condition:
     - condition: template
-      value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) != 30 {{ ha_end }}"
+      value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) < {{ call_for_heat_lower_bound }} {{ ha_end }}"
   action:
 {% for trv in radiator_thermostats %}
     - service: climate.set_temperature
