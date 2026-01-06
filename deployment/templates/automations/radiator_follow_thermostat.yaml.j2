@@ -11,9 +11,8 @@
     - platform: state
       entity_id: input_number.landing_thermostat_baseline
   condition:
-    - condition: state
-      entity_id: input_boolean.landing_thermostat_radiator_call_for_heat
-      state: 'off'
+    - condition: template
+      value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) != 30 {{ ha_end }}"
   action:
 {% for trv in radiator_thermostats %}
     - service: climate.set_temperature
