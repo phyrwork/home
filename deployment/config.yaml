@@ -408,6 +408,7 @@
         - family_room_lamp_mode_energy
         - landing_thermostat_radiator_call_for_heat
         - radiator_external_temperature
+        - radiator_follow_thermostat
         - washing_machine_schedule
 
     - name: install templated sensors

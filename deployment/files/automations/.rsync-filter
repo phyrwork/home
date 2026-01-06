@@ -1,4 +1,5 @@
 P family_room_lamp_mode_energy.yaml
 P landing_thermostat_radiator_call_for_heat.yaml
 P radiator_external_temperature.yaml
+P radiator_follow_thermostat.yaml
 P washing_machine_schedule.yaml

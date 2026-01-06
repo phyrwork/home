@@ -1,0 +1,25 @@
+{% set ha_start = '{{' %}
+{% set ha_end = '}}' %}
+{% set radiator_thermostats = [
+  'climate.middle_bathroom_radiator_thermostat',
+  'climate.kids_bedroom_radiator_thermostat',
+] %}
+
+- id: radiator_follow_thermostat_setpoints
+  alias: Radiator follow thermostat setpoints
+  trigger:
+    - platform: state
+      entity_id: input_number.landing_thermostat_baseline
+  condition:
+    - condition: state
+      entity_id: input_boolean.landing_thermostat_radiator_call_for_heat
+      state: 'off'
+  action:
+{% for trv in radiator_thermostats %}
+    - service: climate.set_temperature
+      target:
+        entity_id: {{ trv }}
+      data:
+        temperature: "{{ ha_start }} states('input_number.landing_thermostat_baseline') | float(0) {{ ha_end }}"
+{% endfor %}
+  mode: single
