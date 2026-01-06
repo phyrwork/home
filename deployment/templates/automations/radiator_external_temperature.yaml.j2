@@ -1,0 +1,44 @@
+{% set ha_start = '{{' %}
+{% set ha_end = '}}' %}
+{% set trvs = [
+  {
+    'id': 'middle_bathroom',
+    'alias': 'Middle Bathroom',
+    'sensor': 'sensor.middle_bathroom_temperature',
+    'switch': 'switch.middle_bathroom_radiator_external_temperature_sensor',
+    'number': 'number.middle_bathroom_radiator_external_temperature_sensor_value',
+  },
+  {
+    'id': 'kids_bedroom',
+    'alias': 'Kids Bedroom',
+    'sensor': 'sensor.kids_room_temperature',
+    'switch': 'switch.kids_bedroom_radiator_external_temperature_sensor',
+    'number': 'number.kids_bedroom_radiator_external_temperature_sensor_value',
+  },
+] %}
+
+{% for trv in trvs %}
+- id: {{ trv.id }}_radiator_external_temperature_sync
+  alias: {{ trv.alias }} Radiator External Temperature Sync
+  trigger:
+    - platform: state
+      entity_id: {{ trv.sensor }}
+  condition:
+    - condition: template
+      value_template: >-
+        {{ ha_start }} states('{{ trv.sensor }}') not in ['unknown', 'unavailable', 'none'] {{ ha_end }}
+  action:
+    - service: switch.turn_on
+      target:
+        entity_id: {{ trv.switch }}
+    - service: number.set_value
+      target:
+        entity_id: {{ trv.number }}
+      data:
+        value: >-
+          {{ ha_start }} states('{{ trv.sensor }}') | float | round(1) {{ ha_end }}
+  mode: single
+{% if not loop.last %}
+
+{% endif %}
+{% endfor %}
