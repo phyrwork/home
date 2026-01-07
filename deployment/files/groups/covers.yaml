@@ -10,6 +10,12 @@ guest_bedroom_covers:
     - cover.guest_bedroom_blind_left
     - cover.guest_bedroom_blind_right
 
+living_room_covers:
+    name: Living Room Blinds
+    entities:
+        - cover.living_room_blind_left
+        - cover.living_room_blind_right
+
 covers:
   name: All Blinds
   entities:
@@ -20,3 +26,5 @@ covers:
     - cover.master_bedroom_blind_right
     - cover.guest_bedroom_blind_left
     - cover.guest_bedroom_blind_right
+    - cover.living_room_blind_left
+    - cover.living_room_blind_right
