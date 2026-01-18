@@ -15,16 +15,22 @@ Build a reusable Home Assistant integration that evaluates appliance run cost ag
 - Optional profile file path as an alternative to inline profile input.
 
 ### Outputs (Sensors)
-- `start_now_cost`
+- `cost_now`
   - Computes cost if the appliance starts now.
   - Optionally includes export offset using current export power (steady-state assumption).
-- `start_costs` (time series)
+- `cost` (time series)
   - Provides cost for starting at each available future price slot.
   - Exposed as a single sensor with an attribute list (no per-slot sensors).
-- `best_start_time`
+- `cost_min_time`
   - Best start time based on lowest cost in available data.
   - Optional window constraints: start-by or finish-by deadline.
   - Attributes include `cost`, `start`, and `finish`.
+- `cost_min`
+  - Minimum cost value available in the time series.
+- `cost_max`
+  - Maximum cost value available in the time series.
+- `cost_now_percentile`
+  - Percentile of `cost_now` within the future-only cost range.
 
 ### Behavior
 - Event-driven updates: recompute on any input change.
@@ -45,9 +51,10 @@ Build a reusable Home Assistant integration that evaluates appliance run cost ag
    - Convert profile into a time-power series.
    - Integrate against rate windows for each candidate start time.
 4. Expose sensors:
-   - `start_now_cost`
-   - `start_costs` with attribute list of `{start, finish, cost}`
-   - `best_start_time` with `cost`, `start`, `finish`
+   - `cost_now`
+   - `cost` with attribute list of `{start, finish, cost}`
+   - `cost_min_time` with `cost`, `start`, `finish`
+   - `cost_min`, `cost_max`
+   - `cost_now_percentile`
 5. Wire update triggers for price/power sensor state changes.
 6. Validate behavior against a sample Octopus rates entity.
-
