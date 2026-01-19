@@ -8,7 +8,7 @@
           "import_rate_sensor": "Import rate entity",
           "export_rate_sensor": "Export rate entity (optional)",
           "export_power_sensor": "Export power entity (optional)",
-          "profile": "Appliance power profile (JSON/YAML list)",
+          "power_profile": "Appliance power profile (JSON/YAML list)",
           "profile_file": "Profile file path (optional)",
           "start_by": "Start by (optional)"
         }

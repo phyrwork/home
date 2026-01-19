@@ -106,7 +106,7 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         latest_start_utc = None
         latest_finish_utc = None
 
-        starts = candidate_starts(rates, now_utc, None)
+        starts = candidate_starts(rates, now_utc, latest_start_utc)
         costs = []
         for start_dt in starts:
             cost = cost_profile(start_dt, rates, profile_segments)

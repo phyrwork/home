@@ -23,10 +23,6 @@ rest: !include_dir_list rest/
 command_line: !include_dir_list command_line/
 notify: !include_dir_merge_list notify/
 zha: !include zha.yaml
-pyscript:
-  allow_all_imports: true # Needed for registry helpers in pyscript utilities.
-  hass_is_global: true # Required to access hass from pyscript services.
-
 energy_cost_forecast: !include energy_cost_forecast.yaml
 waste_collection_schedule: !include waste_collection_schedule.yaml
 
