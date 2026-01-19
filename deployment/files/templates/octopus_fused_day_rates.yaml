@@ -1,0 +1,36 @@
+sensor:
+  - name: Octopus Energy Electricity 21L4421345/2700007165105 Fused Day Rates
+    unique_id: octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates
+    icon: mdi:chart-line
+    availability: >-
+      {% set current = states('event.octopus_energy_electricity_21l4421345_2700007165105_current_day_rates') %}
+      {% set next = states('event.octopus_energy_electricity_21l4421345_2700007165105_next_day_rates') %}
+      {{ not (current == 'unavailable' and next == 'unavailable') }}
+    state: >-
+      {% set current_rate = states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate') %}
+      {% if current_rate in ['unknown', 'unavailable', ''] %}
+        unknown
+      {% else %}
+        {{ current_rate }}
+      {% endif %}
+    attributes:
+      rate_unit: >-
+        {{ state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate', 'unit_of_measurement') or 'GBP/kWh' }}
+      rates: >-
+        {% set rates_raw = state_attr('event.octopus_energy_electricity_21l4421345_2700007165105_current_day_rates', 'rates')
+           | default('[]', true) %}
+        {% set rates_current = (rates_raw | from_json) if (rates_raw is string) else rates_raw %}
+        {% set rates_raw = state_attr('event.octopus_energy_electricity_21l4421345_2700007165105_next_day_rates', 'rates')
+           | default('[]', true) %}
+        {% set rates_next = (rates_raw | from_json) if (rates_raw is string) else rates_raw %}
+        {% set combined = (rates_current | list) + (rates_next | list) %}
+        {% set ns = namespace(items=[]) %}
+        {% for rate in combined %}
+          {% set ns.items = ns.items + [{
+            'start': as_datetime(rate.start).isoformat(),
+            'end': as_datetime(rate.end).isoformat(),
+            'value_inc_vat': rate.value_inc_vat,
+            'is_capped': rate.is_capped
+          }] %}
+        {% endfor %}
+        {{ ns.items | tojson }}

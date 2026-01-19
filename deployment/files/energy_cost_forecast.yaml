@@ -1,0 +1,12 @@
+- name: Test Dishwasher
+  import_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates
+  export_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate
+  export_power_sensor: sensor.current_export_electricity_21l4421345_2700009249389
+  profile:
+    - [10, "5m"]
+    - [2000, "15m"]
+    - [50, "10m"]
+    - [2000, "10m"]
+    - [50, "1h35m"]
+    - [2000, "15m"]
+    - [50, "5m"]

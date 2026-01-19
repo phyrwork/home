@@ -27,7 +27,7 @@ pyscript:
   allow_all_imports: true # Needed for registry helpers in pyscript utilities.
   hass_is_global: true # Required to access hass from pyscript services.
 
-# Bindicator data source.
+energy_cost_forecast: !include energy_cost_forecast.yaml
 waste_collection_schedule: !include waste_collection_schedule.yaml
 
 # HTTPS only access
@@ -42,5 +42,4 @@ input_select: !include_dir_merge_named input_selects/
 
 input_datetime: !include_dir_merge_named input_datetimes/
 
-# TODO: Remove this input_boolean once the automation is working correctly
 input_boolean: !include_dir_merge_named input_booleans/
