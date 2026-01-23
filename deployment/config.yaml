@@ -367,6 +367,12 @@
         src: frontend.yaml
         dest: "{{ ha_config_dir }}/frontend.yaml"
 
+    - name: install energy cost forecast configuration
+      copy:
+        src: energy_cost_forecast.yaml
+        dest: "{{ ha_config_dir }}/energy_cost_forecast.yaml"
+      notify: restart ha
+
     - name: install waste collection schedule configuration
       copy:
         src: waste_collection_schedule.yaml
