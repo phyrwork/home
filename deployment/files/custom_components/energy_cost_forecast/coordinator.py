@@ -22,6 +22,7 @@ from .const import (
     CONF_IMPORT_RATE_SENSOR,
     CONF_PROFILE,
     CONF_PROFILE_FILE,
+    CONF_PROFILE_SENSOR,
     CONF_START_BY,
 )
 from .helpers import (
@@ -75,9 +76,12 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass,
             self.entry.data.get(CONF_PROFILE),
             self.entry.data.get(CONF_PROFILE_FILE),
+            self.entry.data.get(CONF_PROFILE_SENSOR),
         )
         profile_source = None
-        if self.entry.data.get(CONF_PROFILE_FILE):
+        if self.entry.data.get(CONF_PROFILE_SENSOR):
+            profile_source = "sensor"
+        elif self.entry.data.get(CONF_PROFILE_FILE):
             profile_source = "file"
         elif self.entry.data.get(CONF_PROFILE):
             profile_source = "inline"

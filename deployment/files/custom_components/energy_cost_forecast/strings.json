@@ -10,6 +10,7 @@
           "export_power_sensor": "Export power entity (optional)",
           "power_profile": "Appliance power profile (JSON/YAML list)",
           "profile_file": "Profile file path (optional)",
+          "power_profile_sensor": "Profile sensor entity (optional)",
           "start_by": "Start by (optional)"
         }
       }

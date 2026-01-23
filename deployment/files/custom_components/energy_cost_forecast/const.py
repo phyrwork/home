@@ -8,6 +8,7 @@ CONF_EXPORT_RATE_SENSOR = "export_rate_sensor"
 CONF_EXPORT_POWER_SENSOR = "export_power_sensor"
 CONF_PROFILE = "power_profile"
 CONF_PROFILE_FILE = "profile_file"
+CONF_PROFILE_SENSOR = "power_profile_sensor"
 CONF_START_BY = "start_by"
 
 ATTR_COSTS = "costs"

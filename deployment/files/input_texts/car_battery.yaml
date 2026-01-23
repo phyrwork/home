@@ -1,0 +1,7 @@
+car_battery_charger_power_entity:
+  name: Car Battery Charger Power Entity
+  initial: ""
+
+car_battery_charger_switch_entity:
+  name: Car Battery Charger Switch Entity
+  initial: ""

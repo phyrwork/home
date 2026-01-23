@@ -86,7 +86,14 @@ async def load_profile(
     hass: HomeAssistant,
     profile_input: object | None,
     profile_file: str | None,
+    profile_sensor: str | None,
 ) -> tuple[list[ProfileSegment] | None, str | None, str | None]:
+    if profile_sensor:
+        sensor_state = hass.states.get(profile_sensor)
+        if not sensor_state or sensor_state.state in {"unknown", "unavailable", ""}:
+            return None, None, "missing_profile_sensor"
+        profile_input = sensor_state.state
+
     if profile_file:
         path = Path(profile_file).expanduser()
         if not path.exists():

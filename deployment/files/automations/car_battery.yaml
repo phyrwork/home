@@ -1,0 +1,123 @@
+- id: car_battery_sync_percent_to_energy
+  alias: Car Battery Sync Percent To Energy
+  description: Keep kWh helpers in sync when % or capacity changes
+  trigger:
+    - platform: homeassistant
+      event: start
+    - platform: state
+      entity_id:
+        - input_number.car_battery_level_current
+        - input_number.car_battery_level_target
+        - input_number.car_battery_energy_capacity
+  action:
+    - variables:
+        capacity: "{{ states('input_number.car_battery_energy_capacity') | float(0) }}"
+        level_current: "{{ states('input_number.car_battery_level_current') | float(0) }}"
+        level_target: "{{ states('input_number.car_battery_level_target') | float(0) }}"
+        energy_current: "{{ (capacity * level_current / 100) | round(3) }}"
+        energy_target: "{{ (capacity * level_target / 100) | round(3) }}"
+    - service: input_number.set_value
+      target:
+        entity_id: input_number.car_battery_energy_current
+      data:
+        value: "{{ energy_current }}"
+    - service: input_number.set_value
+      target:
+        entity_id: input_number.car_battery_energy_target
+      data:
+        value: "{{ energy_target }}"
+  mode: single
+
+- id: car_battery_accumulate_charge_energy
+  alias: Car Battery Accumulate Charge Energy
+  description: Increase current kWh based on charger power sensor
+  trigger:
+    - platform: state
+      entity_id: sensor.ev_charger_power
+      id: power
+    - platform: time_pattern
+      minutes: "/1"
+      id: tick
+  action:
+    - variables:
+        power_prev: "{{ trigger.from_state.state | float(0) if trigger.from_state else states('sensor.ev_charger_power') | float(0) }}"
+        elapsed_seconds: >-
+          {% if trigger.id == 'power' and trigger.from_state and trigger.to_state %}
+            {% set elapsed = as_timestamp(trigger.to_state.last_updated) - as_timestamp(trigger.from_state.last_updated) %}
+            {{ [elapsed, 0] | max }}
+          {% elif trigger.id == 'tick' %}
+            {% set last = this.attributes.last_triggered %}
+            {% if last %}
+              {{ [as_timestamp(now()) - as_timestamp(last), 0] | max }}
+            {% else %}
+              0
+            {% endif %}
+          {% else %}
+            0
+          {% endif %}
+        delta_kwh: "{{ (power_prev / 1000) * (elapsed_seconds / 3600) }}"
+        capacity: "{{ states('input_number.car_battery_energy_capacity') | float(0) }}"
+        current: "{{ states('input_number.car_battery_energy_current') | float(0) }}"
+        updated: "{{ [current + delta_kwh, capacity] | min | round(3) }}"
+    - condition: template
+      value_template: >-
+        {{ trigger.id == 'tick' or (trigger.from_state is not none and trigger.to_state is not none) }}
+    - condition: template
+      value_template: >-
+        {{ power_prev > 0 and elapsed_seconds > 0 }}
+    - service: input_number.set_value
+      target:
+        entity_id: input_number.car_battery_energy_current
+      data:
+        value: "{{ updated }}"
+  mode: single
+
+- id: car_battery_stop_charge_at_target
+  alias: Car Battery Stop Charge At Target
+  description: Stop the charger when target energy is reached
+  trigger:
+    - platform: state
+      entity_id:
+        - input_number.car_battery_energy_current
+        - input_number.car_battery_energy_target
+  condition:
+    - condition: template
+      value_template: >-
+        {% set current = states('input_number.car_battery_energy_current') | float(0) %}
+        {% set target = states('input_number.car_battery_energy_target') | float(0) %}
+        {{ current >= target }}
+  action:
+    - service: homeassistant.turn_off
+      target:
+        entity_id: switch.ev_charger
+  mode: single
+
+- id: car_battery_start_charge_at_best_time
+  alias: Car Battery Start Charge At Best Time
+  description: Start the EV charger at the cheapest start time
+  trigger:
+    - platform: state
+      entity_id: sensor.car_battery_target_cost_next_lowest_start_cost_time
+    - platform: time_pattern
+      minutes: "/1"
+  condition:
+    - condition: state
+      entity_id: switch.ev_charger
+      state: "off"
+    - condition: template
+      value_template: >-
+        {% set needed = states('sensor.car_battery_energy_needed') | float(0) %}
+        {{ needed > 0 }}
+    - condition: template
+      value_template: >-
+        {% set start_time = states('sensor.car_battery_target_cost_next_lowest_start_cost_time') %}
+        {% if start_time in ['unknown', 'unavailable', 'none', ''] %}
+          false
+        {% else %}
+          {{ now() >= as_datetime(start_time) }}
+        {% endif %}
+  action:
+    - service: homeassistant.turn_on
+      target:
+        entity_id: switch.ev_charger
+  mode: single

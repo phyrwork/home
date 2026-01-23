@@ -1,0 +1,49 @@
+car_battery_level_current:
+  name: Car Battery Level Current
+  min: 0
+  max: 100
+  step: 1
+  unit_of_measurement: "%"
+  mode: box
+  initial: 50
+  icon: mdi:battery
+
+car_battery_level_target:
+  name: Car Battery Level Target
+  min: 0
+  max: 100
+  step: 1
+  unit_of_measurement: "%"
+  mode: box
+  initial: 80
+  icon: mdi:battery-charging
+
+car_battery_energy_capacity:
+  name: Car Battery Energy Capacity
+  min: 0
+  max: 150
+  step: 0.1
+  unit_of_measurement: kWh
+  mode: box
+  initial: 63
+  icon: mdi:car-electric
+
+car_battery_energy_current:
+  name: Car Battery Energy Current
+  min: 0
+  max: 150
+  step: 0.1
+  unit_of_measurement: kWh
+  mode: box
+  initial: 0
+  icon: mdi:battery-outline
+
+car_battery_energy_target:
+  name: Car Battery Energy Target
+  min: 0
+  max: 150
+  step: 0.1
+  unit_of_measurement: kWh
+  mode: box
+  initial: 0
+  icon: mdi:battery-charging-100

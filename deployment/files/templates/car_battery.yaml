@@ -1,0 +1,35 @@
+sensor:
+  - name: Car Battery Energy Needed
+    unique_id: car_battery_energy_needed
+    state_class: measurement
+    unit_of_measurement: kWh
+    state: >-
+      {% set target = states('input_number.car_battery_energy_target') | float(0) %}
+      {% set current = states('input_number.car_battery_energy_current') | float(0) %}
+      {{ [target - current, 0] | max | round(3) }}
+    availability: >-
+      {{
+        states('input_number.car_battery_energy_target')
+          not in ['unknown', 'unavailable', 'none']
+        and states('input_number.car_battery_energy_current')
+          not in ['unknown', 'unavailable', 'none']
+      }}
+
+  - name: Car Battery Charge Power Profile
+    unique_id: car_battery_charge_power_profile
+    state: >-
+      {% set energy_needed = states('sensor.car_battery_energy_needed') | float(0) %}
+      {% if energy_needed <= 0 %}
+        {{ [[0, '1m']] | tojson }}
+      {% else %}
+        {% set minutes = (energy_needed / 2.3 * 60) | round(0) | int %}
+        {% if minutes < 1 %}
+          {% set minutes = 1 %}
+        {% endif %}
+        {{ [[2300, minutes ~ 'm']] | tojson }}
+      {% endif %}
+    availability: >-
+      {{
+        states('sensor.car_battery_energy_needed')
+          not in ['unknown', 'unavailable', 'none']
+      }}

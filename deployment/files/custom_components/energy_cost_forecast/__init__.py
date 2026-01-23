@@ -12,6 +12,7 @@ from .const import (
     CONF_NAME,
     CONF_PROFILE,
     CONF_PROFILE_FILE,
+    CONF_PROFILE_SENSOR,
     CONF_START_BY,
     DOMAIN,
     PLATFORMS,
@@ -32,6 +33,7 @@ CONFIG_SCHEMA = vol.Schema(
                         vol.Optional(CONF_EXPORT_POWER_SENSOR): cv.string,
                         vol.Optional(CONF_PROFILE): vol.Any(cv.string, list),
                         vol.Optional(CONF_PROFILE_FILE): cv.string,
+                        vol.Optional(CONF_PROFILE_SENSOR): cv.string,
                         vol.Optional(CONF_START_BY): cv.string,
                     }
                 )
