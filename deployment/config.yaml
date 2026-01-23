@@ -346,10 +346,10 @@
         links: yes
       notify: reload input datetimes
 
-    - name: install custom components
+    - name: install energy cost forecast custom component
       ansible.builtin.synchronize:
-        src: custom_components
-        dest: "{{ ha_config_dir }}"
+        src: custom_components/energy_cost_forecast
+        dest: "{{ ha_config_dir }}/custom_components/energy_cost_forecast"
         recursive: yes
         delete: yes
         links: yes
