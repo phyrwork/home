@@ -104,6 +104,11 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         start_mode = entry_data.get(DATA_START_STEP_MODE, DEFAULT_START_MODE)
         fixed_interval = start_mode == START_MODE_FIXED_INTERVAL_LABEL
 
+        profile_attr = [
+            {"power_w": round(seg.power_kw * 1000.0, 3), "duration_s": int(seg.duration.total_seconds())}
+            for seg in profile_segments
+        ] if profile_segments else []
+
         if not rates or not profile_segments:
             return {
                 "now": None,
@@ -116,7 +121,7 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "max_percentile_time": None,
                 "rate_unit": rate_unit,
                 "cost_unit": cost_unit,
-                ATTR_PROFILE: [],
+                ATTR_PROFILE: profile_attr,
                 ATTR_PROFILE_INPUT: profile_input,
                 ATTR_PROFILE_SOURCE: profile_source,
                 ATTR_PROFILE_ERROR: profile_error or ("missing_rate_data" if not rates else None),
@@ -212,6 +217,28 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             cost_now = cost_profile(now_utc, rates, profile_segments)
 
+        if cost_now is None or not costs:
+            return {
+                "now": None,
+                "later": costs,
+                "min_time": cost_min_time,
+                "min": cost_min,
+                "max": cost_max,
+                "now_percentile": None,
+                "max_percentile": cost_max_percentile,
+                "max_percentile_time": cost_max_percentile_time,
+                "rate_unit": rate_unit,
+                "cost_unit": cost_unit,
+                "start_now_time": now_utc.isoformat(),
+                ATTR_PROFILE: profile_attr,
+                ATTR_PROFILE_INPUT: profile_input,
+                ATTR_PROFILE_SOURCE: profile_source,
+                ATTR_PROFILE_ERROR: profile_error,
+                ATTR_LATEST_START: latest_start_utc.isoformat() if latest_start_utc else None,
+                ATTR_LATEST_FINISH: latest_finish_utc.isoformat() if latest_finish_utc else None,
+                ATTR_RATE_SOURCE: rate_source,
+            }
+
         cost_now_percentile = None
         if cost_now is not None and cost_min is not None and cost_max is not None:
             if abs(cost_max - cost_min) < 1e-9:
@@ -223,11 +250,6 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 if cost_now_percentile < 0:
                     cost_now_percentile = 0.0
-
-        profile_attr = [
-            {"power_w": round(seg.power_kw * 1000.0, 3), "duration_s": int(seg.duration.total_seconds())}
-            for seg in profile_segments
-        ]
 
         return {
             "now": round(cost_now, 4) if cost_now is not None else None,
