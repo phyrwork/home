@@ -6,7 +6,7 @@
 - [x] Tighten YAML config validation: target_percentile 0-100, start_step_minutes 0-1440, entity IDs use cv.entity_id.
 - [x] Rename max_cost_percentile to target_percentile everywhere (no backwards compatibility).
 - [x] Documentation checklist for manifest.json:
-  - [ ] Replace placeholder documentation URL.
+  - [x] Replace placeholder documentation URL.
   - [ ] Add README for integration with configuration examples, required rate schema, profile formats, and limitations.
   - [ ] Add release notes/migration notes for renamed config keys.
   - [ ] Add codeowners entry.

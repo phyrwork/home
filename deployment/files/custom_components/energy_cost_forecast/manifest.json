@@ -2,7 +2,7 @@
   "domain": "energy_cost_forecast",
   "name": "Energy Cost Forecast",
   "version": "0.1.0",
-  "documentation": "https://example.com",
+  "documentation": "https://github.com/connor/home/blob/main/deployment/files/custom_components/energy_cost_forecast/README.md",
   "requirements": [],
   "codeowners": [],
   "config_flow": true,
