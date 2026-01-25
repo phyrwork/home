@@ -108,6 +108,21 @@
       value_template: >-
         {% set needed = states('sensor.car_battery_energy_needed') | float(0) %}
         {{ needed > 0 }}
+    # Avoid daytime starts unless tomorrow's rates are published; Octopus releases them ~16:00.
+    - condition: template
+      value_template: >-
+        {% set now_local = now() %}
+        {% if now_local.hour >= 8 and now_local.hour < 17 %}
+          {% set rates = state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates', 'rates') | default([], true) %}
+          {% set latest_end = rates | map(attribute='end') | list | max(default=None) %}
+          {% if latest_end %}
+            {{ as_datetime(latest_end).date() > now_local.date() }}
+          {% else %}
+            false
+          {% endif %}
+        {% else %}
+          true
+        {% endif %}
     - condition: template
       value_template: >-
         {% set start_time = states('sensor.car_battery_target_cost_next_lowest_start_cost_time') %}
