@@ -5,7 +5,6 @@ car_battery_level_current:
   step: 1
   unit_of_measurement: "%"
   mode: box
-  initial: 50
   icon: mdi:battery
 
 car_battery_level_target:
