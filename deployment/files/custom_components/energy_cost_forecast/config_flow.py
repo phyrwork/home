@@ -15,9 +15,11 @@ from .const import (
     CONF_PROFILE_SENSOR,
     CONF_START_STEP_MODE,
     CONF_START_STEP_MINUTES,
+    CONF_UPDATE_INTERVAL_MINUTES,
     DEFAULT_MAX_COST_PERCENTILE,
     DEFAULT_START_MODE,
     DEFAULT_START_STEP_MINUTES,
+    DEFAULT_UPDATE_INTERVAL_MINUTES,
     DOMAIN,
     START_MODE_OPTIONS,
 )
@@ -60,6 +62,9 @@ class EnergyCostForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Optional(CONF_START_STEP_MINUTES, default=DEFAULT_START_STEP_MINUTES): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=1, max=1440, step=1, mode="box")
+                ),
+                vol.Optional(CONF_UPDATE_INTERVAL_MINUTES, default=DEFAULT_UPDATE_INTERVAL_MINUTES): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=0, max=1440, step=1, mode="box")
                 ),
             }
         )

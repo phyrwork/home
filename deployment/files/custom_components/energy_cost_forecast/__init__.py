@@ -16,6 +16,7 @@ from .const import (
     CONF_PROFILE_SENSOR,
     CONF_START_STEP_MODE,
     CONF_START_STEP_MINUTES,
+    CONF_UPDATE_INTERVAL_MINUTES,
     DATA_MAX_COST_PERCENTILE,
     DATA_START_STEP_MODE,
     DATA_START_STEP_MINUTES,
@@ -48,6 +49,10 @@ CONFIG_SCHEMA = vol.Schema(
                         vol.Optional(CONF_MAX_COST_PERCENTILE): vol.Coerce(float),
                         vol.Optional(CONF_START_STEP_MODE): cv.string,
                         vol.Optional(CONF_START_STEP_MINUTES): vol.Coerce(int),
+                        vol.Optional(CONF_UPDATE_INTERVAL_MINUTES): vol.All(
+                            vol.Coerce(int),
+                            vol.Range(min=0, max=1440),
+                        ),
                     }
                 )
             ],
@@ -88,6 +93,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 CONF_MAX_COST_PERCENTILE,
                 CONF_START_STEP_MINUTES,
                 CONF_START_STEP_MODE,
+                CONF_UPDATE_INTERVAL_MINUTES,
             ):
                 if key in data:
                     merged[key] = data[key]

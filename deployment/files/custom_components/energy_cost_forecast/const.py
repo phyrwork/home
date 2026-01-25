@@ -12,6 +12,7 @@ CONF_PROFILE_SENSOR = "power_profile_sensor"
 CONF_MAX_COST_PERCENTILE = "max_cost_percentile"
 CONF_START_STEP_MINUTES = "start_step_minutes"
 CONF_START_STEP_MODE = "start_step_mode"
+CONF_UPDATE_INTERVAL_MINUTES = "update_interval_minutes"
 
 ATTR_COSTS = "costs"
 ATTR_PROFILE = "profile"
@@ -26,6 +27,7 @@ DATA_START_STEP_MODE = "start_step_mode"
 
 DEFAULT_MAX_COST_PERCENTILE = 0.0
 DEFAULT_START_STEP_MINUTES = 30
+DEFAULT_UPDATE_INTERVAL_MINUTES = 15
 
 START_MODE_RATE_CHANGES_KEY = "rate-changes"
 START_MODE_FIXED_INTERVAL_KEY = "fixed-interval"

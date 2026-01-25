@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -21,6 +22,7 @@ from .const import (
     CONF_PROFILE,
     CONF_PROFILE_FILE,
     CONF_PROFILE_SENSOR,
+    CONF_UPDATE_INTERVAL_MINUTES,
     DOMAIN,
     DATA_MAX_COST_PERCENTILE,
     DATA_START_STEP_MODE,
@@ -28,6 +30,7 @@ from .const import (
     DEFAULT_MAX_COST_PERCENTILE,
     DEFAULT_START_MODE,
     DEFAULT_START_STEP_MINUTES,
+    DEFAULT_UPDATE_INTERVAL_MINUTES,
     START_MODE_FIXED_INTERVAL_LABEL,
 )
 from .helpers import (
@@ -43,7 +46,18 @@ from .helpers import (
 
 class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        super().__init__(hass, logger=logging.getLogger(__name__), name="energy_cost_forecast")
+        update_minutes = entry.data.get(
+            CONF_UPDATE_INTERVAL_MINUTES, DEFAULT_UPDATE_INTERVAL_MINUTES
+        )
+        update_interval = None
+        if update_minutes:
+            update_interval = timedelta(minutes=update_minutes)
+        super().__init__(
+            hass,
+            logger=logging.getLogger(__name__),
+            name="energy_cost_forecast",
+            update_interval=update_interval,
+        )
         self.entry = entry
 
     async def _async_update_data(self) -> dict[str, Any]:
