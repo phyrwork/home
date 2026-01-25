@@ -9,7 +9,7 @@ CONF_EXPORT_POWER_SENSOR = "export_power_sensor"
 CONF_PROFILE = "power_profile"
 CONF_PROFILE_FILE = "profile_file"
 CONF_PROFILE_SENSOR = "power_profile_sensor"
-CONF_MAX_COST_PERCENTILE = "max_cost_percentile"
+CONF_TARGET_PERCENTILE = "target_percentile"
 CONF_START_STEP_MINUTES = "start_step_minutes"
 CONF_START_STEP_MODE = "start_step_mode"
 CONF_UPDATE_INTERVAL_MINUTES = "update_interval_minutes"
@@ -21,11 +21,11 @@ ATTR_PROFILE_SOURCE = "profile_source"
 ATTR_PROFILE_ERROR = "profile_error"
 ATTR_RATE_SOURCE = "rate_source"
 
-DATA_MAX_COST_PERCENTILE = "max_cost_percentile"
+DATA_TARGET_PERCENTILE = "target_percentile"
 DATA_START_STEP_MINUTES = "start_step_minutes"
 DATA_START_STEP_MODE = "start_step_mode"
 
-DEFAULT_MAX_COST_PERCENTILE = 0.0
+DEFAULT_TARGET_PERCENTILE = 0.0
 DEFAULT_START_STEP_MINUTES = 30
 DEFAULT_UPDATE_INTERVAL_MINUTES = 15
 

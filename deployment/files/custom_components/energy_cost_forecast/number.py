@@ -9,10 +9,10 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    DATA_MAX_COST_PERCENTILE,
     DATA_START_STEP_MINUTES,
-    DEFAULT_MAX_COST_PERCENTILE,
+    DATA_TARGET_PERCENTILE,
     DEFAULT_START_STEP_MINUTES,
+    DEFAULT_TARGET_PERCENTILE,
     DOMAIN,
 )
 from .coordinator import EnergyCostForecastCoordinator
@@ -30,7 +30,7 @@ class EnergyCostForecastNumberDescription:
 
 NUMBER_DESCRIPTIONS = [
     EnergyCostForecastNumberDescription(
-        key=DATA_MAX_COST_PERCENTILE,
+        key=DATA_TARGET_PERCENTILE,
         name="Target Percentile",
         min_value=0,
         max_value=100,
@@ -108,9 +108,9 @@ class EnergyCostForecastNumber(RestoreNumber, NumberEntity):
                 if coordinator:
                     await coordinator.async_request_refresh()
                 return
-            if self._description.key == DATA_MAX_COST_PERCENTILE:
+            if self._description.key == DATA_TARGET_PERCENTILE:
                 entry_data.setdefault(
-                    DATA_MAX_COST_PERCENTILE, DEFAULT_MAX_COST_PERCENTILE
+                    DATA_TARGET_PERCENTILE, DEFAULT_TARGET_PERCENTILE
                 )
             elif self._description.key == DATA_START_STEP_MINUTES:
                 entry_data.setdefault(DATA_START_STEP_MINUTES, DEFAULT_START_STEP_MINUTES)

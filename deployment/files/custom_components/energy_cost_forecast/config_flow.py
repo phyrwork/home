@@ -9,16 +9,16 @@ from .const import (
     CONF_EXPORT_POWER_SENSOR,
     CONF_EXPORT_RATE_SENSOR,
     CONF_IMPORT_RATE_SENSOR,
-    CONF_MAX_COST_PERCENTILE,
     CONF_PROFILE,
     CONF_PROFILE_FILE,
     CONF_PROFILE_SENSOR,
     CONF_START_STEP_MODE,
     CONF_START_STEP_MINUTES,
+    CONF_TARGET_PERCENTILE,
     CONF_UPDATE_INTERVAL_MINUTES,
-    DEFAULT_MAX_COST_PERCENTILE,
     DEFAULT_START_MODE,
     DEFAULT_START_STEP_MINUTES,
+    DEFAULT_TARGET_PERCENTILE,
     DEFAULT_UPDATE_INTERVAL_MINUTES,
     DOMAIN,
     START_MODE_OPTIONS,
@@ -54,7 +54,7 @@ class EnergyCostForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_PROFILE_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=["sensor", "input_text"])
                 ),
-                vol.Optional(CONF_MAX_COST_PERCENTILE, default=DEFAULT_MAX_COST_PERCENTILE): selector.NumberSelector(
+                vol.Optional(CONF_TARGET_PERCENTILE, default=DEFAULT_TARGET_PERCENTILE): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=0, max=100, step=1, mode="slider")
                 ),
                 vol.Optional(CONF_START_STEP_MODE, default=DEFAULT_START_MODE): selector.SelectSelector(

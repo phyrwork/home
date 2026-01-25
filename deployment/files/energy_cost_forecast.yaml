@@ -2,7 +2,7 @@
   import_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates
   export_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate
   export_power_sensor: sensor.current_export_electricity_21l4421345_2700009249389
-  max_cost_percentile: 25
+  target_percentile: 25
   power_profile:
     - [1500, "30m"]
     - [200, "90m"]
@@ -11,7 +11,7 @@
   import_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates
   export_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate
   export_power_sensor: sensor.current_export_electricity_21l4421345_2700009249389
-  max_cost_percentile: 25
+  target_percentile: 25
   power_profile:
     - [2500, "30m"]
     - [200, "150m"]
@@ -20,7 +20,7 @@
   import_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates
   export_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate
   export_power_sensor: sensor.current_export_electricity_21l4421345_2700009249389
-  max_cost_percentile: 50
+  target_percentile: 50
   start_step_mode: fixed-interval
   start_step_minutes: 5
   power_profile:

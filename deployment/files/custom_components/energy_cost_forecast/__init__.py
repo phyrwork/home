@@ -9,18 +9,16 @@ from .const import (
     CONF_EXPORT_POWER_SENSOR,
     CONF_EXPORT_RATE_SENSOR,
     CONF_IMPORT_RATE_SENSOR,
-    CONF_MAX_COST_PERCENTILE,
     CONF_NAME,
     CONF_PROFILE,
     CONF_PROFILE_FILE,
     CONF_PROFILE_SENSOR,
     CONF_START_STEP_MODE,
     CONF_START_STEP_MINUTES,
+    CONF_TARGET_PERCENTILE,
     CONF_UPDATE_INTERVAL_MINUTES,
-    DATA_MAX_COST_PERCENTILE,
     DATA_START_STEP_MODE,
     DATA_START_STEP_MINUTES,
-    DEFAULT_MAX_COST_PERCENTILE,
     DEFAULT_START_MODE,
     DEFAULT_START_STEP_MINUTES,
     DOMAIN,
@@ -28,6 +26,8 @@ from .const import (
     START_MODE_KEY_TO_LABEL,
     START_MODE_LABEL_TO_KEY,
     START_MODE_OPTIONS,
+    DATA_TARGET_PERCENTILE,
+    DEFAULT_TARGET_PERCENTILE,
 )
 from .coordinator import EnergyCostForecastCoordinator
 
@@ -46,7 +46,7 @@ CONFIG_SCHEMA = vol.Schema(
                         vol.Optional(CONF_PROFILE): vol.Any(cv.string, list),
                         vol.Optional(CONF_PROFILE_FILE): cv.string,
                         vol.Optional(CONF_PROFILE_SENSOR): cv.entity_id,
-                        vol.Optional(CONF_MAX_COST_PERCENTILE): vol.All(
+                        vol.Optional(CONF_TARGET_PERCENTILE): vol.All(
                             vol.Coerce(float),
                             vol.Range(min=0, max=100),
                         ),
@@ -96,7 +96,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 CONF_PROFILE,
                 CONF_PROFILE_FILE,
                 CONF_PROFILE_SENSOR,
-                CONF_MAX_COST_PERCENTILE,
+                CONF_TARGET_PERCENTILE,
                 CONF_START_STEP_MINUTES,
                 CONF_START_STEP_MODE,
                 CONF_UPDATE_INTERVAL_MINUTES,
@@ -129,8 +129,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         start_mode = DEFAULT_START_MODE
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
-        DATA_MAX_COST_PERCENTILE: float(
-            entry.data.get(CONF_MAX_COST_PERCENTILE, DEFAULT_MAX_COST_PERCENTILE)
+        DATA_TARGET_PERCENTILE: float(
+            entry.data.get(CONF_TARGET_PERCENTILE, DEFAULT_TARGET_PERCENTILE)
         ),
         DATA_START_STEP_MINUTES: int(
             entry.data.get(CONF_START_STEP_MINUTES, DEFAULT_START_STEP_MINUTES)

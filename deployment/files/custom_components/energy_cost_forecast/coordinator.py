@@ -24,14 +24,14 @@ from .const import (
     CONF_PROFILE_SENSOR,
     CONF_UPDATE_INTERVAL_MINUTES,
     DOMAIN,
-    DATA_MAX_COST_PERCENTILE,
     DATA_START_STEP_MODE,
     DATA_START_STEP_MINUTES,
-    DEFAULT_MAX_COST_PERCENTILE,
     DEFAULT_START_MODE,
     DEFAULT_START_STEP_MINUTES,
     DEFAULT_UPDATE_INTERVAL_MINUTES,
     START_MODE_FIXED_INTERVAL_LABEL,
+    DATA_TARGET_PERCENTILE,
+    DEFAULT_TARGET_PERCENTILE,
 )
 from .helpers import (
     RateWindow,
@@ -106,8 +106,8 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             profile_source = "inline"
 
         entry_data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
-        max_cost_percentile = float(
-            entry_data.get(DATA_MAX_COST_PERCENTILE, DEFAULT_MAX_COST_PERCENTILE)
+        target_percentile = float(
+            entry_data.get(DATA_TARGET_PERCENTILE, DEFAULT_TARGET_PERCENTILE)
         )
         start_step_minutes = int(
             entry_data.get(DATA_START_STEP_MINUTES, DEFAULT_START_STEP_MINUTES)
@@ -182,7 +182,7 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     threshold = cost_min
                 else:
                     threshold = cost_min + (
-                        (cost_max - cost_min) * max_cost_percentile / 100.0
+                        (cost_max - cost_min) * target_percentile / 100.0
                     )
                 for item in costs:
                     if item["cost"] <= threshold + 1e-9:
