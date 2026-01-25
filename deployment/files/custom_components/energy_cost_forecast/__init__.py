@@ -40,15 +40,21 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Schema(
                     {
                         vol.Required(CONF_NAME): cv.string,
-                        vol.Required(CONF_IMPORT_RATE_SENSOR): cv.string,
-                        vol.Optional(CONF_EXPORT_RATE_SENSOR): cv.string,
-                        vol.Optional(CONF_EXPORT_POWER_SENSOR): cv.string,
+                        vol.Required(CONF_IMPORT_RATE_SENSOR): cv.entity_id,
+                        vol.Optional(CONF_EXPORT_RATE_SENSOR): cv.entity_id,
+                        vol.Optional(CONF_EXPORT_POWER_SENSOR): cv.entity_id,
                         vol.Optional(CONF_PROFILE): vol.Any(cv.string, list),
                         vol.Optional(CONF_PROFILE_FILE): cv.string,
-                        vol.Optional(CONF_PROFILE_SENSOR): cv.string,
-                        vol.Optional(CONF_MAX_COST_PERCENTILE): vol.Coerce(float),
+                        vol.Optional(CONF_PROFILE_SENSOR): cv.entity_id,
+                        vol.Optional(CONF_MAX_COST_PERCENTILE): vol.All(
+                            vol.Coerce(float),
+                            vol.Range(min=0, max=100),
+                        ),
                         vol.Optional(CONF_START_STEP_MODE): cv.string,
-                        vol.Optional(CONF_START_STEP_MINUTES): vol.Coerce(int),
+                        vol.Optional(CONF_START_STEP_MINUTES): vol.All(
+                            vol.Coerce(int),
+                            vol.Range(min=0, max=1440),
+                        ),
                         vol.Optional(CONF_UPDATE_INTERVAL_MINUTES): vol.All(
                             vol.Coerce(int),
                             vol.Range(min=0, max=1440),
