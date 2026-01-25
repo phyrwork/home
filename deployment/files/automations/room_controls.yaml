@@ -1,0 +1,10 @@
+- id: kids_bedroom_remote
+  alias: Kids Bedroom remote controls
+  use_blueprint:
+    path: hue_remote_room_controls.yaml
+    input:
+      remote: 40ab87ffd90cd135a8154ad38c25905c
+      area: guest_room
+      primary_label: primary
+      secondary_label: secondary
+      secondary_brightness_step_pct: 15

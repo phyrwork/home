@@ -1,0 +1,174 @@
+blueprint:
+  name: Hue Remote Room Controls (RWL022)
+  description: >-
+    Standardized room controls for the Hue Dimmer Switch (RWL022): primary toggle,
+    secondary toggle, secondary dimming, blinds open/close, and all lights off.
+  domain: automation
+  input:
+    remote:
+      name: Hue Dimmer Switch
+      description: RWL022 device to use as the controller.
+      selector:
+        device:
+          integration: zha
+    area:
+      name: Room
+      description: Area used to intersect with labels for primary, secondary, and blinds.
+      selector:
+        area: {}
+    primary_label:
+      name: Primary label
+      description: Label applied to primary lights in this room.
+      selector:
+        label: {}
+    secondary_label:
+      name: Secondary label
+      description: Label applied to secondary lights in this room.
+      selector:
+        label: {}
+    secondary_brightness_step_pct:
+      name: Secondary brightness step (%)
+      description: Brightness step percentage for secondary dim up/down actions.
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 50
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+
+mode: single
+
+variables:
+  area_id: !input area
+  primary_label: !input primary_label
+  secondary_label: !input secondary_label
+  secondary_brightness_step_pct: !input secondary_brightness_step_pct
+  area_entities_list: "{{ area_entities(area_id) }}"
+  primary_lights: >-
+    {{
+      label_entities(primary_label)
+      | select('in', area_entities_list)
+      | select('match', '^light\\.')
+      | list
+    }}
+  secondary_lights: >-
+    {{
+      label_entities(secondary_label)
+      | select('in', area_entities_list)
+      | select('match', '^light\\.')
+      | list
+    }}
+  primary_any_on: >-
+    {{ expand(primary_lights) | selectattr('state', 'eq', 'on') | list | length > 0 }}
+  secondary_any_on: >-
+    {{ expand(secondary_lights) | selectattr('state', 'eq', 'on') | list | length > 0 }}
+  blinds_covers: >-
+    {{
+      area_entities_list
+      | select('match', '^cover\\.')
+      | list
+    }}
+
+triggers:
+  - trigger: device
+    domain: zha
+    device_id: !input remote
+    type: remote_button_short_press
+    subtype: turn_on
+    id: primary_toggle
+  - trigger: device
+    domain: zha
+    device_id: !input remote
+    type: remote_button_double_press
+    subtype: turn_on
+    id: secondary_toggle
+  - trigger: device
+    domain: zha
+    device_id: !input remote
+    type: remote_button_short_press
+    subtype: dim_up
+    id: secondary_dim_up
+  - trigger: device
+    domain: zha
+    device_id: !input remote
+    type: remote_button_short_press
+    subtype: dim_down
+    id: secondary_dim_down
+  - trigger: device
+    domain: zha
+    device_id: !input remote
+    type: remote_button_long_press
+    subtype: dim_up
+    id: blinds_open
+  - trigger: device
+    domain: zha
+    device_id: !input remote
+    type: remote_button_long_press
+    subtype: dim_down
+    id: blinds_close
+  - trigger: device
+    domain: zha
+    device_id: !input remote
+    type: remote_button_short_press
+    subtype: turn_off
+    id: lights_off
+
+actions:
+  - choose:
+      - conditions: "{{ trigger.id == 'primary_toggle' and primary_lights | length > 0 }}"
+        sequence:
+          - choose:
+              - conditions: "{{ primary_any_on }}"
+                sequence:
+                  - service: light.turn_off
+                    target:
+                      entity_id: "{{ primary_lights }}"
+              - conditions: "{{ not primary_any_on }}"
+                sequence:
+                  - service: light.turn_on
+                    target:
+                      entity_id: "{{ primary_lights }}"
+      - conditions: "{{ trigger.id == 'secondary_toggle' and secondary_lights | length > 0 }}"
+        sequence:
+          - choose:
+              - conditions: "{{ secondary_any_on }}"
+                sequence:
+                  - service: light.turn_off
+                    target:
+                      entity_id: "{{ secondary_lights }}"
+              - conditions: "{{ not secondary_any_on }}"
+                sequence:
+                  - service: light.turn_on
+                    target:
+                      entity_id: "{{ secondary_lights }}"
+      - conditions: "{{ trigger.id == 'secondary_dim_up' and secondary_lights | length > 0 }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: "{{ secondary_lights }}"
+            data:
+              brightness_step_pct: "{{ secondary_brightness_step_pct }}"
+      - conditions: "{{ trigger.id == 'secondary_dim_down' and secondary_lights | length > 0 }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: "{{ secondary_lights }}"
+            data:
+              brightness_step_pct: "{{ 0 - secondary_brightness_step_pct }}"
+      - conditions: "{{ trigger.id == 'blinds_open' and blinds_covers | length > 0 }}"
+        sequence:
+          - service: cover.open_cover
+            target:
+              entity_id: "{{ blinds_covers }}"
+      - conditions: "{{ trigger.id == 'blinds_close' and blinds_covers | length > 0 }}"
+        sequence:
+          - service: cover.close_cover
+            target:
+              entity_id: "{{ blinds_covers }}"
+      - conditions: "{{ trigger.id == 'lights_off' }}"
+        sequence:
+          - service: light.turn_off
+            target:
+              area_id: !input area

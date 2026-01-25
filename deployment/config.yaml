@@ -225,6 +225,15 @@
           - "--exclude=.rsync-filter"
       notify: reload automations
 
+    - name: install blueprint configuration
+      ansible.builtin.synchronize:
+        src: blueprints
+        dest: "{{ ha_config_dir }}"
+        recursive: yes
+        delete: yes
+        links: yes
+      notify: reload automations
+
     - name: install script configuration
       ansible.builtin.synchronize:
         src: scripts
