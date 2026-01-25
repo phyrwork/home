@@ -5,7 +5,7 @@
 - [x] Update Start Later Costs sensor state handling: make start_now_time a proper timestamp (device_class TIMESTAMP) or move to attribute only; remove the misleading rates attribute from later.
 - [x] Tighten YAML config validation: target_percentile 0-100, start_step_minutes 0-1440, entity IDs use cv.entity_id.
 - [x] Rename max_cost_percentile to target_percentile everywhere (no backwards compatibility).
-- [ ] Documentation checklist for manifest.json:
+- [x] Documentation checklist for manifest.json:
   - [ ] Replace placeholder documentation URL.
   - [ ] Add README for integration with configuration examples, required rate schema, profile formats, and limitations.
   - [ ] Add release notes/migration notes for renamed config keys.
