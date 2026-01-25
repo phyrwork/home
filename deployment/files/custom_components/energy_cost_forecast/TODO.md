@@ -10,4 +10,4 @@
   - [ ] Add README for integration with configuration examples, required rate schema, profile formats, and limitations.
   - [ ] Add release notes/migration notes for renamed config keys.
   - [ ] Add codeowners entry.
-- [ ] Tests: add pytest coverage using pytest-homeassistant-custom-component for parsing, cost calculations, update_interval behavior, and sensor attributes.
+- [x] Tests: add pytest coverage using pytest-homeassistant-custom-component for parsing, cost calculations, update_interval behavior, and sensor attributes.
