@@ -85,7 +85,7 @@ def _parse_profile_list(raw: object) -> list[ProfileSegment] | None:
 async def load_profile(
     hass: HomeAssistant,
     profile_input: object | None,
-    profile_file: str | None,
+    power_profile_file: str | None,
     profile_sensor: str | None,
 ) -> tuple[list[ProfileSegment] | None, str | None, str | None]:
     if profile_sensor:
@@ -94,10 +94,10 @@ async def load_profile(
             return None, None, "missing_profile_sensor"
         profile_input = sensor_state.state
 
-    if profile_file:
-        path = Path(profile_file).expanduser()
+    if power_profile_file:
+        path = Path(power_profile_file).expanduser()
         if not path.exists():
-            return None, profile_file, "missing_profile_file"
+            return None, power_profile_file, "missing_profile_file"
 
         def _read_file() -> str:
             return path.read_text(encoding="utf-8")
@@ -105,10 +105,10 @@ async def load_profile(
         try:
             content = await hass.async_add_executor_job(_read_file)
         except Exception:
-            return None, profile_file, "profile_file_error"
+            return None, power_profile_file, "profile_file_error"
         raw = yaml.safe_load(content)
         segments = _parse_profile_list(raw)
-        return segments, profile_file, None if segments else "invalid_profile"
+        return segments, power_profile_file, None if segments else "invalid_profile"
 
     if profile_input is None or profile_input == "":
         return None, None, "missing_profile"

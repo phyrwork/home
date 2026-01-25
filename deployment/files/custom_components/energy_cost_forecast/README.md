@@ -68,7 +68,7 @@ and `m` units (for example, `"1h30m"`).
 
 Sources:
 - `power_profile`: inline JSON/YAML list.
-- `profile_file`: path to a YAML file containing the list.
+- `power_profile_file`: path to a YAML file containing the list.
 - `power_profile_sensor`: sensor or input_text containing the list.
 
 ## Limitations

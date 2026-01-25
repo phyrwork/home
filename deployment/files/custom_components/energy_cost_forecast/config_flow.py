@@ -10,7 +10,7 @@ from .const import (
     CONF_EXPORT_RATE_SENSOR,
     CONF_IMPORT_RATE_SENSOR,
     CONF_PROFILE,
-    CONF_PROFILE_FILE,
+    CONF_POWER_PROFILE_FILE,
     CONF_PROFILE_SENSOR,
     CONF_START_STEP_MODE,
     CONF_START_STEP_MINUTES,
@@ -50,7 +50,7 @@ class EnergyCostForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     selector.EntitySelectorConfig(domain="sensor")
                 ),
                 vol.Optional(CONF_PROFILE): str,
-                vol.Optional(CONF_PROFILE_FILE): str,
+                vol.Optional(CONF_POWER_PROFILE_FILE): str,
                 vol.Optional(CONF_PROFILE_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=["sensor", "input_text"])
                 ),
