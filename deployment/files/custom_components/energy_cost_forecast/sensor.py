@@ -17,8 +17,6 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_COSTS,
-    ATTR_LATEST_FINISH,
-    ATTR_LATEST_START,
     ATTR_PROFILE,
     ATTR_PROFILE_ERROR,
     ATTR_PROFILE_INPUT,
@@ -152,8 +150,6 @@ class EnergyCostForecastSensor(
             ATTR_PROFILE_INPUT: data.get(ATTR_PROFILE_INPUT),
             ATTR_PROFILE_SOURCE: data.get(ATTR_PROFILE_SOURCE),
             ATTR_PROFILE_ERROR: data.get(ATTR_PROFILE_ERROR),
-            ATTR_LATEST_START: data.get(ATTR_LATEST_START),
-            ATTR_LATEST_FINISH: data.get(ATTR_LATEST_FINISH),
         }
         key = self.entity_description.key
         if key == "now":

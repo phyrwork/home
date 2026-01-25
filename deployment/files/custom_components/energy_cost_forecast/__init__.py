@@ -16,7 +16,6 @@ from .const import (
     CONF_PROFILE_SENSOR,
     CONF_START_STEP_MODE,
     CONF_START_STEP_MINUTES,
-    CONF_START_BY,
     DATA_MAX_COST_PERCENTILE,
     DATA_START_STEP_MODE,
     DATA_START_STEP_MINUTES,
@@ -30,7 +29,6 @@ from .const import (
     START_MODE_OPTIONS,
 )
 from .coordinator import EnergyCostForecastCoordinator
-from .helpers import normalize_time
 
 
 CONFIG_SCHEMA = vol.Schema(
@@ -50,7 +48,6 @@ CONFIG_SCHEMA = vol.Schema(
                         vol.Optional(CONF_MAX_COST_PERCENTILE): vol.Coerce(float),
                         vol.Optional(CONF_START_STEP_MODE): cv.string,
                         vol.Optional(CONF_START_STEP_MINUTES): vol.Coerce(int),
-                        vol.Optional(CONF_START_BY): cv.string,
                     }
                 )
             ],
@@ -73,8 +70,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     for item in entries:
         data = dict(item)
-        start_by = normalize_time(data.get(CONF_START_BY))
-        data[CONF_START_BY] = start_by
         if "start_mode" in data and CONF_START_STEP_MODE not in data:
             data[CONF_START_STEP_MODE] = data["start_mode"]
 
@@ -93,7 +88,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 CONF_MAX_COST_PERCENTILE,
                 CONF_START_STEP_MINUTES,
                 CONF_START_STEP_MODE,
-                CONF_START_BY,
             ):
                 if key in data:
                     merged[key] = data[key]

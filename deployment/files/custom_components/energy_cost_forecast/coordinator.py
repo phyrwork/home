@@ -10,8 +10,6 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_COSTS,
-    ATTR_LATEST_FINISH,
-    ATTR_LATEST_START,
     ATTR_PROFILE,
     ATTR_PROFILE_ERROR,
     ATTR_PROFILE_INPUT,
@@ -23,7 +21,6 @@ from .const import (
     CONF_PROFILE,
     CONF_PROFILE_FILE,
     CONF_PROFILE_SENSOR,
-    CONF_START_BY,
     DOMAIN,
     DATA_MAX_COST_PERCENTILE,
     DATA_START_STEP_MODE,
@@ -125,20 +122,15 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ATTR_PROFILE_INPUT: profile_input,
                 ATTR_PROFILE_SOURCE: profile_source,
                 ATTR_PROFILE_ERROR: profile_error or ("missing_rate_data" if not rates else None),
-                ATTR_LATEST_START: None,
-                ATTR_LATEST_FINISH: None,
                 ATTR_RATE_SOURCE: None,
             }
 
         total_duration = profile_duration(profile_segments)
 
-        latest_start_utc = None
-        latest_finish_utc = None
-
         starts = candidate_starts(
             rates,
             now_utc,
-            latest_start_utc,
+            None,
             fixed_interval,
             start_step_minutes,
         )
@@ -234,8 +226,6 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ATTR_PROFILE_INPUT: profile_input,
                 ATTR_PROFILE_SOURCE: profile_source,
                 ATTR_PROFILE_ERROR: profile_error,
-                ATTR_LATEST_START: latest_start_utc.isoformat() if latest_start_utc else None,
-                ATTR_LATEST_FINISH: latest_finish_utc.isoformat() if latest_finish_utc else None,
                 ATTR_RATE_SOURCE: rate_source,
             }
 
@@ -267,7 +257,5 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ATTR_PROFILE_INPUT: profile_input,
             ATTR_PROFILE_SOURCE: profile_source,
             ATTR_PROFILE_ERROR: profile_error,
-            ATTR_LATEST_START: latest_start_utc.isoformat() if latest_start_utc else None,
-            ATTR_LATEST_FINISH: latest_finish_utc.isoformat() if latest_finish_utc else None,
             ATTR_RATE_SOURCE: rate_source,
         }

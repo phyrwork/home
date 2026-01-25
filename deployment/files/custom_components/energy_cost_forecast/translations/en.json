@@ -13,13 +13,10 @@
           "power_profile_sensor": "Profile sensor entity (optional)",
           "max_cost_percentile": "Target percentile (0-100)",
           "start_step_mode": "Start step mode",
-          "start_step_minutes": "Start step minutes",
-          "start_by": "Start by (optional)"
+          "start_step_minutes": "Start step minutes"
         }
       }
     },
-    "error": {
-      "invalid_time": "Time must be in HH:MM or HH:MM:SS"
-    }
+    "error": {}
   }
 }

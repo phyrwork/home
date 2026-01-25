@@ -15,14 +15,12 @@ from .const import (
     CONF_PROFILE_SENSOR,
     CONF_START_STEP_MODE,
     CONF_START_STEP_MINUTES,
-    CONF_START_BY,
     DEFAULT_MAX_COST_PERCENTILE,
     DEFAULT_START_MODE,
     DEFAULT_START_STEP_MINUTES,
     DOMAIN,
     START_MODE_OPTIONS,
 )
-from .helpers import normalize_time
 
 
 class EnergyCostForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -31,17 +29,11 @@ class EnergyCostForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input=None):
         errors = {}
         if user_input is not None:
-            start_by = normalize_time(user_input.get(CONF_START_BY))
-            if user_input.get(CONF_START_BY) and start_by is None:
-                errors[CONF_START_BY] = "invalid_time"
-
-            if not errors:
-                data = dict(user_input)
-                data[CONF_START_BY] = start_by
-                unique_id = f"{data[CONF_NAME]}::{data[CONF_IMPORT_RATE_SENSOR]}"
-                await self.async_set_unique_id(unique_id)
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(title=data[CONF_NAME], data=data)
+            data = dict(user_input)
+            unique_id = f"{data[CONF_NAME]}::{data[CONF_IMPORT_RATE_SENSOR]}"
+            await self.async_set_unique_id(unique_id)
+            self._abort_if_unique_id_configured()
+            return self.async_create_entry(title=data[CONF_NAME], data=data)
 
         schema = vol.Schema(
             {
@@ -69,7 +61,6 @@ class EnergyCostForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_START_STEP_MINUTES, default=DEFAULT_START_STEP_MINUTES): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=1, max=1440, step=1, mode="box")
                 ),
-                vol.Optional(CONF_START_BY): selector.TimeSelector(),
             }
         )
 
@@ -77,12 +68,6 @@ class EnergyCostForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_import(self, user_input):
         data = dict(user_input)
-        start_by = normalize_time(data.get(CONF_START_BY))
-        if data.get(CONF_START_BY) and start_by is None:
-            data[CONF_START_BY] = None
-        else:
-            data[CONF_START_BY] = start_by
-
         unique_id = f"{data[CONF_NAME]}::{data[CONF_IMPORT_RATE_SENSOR]}"
         await self.async_set_unique_id(unique_id)
         self._abort_if_unique_id_configured()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -242,43 +242,6 @@ def profile_duration(profile_segments: Iterable[ProfileSegment]) -> timedelta:
     for segment in profile_segments:
         total += segment.duration
     return total
-
-
-def normalize_time(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, time):
-        return value.strftime("%H:%M:%S")
-    text = str(value).strip()
-    if not text:
-        return None
-    parts = text.split(":")
-    if len(parts) == 2:
-        parts.append("00")
-    if len(parts) != 3:
-        return None
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-        second = int(parts[2])
-    except Exception:
-        return None
-    if hour < 0 or hour > 23 or minute < 0 or minute > 59 or second < 0 or second > 59:
-        return None
-    return f"{hour:02d}:{minute:02d}:{second:02d}"
-
-
-def next_time(now_local: datetime, time_text: str) -> datetime:
-    hour_s, minute_s, second_s = time_text.split(":")
-    target = now_local.replace(
-        hour=int(hour_s),
-        minute=int(minute_s),
-        second=int(second_s),
-        microsecond=0,
-    )
-    if target <= now_local:
-        target += timedelta(days=1)
-    return target
 
 
 def candidate_starts(
