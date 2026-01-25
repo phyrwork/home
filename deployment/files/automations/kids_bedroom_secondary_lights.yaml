@@ -1,0 +1,78 @@
+- id: kids_bedroom_secondary_lights_on_motion_dark
+  alias: Turn on kids bedroom secondary lights when motion detected and dark
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.ikea_of_sweden_vallhorn_wireless_motion_sensor
+      to: 'on'
+  variables:
+    area_id: guest_room
+    area_entities_list: "{{ area_entities(area_id) }}"
+    secondary_lights: >-
+      {{
+        label_entities('secondary')
+        | select('in', area_entities_list)
+        | select('match', '^light\\.')
+        | list
+      }}
+    area_lights: >-
+      {{
+        area_entities_list
+        | select('match', '^light\\.')
+        | list
+      }}
+    area_any_on: >-
+      {{ expand(area_lights) | selectattr('state', 'eq', 'on') | list | length > 0 }}
+  condition:
+    - condition: template
+      value_template: >-
+        {{
+          states('sensor.ikea_of_sweden_vallhorn_wireless_motion_sensor_illuminance')
+          | int(0) == 0
+        }}
+    - condition: template
+      value_template: "{{ not area_any_on }}"
+    - condition: template
+      value_template: "{{ secondary_lights | length > 0 }}"
+  action:
+    - service: light.turn_on
+      target:
+        entity_id: "{{ secondary_lights }}"
+      data:
+        brightness_pct: 25
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.kids_bedroom_secondary_lights_on_by_motion
+  mode: single
+
+- id: kids_bedroom_secondary_lights_off_idle
+  alias: Turn off kids bedroom secondary lights when no motion
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.ikea_of_sweden_vallhorn_wireless_motion_sensor
+      to: 'off'
+      for:
+        minutes: 3
+  variables:
+    area_id: guest_room
+    area_entities_list: "{{ area_entities(area_id) }}"
+    secondary_lights: >-
+      {{
+        label_entities('secondary')
+        | select('in', area_entities_list)
+        | select('match', '^light\\.')
+        | list
+      }}
+  condition:
+    - condition: state
+      entity_id: input_boolean.kids_bedroom_secondary_lights_on_by_motion
+      state: 'on'
+    - condition: template
+      value_template: "{{ secondary_lights | length > 0 }}"
+  action:
+    - service: light.turn_off
+      target:
+        entity_id: "{{ secondary_lights }}"
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.kids_bedroom_secondary_lights_on_by_motion
+  mode: single
