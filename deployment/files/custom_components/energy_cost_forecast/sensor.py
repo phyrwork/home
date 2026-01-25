@@ -33,7 +33,12 @@ from .coordinator import EnergyCostForecastCoordinator
 
 SENSORS = [
     SensorEntityDescription(key="now", name="Start Now Cost", has_entity_name=True),
-    SensorEntityDescription(key="later", name="Start Later Costs", has_entity_name=True),
+    SensorEntityDescription(
+        key="later",
+        name="Start Later Costs",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        has_entity_name=True,
+    ),
     SensorEntityDescription(
         key="min_time",
         name="Next Lowest Start Cost Time",
@@ -131,7 +136,8 @@ class EnergyCostForecastSensor(
         data = self.coordinator.data
         key = self.entity_description.key
         if key == "later":
-            return data.get("start_now_time")
+            start_now = data.get("start_now_time")
+            return dt_util.parse_datetime(start_now) if start_now else None
         if key == "min_time":
             best = data.get("min_time")
             start = best.get("start") if best else None
@@ -159,14 +165,6 @@ class EnergyCostForecastSensor(
             costs = data.get("later", [])
             attrs[ATTR_COSTS] = costs
             attrs["cost_unit"] = data.get("cost_unit")
-            attrs["rates"] = [
-                {
-                    "start": item.get("start"),
-                    "end": item.get("finish"),
-                    "value_inc_vat": item.get("cost"),
-                }
-                for item in costs
-            ]
             if costs:
                 values = [item.get("cost") for item in costs if item.get("cost") is not None]
                 if values:
