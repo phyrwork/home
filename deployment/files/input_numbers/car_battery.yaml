@@ -14,7 +14,6 @@ car_battery_level_target:
   step: 1
   unit_of_measurement: "%"
   mode: box
-  initial: 80
   icon: mdi:battery-charging
 
 car_battery_energy_capacity:
@@ -24,7 +23,6 @@ car_battery_energy_capacity:
   step: 0.1
   unit_of_measurement: kWh
   mode: box
-  initial: 63
   icon: mdi:car-electric
 
 car_battery_energy_current:
@@ -34,7 +32,6 @@ car_battery_energy_current:
   step: 0.1
   unit_of_measurement: kWh
   mode: box
-  initial: 0
   icon: mdi:battery-outline
 
 car_battery_energy_target:
@@ -44,5 +41,4 @@ car_battery_energy_target:
   step: 0.1
   unit_of_measurement: kWh
   mode: box
-  initial: 0
   icon: mdi:battery-charging-100
