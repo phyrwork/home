@@ -152,11 +152,32 @@ actions:
               brightness_step_pct: "{{ secondary_brightness_step_pct }}"
       - conditions: "{{ trigger.id == 'secondary_dim_down' and secondary_lights | length > 0 }}"
         sequence:
-          - service: light.turn_on
-            target:
-              entity_id: "{{ secondary_lights }}"
-            data:
-              brightness_step_pct: "{{ 0 - secondary_brightness_step_pct }}"
+          - repeat:
+              for_each: "{{ secondary_lights }}"
+              sequence:
+                - choose:
+                    - conditions: "{{ is_state(repeat.item, 'on') }}"
+                      sequence:
+                        # Clamp dim-down so lights never drop below 1% unless already off.
+                        - variables:
+                            current_pct: >-
+                              {{
+                                (state_attr(repeat.item, 'brightness') | int(0) / 255 * 100)
+                                | round(0, 'floor')
+                              }}
+                            next_pct: >-
+                              {{
+                                0 if current_pct == 0
+                                else max(1, current_pct - secondary_brightness_step_pct)
+                              }}
+                        - choose:
+                            - conditions: "{{ next_pct > 0 }}"
+                              sequence:
+                                - service: light.turn_on
+                                  target:
+                                    entity_id: "{{ repeat.item }}"
+                                  data:
+                                    brightness_pct: "{{ next_pct }}"
       - conditions: "{{ trigger.id == 'blinds_open' and blinds_covers | length > 0 }}"
         sequence:
           - service: cover.open_cover
