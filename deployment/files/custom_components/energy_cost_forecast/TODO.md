@@ -9,5 +9,5 @@
   - [x] Replace placeholder documentation URL.
   - [x] Add README for integration with configuration examples, required rate schema, profile formats, and limitations.
   - [x] Add release notes/migration notes for renamed config keys.
-  - [ ] Add codeowners entry.
+  - [x] Add codeowners entry.
 - [x] Tests: add pytest coverage using pytest-homeassistant-custom-component for parsing, cost calculations, update_interval behavior, and sensor attributes.
