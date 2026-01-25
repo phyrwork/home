@@ -10,6 +10,24 @@ Daily at 4pm, query upcoming refuse collections using local council service API 
 light up the living room lamp with the color of any bin(s) if they will be collected in
 the next day.
 
+### Room Remotes
+
+Room remotes are standardized via the `hue_remote_room_controls` blueprint with
+label-based targeting. Lights are grouped by area + label intersection.
+
+Label conventions:
+- `primary`: main ceiling/primary lights
+- `secondary`: lamps/secondary lights
+
+How to label lights (Home Assistant UI):
+1. Settings → Devices & Services → Entities.
+2. Select the light entity.
+3. Add the `primary` or `secondary` label.
+
+Note: Labels live in Home Assistant's storage and are not currently configurable via
+YAML. If we want a scripted approach, use the HA websocket API to set labels in the
+entity registry.
+
 ## Requirements
 
 Install required packages
