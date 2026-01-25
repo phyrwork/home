@@ -7,7 +7,7 @@
 - [x] Rename max_cost_percentile to target_percentile everywhere (no backwards compatibility).
 - [x] Documentation checklist for manifest.json:
   - [x] Replace placeholder documentation URL.
-  - [ ] Add README for integration with configuration examples, required rate schema, profile formats, and limitations.
+  - [x] Add README for integration with configuration examples, required rate schema, profile formats, and limitations.
   - [ ] Add release notes/migration notes for renamed config keys.
   - [ ] Add codeowners entry.
 - [x] Tests: add pytest coverage using pytest-homeassistant-custom-component for parsing, cost calculations, update_interval behavior, and sensor attributes.
