@@ -9,14 +9,27 @@ from .const import (
     CONF_EXPORT_POWER_SENSOR,
     CONF_EXPORT_RATE_SENSOR,
     CONF_IMPORT_RATE_SENSOR,
+    CONF_MAX_COST_PERCENTILE,
     CONF_NAME,
     CONF_PROFILE,
     CONF_PROFILE_FILE,
     CONF_PROFILE_SENSOR,
+    CONF_START_STEP_MODE,
+    CONF_START_STEP_MINUTES,
     CONF_START_BY,
+    DATA_MAX_COST_PERCENTILE,
+    DATA_START_STEP_MODE,
+    DATA_START_STEP_MINUTES,
+    DEFAULT_MAX_COST_PERCENTILE,
+    DEFAULT_START_MODE,
+    DEFAULT_START_STEP_MINUTES,
     DOMAIN,
     PLATFORMS,
+    START_MODE_KEY_TO_LABEL,
+    START_MODE_LABEL_TO_KEY,
+    START_MODE_OPTIONS,
 )
+from .coordinator import EnergyCostForecastCoordinator
 from .helpers import normalize_time
 
 
@@ -34,6 +47,9 @@ CONFIG_SCHEMA = vol.Schema(
                         vol.Optional(CONF_PROFILE): vol.Any(cv.string, list),
                         vol.Optional(CONF_PROFILE_FILE): cv.string,
                         vol.Optional(CONF_PROFILE_SENSOR): cv.string,
+                        vol.Optional(CONF_MAX_COST_PERCENTILE): vol.Coerce(float),
+                        vol.Optional(CONF_START_STEP_MODE): cv.string,
+                        vol.Optional(CONF_START_STEP_MINUTES): vol.Coerce(int),
                         vol.Optional(CONF_START_BY): cv.string,
                     }
                 )
@@ -49,10 +65,40 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     if not entries:
         return True
 
+    existing_entries = {
+        entry.unique_id: entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.unique_id
+    }
+
     for item in entries:
         data = dict(item)
         start_by = normalize_time(data.get(CONF_START_BY))
         data[CONF_START_BY] = start_by
+        if "start_mode" in data and CONF_START_STEP_MODE not in data:
+            data[CONF_START_STEP_MODE] = data["start_mode"]
+
+        unique_id = f"{data[CONF_NAME]}::{data[CONF_IMPORT_RATE_SENSOR]}"
+        entry = existing_entries.get(unique_id)
+        if entry:
+            merged = dict(entry.data)
+            for key in (
+                CONF_NAME,
+                CONF_IMPORT_RATE_SENSOR,
+                CONF_EXPORT_RATE_SENSOR,
+                CONF_EXPORT_POWER_SENSOR,
+                CONF_PROFILE,
+                CONF_PROFILE_FILE,
+                CONF_PROFILE_SENSOR,
+                CONF_MAX_COST_PERCENTILE,
+                CONF_START_STEP_MINUTES,
+                CONF_START_STEP_MODE,
+                CONF_START_BY,
+            ):
+                if key in data:
+                    merged[key] = data[key]
+            hass.config_entries.async_update_entry(entry, data=merged)
+            continue
 
         hass.async_create_task(
             hass.config_entries.flow.async_init(
@@ -66,7 +112,25 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {}
+    coordinator = EnergyCostForecastCoordinator(hass, entry)
+    await coordinator.async_config_entry_first_refresh()
+    start_mode = entry.data.get(CONF_START_STEP_MODE, DEFAULT_START_MODE)
+    if start_mode in START_MODE_KEY_TO_LABEL:
+        start_mode = START_MODE_KEY_TO_LABEL[start_mode]
+    elif start_mode in START_MODE_LABEL_TO_KEY:
+        start_mode = start_mode
+    else:
+        start_mode = DEFAULT_START_MODE
+    hass.data[DOMAIN][entry.entry_id] = {
+        "coordinator": coordinator,
+        DATA_MAX_COST_PERCENTILE: float(
+            entry.data.get(CONF_MAX_COST_PERCENTILE, DEFAULT_MAX_COST_PERCENTILE)
+        ),
+        DATA_START_STEP_MINUTES: int(
+            entry.data.get(CONF_START_STEP_MINUTES, DEFAULT_START_STEP_MINUTES)
+        ),
+        DATA_START_STEP_MODE: start_mode,
+    }
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

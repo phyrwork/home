@@ -49,6 +49,17 @@ SENSORS = [
         name="Start Now Cost Percentile",
         has_entity_name=True,
     ),
+    SensorEntityDescription(
+        key="max_percentile",
+        name="Next Target Percentile Start Cost",
+        has_entity_name=True,
+    ),
+    SensorEntityDescription(
+        key="max_percentile_time",
+        name="Next Target Percentile Start Cost Time",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        has_entity_name=True,
+    ),
 ]
 
 async def async_setup_entry(
@@ -56,8 +67,9 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator = EnergyCostForecastCoordinator(hass, entry)
-    await coordinator.async_config_entry_first_refresh()
+    coordinator: EnergyCostForecastCoordinator = hass.data[DOMAIN][entry.entry_id][
+        "coordinator"
+    ]
 
     device_name = entry.title
     if not device_name.lower().endswith(" cost"):
@@ -110,7 +122,7 @@ class EnergyCostForecastSensor(
     @property
     def native_unit_of_measurement(self) -> str | None:
         key = self.entity_description.key
-        if key in {"now", "min", "max"}:
+        if key in {"now", "min", "max", "max_percentile"}:
             return self.coordinator.data.get("cost_unit")
         if key == "now_percentile":
             return "%"
@@ -124,6 +136,10 @@ class EnergyCostForecastSensor(
             return data.get("start_now_time")
         if key == "min_time":
             best = data.get("min_time")
+            start = best.get("start") if best else None
+            return dt_util.parse_datetime(start) if start else None
+        if key == "max_percentile_time":
+            best = data.get("max_percentile_time")
             start = best.get("start") if best else None
             return dt_util.parse_datetime(start) if start else None
         return data.get(key)
@@ -163,5 +179,8 @@ class EnergyCostForecastSensor(
                     attrs["average_cost"] = round(sum(values) / len(values), 4)
         elif key == "min_time":
             best = data.get("min_time") or {}
+            attrs.update(best)
+        elif key == "max_percentile_time":
+            best = data.get("max_percentile_time") or {}
             attrs.update(best)
         return attrs

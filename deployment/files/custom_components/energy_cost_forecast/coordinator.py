@@ -24,6 +24,14 @@ from .const import (
     CONF_PROFILE_FILE,
     CONF_PROFILE_SENSOR,
     CONF_START_BY,
+    DOMAIN,
+    DATA_MAX_COST_PERCENTILE,
+    DATA_START_STEP_MODE,
+    DATA_START_STEP_MINUTES,
+    DEFAULT_MAX_COST_PERCENTILE,
+    DEFAULT_START_MODE,
+    DEFAULT_START_STEP_MINUTES,
+    START_MODE_FIXED_INTERVAL_LABEL,
 )
 from .helpers import (
     RateWindow,
@@ -86,6 +94,16 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif self.entry.data.get(CONF_PROFILE):
             profile_source = "inline"
 
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+        max_cost_percentile = float(
+            entry_data.get(DATA_MAX_COST_PERCENTILE, DEFAULT_MAX_COST_PERCENTILE)
+        )
+        start_step_minutes = int(
+            entry_data.get(DATA_START_STEP_MINUTES, DEFAULT_START_STEP_MINUTES)
+        )
+        start_mode = entry_data.get(DATA_START_STEP_MODE, DEFAULT_START_MODE)
+        fixed_interval = start_mode == START_MODE_FIXED_INTERVAL_LABEL
+
         if not rates or not profile_segments:
             return {
                 "now": None,
@@ -94,6 +112,8 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "min": None,
                 "max": None,
                 "now_percentile": None,
+                "max_percentile": None,
+                "max_percentile_time": None,
                 "rate_unit": rate_unit,
                 "cost_unit": cost_unit,
                 ATTR_PROFILE: [],
@@ -110,7 +130,13 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         latest_start_utc = None
         latest_finish_utc = None
 
-        starts = candidate_starts(rates, now_utc, latest_start_utc)
+        starts = candidate_starts(
+            rates,
+            now_utc,
+            latest_start_utc,
+            fixed_interval,
+            start_step_minutes,
+        )
         costs = []
         for start_dt in starts:
             cost = cost_profile(start_dt, rates, profile_segments)
@@ -128,6 +154,8 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cost_min = None
         cost_max = None
         cost_min_time = None
+        cost_max_percentile_time = None
+        cost_max_percentile = None
         if costs:
             values = [item["cost"] for item in costs]
             cost_min = round(min(values), 4)
@@ -138,6 +166,22 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "finish": min_item["finish"],
                 "cost": min_item["cost"],
             }
+            if cost_max is not None and cost_min is not None:
+                if abs(cost_max - cost_min) < 1e-9:
+                    threshold = cost_min
+                else:
+                    threshold = cost_min + (
+                        (cost_max - cost_min) * max_cost_percentile / 100.0
+                    )
+                for item in costs:
+                    if item["cost"] <= threshold + 1e-9:
+                        cost_max_percentile_time = {
+                            "start": item["start"],
+                            "finish": item["finish"],
+                            "cost": item["cost"],
+                        }
+                        cost_max_percentile = item["cost"]
+                        break
 
         export_power_sensor = self.entry.data.get(CONF_EXPORT_POWER_SENSOR)
         export_rate_sensor = self.entry.data.get(CONF_EXPORT_RATE_SENSOR)
@@ -192,6 +236,8 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "min": cost_min,
             "max": cost_max,
             "now_percentile": cost_now_percentile,
+            "max_percentile": cost_max_percentile,
+            "max_percentile_time": cost_max_percentile_time,
             "rate_unit": rate_unit,
             "cost_unit": cost_unit,
             "start_now_time": now_utc.isoformat(),

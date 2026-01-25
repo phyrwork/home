@@ -285,8 +285,25 @@ def candidate_starts(
     rates: Iterable[RateWindow],
     now_utc: datetime,
     latest_start_utc: datetime | None,
+    fixed_interval: bool,
+    start_step_minutes: int,
 ) -> list[datetime]:
     starts = []
+    if fixed_interval:
+        rates = list(rates)
+        if not rates:
+            return []
+        end = latest_start_utc or rates[-1].end
+        step_minutes = max(int(start_step_minutes or 0), 1)
+        step = timedelta(minutes=step_minutes)
+        current = max(now_utc, rates[0].start).replace(microsecond=0)
+        while current <= end:
+            if latest_start_utc is not None and current > latest_start_utc:
+                break
+            starts.append(current)
+            current += step
+        return starts
+
     for rate in rates:
         if rate.start < now_utc:
             continue

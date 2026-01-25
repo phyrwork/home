@@ -1,6 +1,6 @@
 DOMAIN = "energy_cost_forecast"
 
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "number", "select"]
 
 CONF_NAME = "name"
 CONF_IMPORT_RATE_SENSOR = "import_rate_sensor"
@@ -10,6 +10,9 @@ CONF_PROFILE = "power_profile"
 CONF_PROFILE_FILE = "profile_file"
 CONF_PROFILE_SENSOR = "power_profile_sensor"
 CONF_START_BY = "start_by"
+CONF_MAX_COST_PERCENTILE = "max_cost_percentile"
+CONF_START_STEP_MINUTES = "start_step_minutes"
+CONF_START_STEP_MODE = "start_step_mode"
 
 ATTR_COSTS = "costs"
 ATTR_PROFILE = "profile"
@@ -19,3 +22,22 @@ ATTR_PROFILE_ERROR = "profile_error"
 ATTR_LATEST_START = "latest_start"
 ATTR_LATEST_FINISH = "latest_finish"
 ATTR_RATE_SOURCE = "rate_source"
+
+DATA_MAX_COST_PERCENTILE = "max_cost_percentile"
+DATA_START_STEP_MINUTES = "start_step_minutes"
+DATA_START_STEP_MODE = "start_step_mode"
+
+DEFAULT_MAX_COST_PERCENTILE = 0.0
+DEFAULT_START_STEP_MINUTES = 30
+
+START_MODE_RATE_CHANGES_KEY = "rate-changes"
+START_MODE_FIXED_INTERVAL_KEY = "fixed-interval"
+START_MODE_RATE_CHANGES_LABEL = "Rate changes"
+START_MODE_FIXED_INTERVAL_LABEL = "Fixed interval"
+START_MODE_OPTIONS = [START_MODE_RATE_CHANGES_LABEL, START_MODE_FIXED_INTERVAL_LABEL]
+START_MODE_KEY_TO_LABEL = {
+    START_MODE_RATE_CHANGES_KEY: START_MODE_RATE_CHANGES_LABEL,
+    START_MODE_FIXED_INTERVAL_KEY: START_MODE_FIXED_INTERVAL_LABEL,
+}
+START_MODE_LABEL_TO_KEY = {value: key for key, value in START_MODE_KEY_TO_LABEL.items()}
+DEFAULT_START_MODE = START_MODE_RATE_CHANGES_LABEL
