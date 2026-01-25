@@ -1,10 +1,76 @@
-- id: kids_bedroom_remote
+- id: closet_remote_controls
+  alias: Closet remote controls
+  use_blueprint:
+    path: hue_remote_room_controls.yaml
+    input:
+      remote: 49ce61bb15de1135a901820489781474
+      area: closet
+      primary_label: primary
+      secondary_label: secondary
+      secondary_brightness_step_pct: 15
+
+- id: downstairs_remote_controls
+  alias: Downstairs room remote controls
+  use_blueprint:
+    path: hue_remote_room_controls.yaml
+    input:
+      remote: b1fe18d438595aeea35b71742bd19f19
+      area: downstairs
+      primary_label: primary
+      secondary_label: secondary
+      secondary_brightness_step_pct: 15
+
+- id: kids_bedroom_remote_controls
   alias: Kids Bedroom remote controls
   use_blueprint:
     path: hue_remote_room_controls.yaml
     input:
       remote: 40ab87ffd90cd135a8154ad38c25905c
       area: guest_room
+      primary_label: primary
+      secondary_label: secondary
+      secondary_brightness_step_pct: 15
+
+- id: living_room_remote_controls
+  alias: Living Room remote controls
+  use_blueprint:
+    path: hue_remote_room_controls.yaml
+    input:
+      remote: da59bf2747af46c3d7b3e61da8defb68
+      area: living_room
+      primary_label: primary
+      secondary_label: secondary
+      secondary_brightness_step_pct: 15
+
+- id: master_bedroom_remote_controls
+  alias: Master Bedroom remote controls
+  use_blueprint:
+    path: hue_remote_room_controls.yaml
+    input:
+      remote: db3fc4a2991b4c87952d3c19a8f2b7b0
+      area: master_bedroom
+      primary_label: primary
+      secondary_label: secondary
+      secondary_brightness_step_pct: 15
+
+- id: office_remote_controls
+  alias: Office remote controls
+  use_blueprint:
+    path: hue_remote_room_controls.yaml
+    input:
+      remote: 04b6d02518bdfe3a2b0101051f6a5a25
+      area: office
+      primary_label: primary
+      secondary_label: secondary
+      secondary_brightness_step_pct: 15
+
+- id: utility_cupboard_remote_controls
+  alias: Utility Cupboard remote controls
+  use_blueprint:
+    path: hue_remote_room_controls.yaml
+    input:
+      remote: c6596c16be478ec7a8cd8f45fd0edd7b
+      area: utility_cupboard
       primary_label: primary
       secondary_label: secondary
       secondary_brightness_step_pct: 15
