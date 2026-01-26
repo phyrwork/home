@@ -97,18 +97,9 @@
   description: Start the EV charger at the cheapest start time
   trigger:
     - platform: state
-      entity_id: sensor.car_battery_target_cost_start_later_costs
+      entity_id: sensor.car_battery_target_cost_next_lowest_start_cost_time
     - platform: time_pattern
       minutes: "/1"
-  variables:
-    next_7am_ts: >-
-      {% set now_local = now() %}
-      {% set next_7am = now_local.replace(hour=7, minute=0, second=0, microsecond=0) %}
-      {% if now_local >= next_7am %}
-        {{ as_timestamp(next_7am + timedelta(days=1)) }}
-      {% else %}
-        {{ as_timestamp(next_7am) }}
-      {% endif %}
   condition:
     - condition: state
       entity_id: switch.ev_charger
@@ -117,38 +108,29 @@
       value_template: >-
         {% set needed = states('sensor.car_battery_energy_needed') | float(0) %}
         {{ needed > 0 }}
+    # Avoid daytime starts unless tomorrow's rates are published; Octopus releases them ~16:00.
     - condition: template
       value_template: >-
-        {{
-          states('sensor.car_battery_charge_power_profile')
-            not in ['unknown', 'unavailable', 'none', '']
-        }}
-    - condition: template
-      value_template: >-
-        {% set rates = state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates', 'rates') | default([], true) %}
-        {% set latest_end = rates | map(attribute='end') | list | max(default=None) %}
-        {% if latest_end %}
-          {{ as_timestamp(latest_end) >= next_7am_ts | float(0) }}
+        {% set now_local = now() %}
+        {% if now_local.hour >= 8 and now_local.hour < 17 %}
+          {% set rates = state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates', 'rates') | default([], true) %}
+          {% set ends = rates | map(attribute='end') | list %}
+          {% set latest_end = ends | max if ends else none %}
+          {% if latest_end %}
+            {{ as_datetime(latest_end).date() > now_local.date() }}
+          {% else %}
+            false
+          {% endif %}
         {% else %}
-          false
+          true
         {% endif %}
     - condition: template
       value_template: >-
-        {% set costs = state_attr('sensor.car_battery_target_cost_start_later_costs', 'costs') | default([], true) %}
-        {% set next_7am = next_7am_ts | float(0) %}
-        {% set eligible = [] %}
-        {% for item in costs %}
-          {% set finish = as_timestamp(item.finish) if item.finish else none %}
-          {% set cost = item.cost if item.cost is not none else none %}
-          {% if finish and cost is not none and finish <= next_7am %}
-            {% set eligible = eligible + [item] %}
-          {% endif %}
-        {% endfor %}
-        {% set cheapest = eligible | sort(attribute='cost') | first %}
-        {% if cheapest %}
-          {{ as_timestamp(now()) >= as_timestamp(cheapest.start) }}
-        {% else %}
+        {% set start_time = states('sensor.car_battery_target_cost_next_lowest_start_cost_time') %}
+        {% if start_time in ['unknown', 'unavailable', 'none', ''] %}
           false
+        {% else %}
+          {{ now() >= as_datetime(start_time) }}
         {% endif %}
   action:
     - service: homeassistant.turn_on
