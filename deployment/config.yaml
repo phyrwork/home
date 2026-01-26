@@ -363,12 +363,8 @@
         delete: yes
         links: yes
         rsync_opts:
-          - "--delete-excluded"
-          - "--exclude=.venv"
-          - "--exclude=.pytest_cache"
-          - "--exclude=.ruff_cache"
-          - "--exclude=__pycache__"
-          - "--exclude=energy_cost_forecast.egg-info"
+          - "--filter=merge\\ {{ playbook_dir }}/files/custom_components/energy_cost_forecast/.rsync-filter"
+          - "--exclude=.rsync-filter"
       notify: restart ha
 
     - name: install configuration
