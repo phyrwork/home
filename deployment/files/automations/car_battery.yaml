@@ -2,8 +2,6 @@
   alias: Car Battery Sync Percent To Energy
   description: Keep kWh helpers in sync when % or capacity changes
   trigger:
-    - platform: homeassistant
-      event: start
     - platform: state
       entity_id:
         - input_number.car_battery_level_current
