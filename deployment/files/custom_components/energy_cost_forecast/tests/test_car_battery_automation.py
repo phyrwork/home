@@ -26,7 +26,7 @@ async def _setup_automation(hass):
     await hass.async_block_till_done()
 
 
-def _set_base_states(hass, start_time, latest_end):
+def _set_base_states(hass, start_time, rates_attr):
     hass.states.async_set("switch.ev_charger", "off")
     hass.states.async_set("sensor.car_battery_energy_needed", "10")
     hass.states.async_set(
@@ -36,7 +36,7 @@ def _set_base_states(hass, start_time, latest_end):
     hass.states.async_set(
         "sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates",
         "0.1",
-        {"rates": [{"end": latest_end.isoformat()}]},
+        {"rates": rates_attr},
     )
 
 
@@ -56,7 +56,7 @@ async def test_start_at_next_lowest_start_when_tomorrow_rates_available(hass, fr
     now = dt_util.parse_datetime("2026-01-25T06:00:00+00:00")
     start_time = now - timedelta(minutes=5)
     latest_end = (now + timedelta(days=1)).replace(hour=0, minute=30, second=0, microsecond=0)
-    _set_base_states(hass, start_time, latest_end)
+    _set_base_states(hass, start_time, [{"end": latest_end.isoformat()}])
 
     _freeze_time(hass, freezer, now)
     await hass.async_block_till_done()
@@ -73,9 +73,29 @@ async def test_daytime_gate_blocks_without_tomorrow_rates(hass, freezer):
     now = dt_util.parse_datetime("2026-01-25T10:00:00+00:00")
     start_time = now - timedelta(minutes=5)
     latest_end = now.replace(hour=0, minute=30, second=0, microsecond=0)
-    _set_base_states(hass, start_time, latest_end)
+    _set_base_states(hass, start_time, [{"end": latest_end.isoformat()}])
 
     _freeze_time(hass, freezer, now)
     await hass.async_block_till_done()
 
     assert service_calls == []
+
+@pytest.mark.asyncio
+async def test_daytime_gate_allows_when_rates_json_string_for_tomorrow(hass, freezer):
+    await _setup_automation(hass)
+    service_calls = async_mock_service(hass, "homeassistant", "turn_on")
+
+    now = dt_util.parse_datetime("2026-01-25T10:00:00+00:00")
+    start_time = now - timedelta(minutes=5)
+    latest_end = (now + timedelta(days=1)).replace(hour=0, minute=30, second=0, microsecond=0)
+    _set_base_states(
+        hass,
+        start_time,
+        '[{"end": "' + latest_end.isoformat() + '"}]',
+    )
+
+    _freeze_time(hass, freezer, now)
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == ["switch.ev_charger"]

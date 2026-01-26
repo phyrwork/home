@@ -113,7 +113,12 @@
       value_template: >-
         {% set now_local = now() %}
         {% if now_local.hour >= 8 and now_local.hour < 17 %}
-          {% set rates = state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates', 'rates') | default([], true) %}
+          {% set rates_raw = state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates', 'rates') %}
+          {% if rates_raw is string %}
+            {% set rates = rates_raw | from_json %}
+          {% else %}
+            {% set rates = rates_raw | default([], true) %}
+          {% endif %}
           {% set ends = rates | map(attribute='end') | list %}
           {% set latest_end = ends | max if ends else none %}
           {% if latest_end %}
