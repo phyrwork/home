@@ -11,7 +11,7 @@ from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 AUTOMATION_ID = "car_battery_start_charge_at_best_time"
 AUTOMATIONS_PATH = (
-    Path(__file__).resolve().parents[4] / "files/automations/car_battery.yaml"
+    Path(__file__).resolve().parents[1] / "files/automations/car_battery.yaml"
 )
 
 
@@ -79,6 +79,7 @@ async def test_daytime_gate_blocks_without_tomorrow_rates(hass, freezer):
     await hass.async_block_till_done()
 
     assert service_calls == []
+
 
 @pytest.mark.asyncio
 async def test_daytime_gate_allows_when_rates_json_string_for_tomorrow(hass, freezer):
