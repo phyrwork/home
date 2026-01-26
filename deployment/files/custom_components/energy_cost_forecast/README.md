@@ -13,7 +13,23 @@ Estimate appliance run costs using future tariff rates and a power profile.
 This integration supports UI config or YAML import. Each entry requires an import
 rate entity and a power profile (inline, file, or sensor).
 
-YAML example:
+### Power profiles
+
+Appliance power consumption over time is defined by a power profile. Each entry in the
+profile is a `[power, duration]` pair.
+
+Power is a number in watts (W).  Durations are strings supporting `h` and `m` units (for
+example, `"1h30m"`).
+
+Profiles can be provided via:
+- `power_profile`: inline JSON/YAML list.
+- `power_profile_file`: path to a YAML file containing the list.
+- `power_profile_entity`: sensor or input_text containing the list.
+
+### Static profile example (dishwasher)
+
+Appliances with known power profiles can be defined using `power_profile` or
+`power_profile_file`.
 
 ```yaml
 energy_cost_forecast:
@@ -30,7 +46,10 @@ energy_cost_forecast:
       - [200, "90m"]
 ```
 
-Dynamic profile example (EV charging):
+### Dynamic profile example (EV charging)
+
+Appliances with variable power profiles can use a sensor or input_text entity to
+provide the profile data. The entity must return a JSON/YAML list.
 
 ```yaml
 energy_cost_forecast:
@@ -53,6 +72,7 @@ The `power_profile_entity` should return a JSON/YAML list, for example:
 
 The import rate entity must expose a `rates` attribute containing a list of rate
 windows with `start`, `end`, and `value` or `value_inc_vat` (ISO timestamps).
+The export rate entity uses the same schema when provided.
 Example:
 
 ```json
@@ -61,15 +81,12 @@ Example:
 ]
 ```
 
-## Power profile formats
+## Export offset (optional)
 
-Profiles are lists of `[power_watts, duration]` entries. Duration supports `h`
-and `m` units (for example, `"1h30m"`).
-
-Sources:
-- `power_profile`: inline JSON/YAML list.
-- `power_profile_file`: path to a YAML file containing the list.
-- `power_profile_entity`: sensor or input_text containing the list.
+If both `export_power_sensor` (W) and `export_rate_sensor` (price per kWh) are
+set, the "Start Now Cost" calculation offsets import costs using the current
+export power and export rate. When export values are used, the `rate_source`
+attribute on the "Start Now Cost" sensor is set to `export`.
 
 ## Limitations
 
