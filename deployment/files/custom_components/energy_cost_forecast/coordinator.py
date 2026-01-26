@@ -21,7 +21,7 @@ from .const import (
     CONF_IMPORT_RATE_SENSOR,
     CONF_PROFILE,
     CONF_POWER_PROFILE_FILE,
-    CONF_PROFILE_SENSOR,
+    CONF_POWER_PROFILE_ENTITY,
     CONF_UPDATE_INTERVAL_MINUTES,
     DOMAIN,
     DATA_START_STEP_MODE,
@@ -95,10 +95,10 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass,
             self.entry.data.get(CONF_PROFILE),
             self.entry.data.get(CONF_POWER_PROFILE_FILE),
-            self.entry.data.get(CONF_PROFILE_SENSOR),
+            self.entry.data.get(CONF_POWER_PROFILE_ENTITY),
         )
         profile_source = None
-        if self.entry.data.get(CONF_PROFILE_SENSOR):
+        if self.entry.data.get(CONF_POWER_PROFILE_ENTITY):
             profile_source = "sensor"
         elif self.entry.data.get(CONF_POWER_PROFILE_FILE):
             profile_source = "file"

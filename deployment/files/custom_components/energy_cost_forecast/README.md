@@ -40,10 +40,10 @@ energy_cost_forecast:
     start_step_mode: fixed-interval
     start_step_minutes: 15
     update_interval_minutes: 15
-    power_profile_sensor: sensor.ev_charge_power_profile
+    power_profile_entity: sensor.ev_charge_power_profile
 ```
 
-The `power_profile_sensor` should return a JSON/YAML list, for example:
+The `power_profile_entity` should return a JSON/YAML list, for example:
 
 ```text
 [[7200, "2h30m"]]
@@ -69,7 +69,7 @@ and `m` units (for example, `"1h30m"`).
 Sources:
 - `power_profile`: inline JSON/YAML list.
 - `power_profile_file`: path to a YAML file containing the list.
-- `power_profile_sensor`: sensor or input_text containing the list.
+- `power_profile_entity`: sensor or input_text containing the list.
 
 ## Limitations
 

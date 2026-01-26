@@ -25,7 +25,7 @@ from .const import (
     CONF_EXPORT_POWER_SENSOR,
     CONF_EXPORT_RATE_SENSOR,
     CONF_IMPORT_RATE_SENSOR,
-    CONF_PROFILE_SENSOR,
+    CONF_POWER_PROFILE_ENTITY,
     DOMAIN,
 )
 from .coordinator import EnergyCostForecastCoordinator
@@ -89,7 +89,7 @@ async def async_setup_entry(
         entry.data.get(CONF_IMPORT_RATE_SENSOR),
         entry.data.get(CONF_EXPORT_RATE_SENSOR),
         entry.data.get(CONF_EXPORT_POWER_SENSOR),
-        entry.data.get(CONF_PROFILE_SENSOR),
+        entry.data.get(CONF_POWER_PROFILE_ENTITY),
     ]
     watch_entities = [entity_id for entity_id in watch_entities if entity_id]
 

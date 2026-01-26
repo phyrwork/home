@@ -33,4 +33,4 @@
   export_power_sensor: sensor.current_export_electricity_21l4421345_2700009249389
   start_step_mode: fixed-interval
   start_step_minutes: 5
-  power_profile_sensor: sensor.car_battery_charge_power_profile
+  power_profile_entity: sensor.car_battery_charge_power_profile

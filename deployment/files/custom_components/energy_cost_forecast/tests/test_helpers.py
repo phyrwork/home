@@ -116,7 +116,7 @@ async def test_load_profile_sensor_missing(hass):
     )
     assert segments is None
     assert profile_input is None
-    assert error == "missing_profile_sensor"
+    assert error == "missing_profile_entity"
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,7 @@
           "export_power_sensor": "Export power entity (optional)",
           "power_profile": "Appliance power profile (JSON/YAML list)",
           "power_profile_file": "Profile file path (optional)",
-          "power_profile_sensor": "Profile sensor entity (optional)",
+          "power_profile_entity": "Profile entity (optional)",
           "target_percentile": "Target percentile (0-100)",
           "start_step_mode": "Start step mode",
           "start_step_minutes": "Start step minutes",
