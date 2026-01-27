@@ -40,6 +40,22 @@
 
 - When developing files (e.g., config, scripts), push iterations directly (e.g., scp) and reload directly (e.g., via API). When complete, if a new file for deployment was added or deployment code changed, then run the Ansible deployment and verify.
 
+### Subtree sync (energy_cost_forecast)
+
+- Local integration repo: `~/src/ha-energy-cost-forecast`
+- Subtree prefix: `deployment/files/custom_components/energy_cost_forecast`
+- Push subtree to integration `home` branch:
+  ```sh
+  git subtree push --prefix deployment/files/custom_components/energy_cost_forecast ~/src/ha-energy-cost-forecast home
+  ```
+- Then push integration `home` → `main`:
+  ```sh
+  cd ~/src/ha-energy-cost-forecast
+  git checkout main
+  git merge home
+  git push origin main
+  ```
+
 ## Development deploy gotchas
 
 - When doing dev-mode iteration via scp/ssh, never `rsync --delete` whole directories that include templated files (notably `deployment/files/automations`, `deployment/files/templates`, `deployment/files/sensors`). That will delete rendered files on the HA host.
