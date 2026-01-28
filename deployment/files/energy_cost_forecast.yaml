@@ -12,6 +12,8 @@
   export_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate
   export_power_sensor: sensor.current_export_electricity_21l4421345_2700009249389
   target_percentile: 25
+  finish_after: "07:30:00"
+  finish_before: "21:00:00"
   power_profile:
     - [2500, "30m"]
     - [200, "150m"]
