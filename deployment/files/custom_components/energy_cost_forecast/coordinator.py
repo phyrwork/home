@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -146,24 +146,35 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         total_duration = profile_duration(profile_segments)
 
-        def _parse_local_utc(value: object | None) -> datetime | None:
+        def _parse_local_time_filter(
+            value: object | None,
+        ) -> tuple[datetime | None, time | None]:
             if value in (None, ""):
-                return None
+                return None, None
             parsed = dt_util.parse_datetime(str(value))
             if parsed is None:
-                return None
+                parsed_time = dt_util.parse_time(str(value))
+                return None, parsed_time
             if parsed.tzinfo is None:
                 tz = dt_util.DEFAULT_TIME_ZONE
                 if hasattr(tz, "localize"):
                     parsed = tz.localize(parsed)
                 else:
                     parsed = parsed.replace(tzinfo=tz)
-            return dt_util.as_utc(parsed)
+            return dt_util.as_utc(parsed), None
 
-        start_after = _parse_local_utc(self.entry.data.get(CONF_START_AFTER))
-        start_before = _parse_local_utc(self.entry.data.get(CONF_START_BEFORE))
-        finish_after = _parse_local_utc(self.entry.data.get(CONF_FINISH_AFTER))
-        finish_before = _parse_local_utc(self.entry.data.get(CONF_FINISH_BEFORE))
+        start_after_dt, start_after_time = _parse_local_time_filter(
+            self.entry.data.get(CONF_START_AFTER)
+        )
+        start_before_dt, start_before_time = _parse_local_time_filter(
+            self.entry.data.get(CONF_START_BEFORE)
+        )
+        finish_after_dt, finish_after_time = _parse_local_time_filter(
+            self.entry.data.get(CONF_FINISH_AFTER)
+        )
+        finish_before_dt, finish_before_time = _parse_local_time_filter(
+            self.entry.data.get(CONF_FINISH_BEFORE)
+        )
 
         starts = candidate_starts(
             rates,
@@ -175,13 +186,24 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         costs = []
         for start_dt in starts:
             finish_dt = start_dt + total_duration
-            if start_after and start_dt < start_after:
+            start_local = dt_util.as_local(start_dt)
+            finish_local = dt_util.as_local(finish_dt)
+
+            if start_after_dt and start_dt < start_after_dt:
                 continue
-            if start_before and start_dt >= start_before:
+            if start_before_dt and start_dt >= start_before_dt:
                 continue
-            if finish_after and finish_dt < finish_after:
+            if finish_after_dt and finish_dt < finish_after_dt:
                 continue
-            if finish_before and finish_dt >= finish_before:
+            if finish_before_dt and finish_dt >= finish_before_dt:
+                continue
+            if start_after_time and start_local.time() < start_after_time:
+                continue
+            if start_before_time and start_local.time() >= start_before_time:
+                continue
+            if finish_after_time and finish_local.time() < finish_after_time:
+                continue
+            if finish_before_time and finish_local.time() >= finish_before_time:
                 continue
             cost = cost_profile(start_dt, rates, profile_segments)
             if cost is None:

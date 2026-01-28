@@ -94,8 +94,8 @@ async def test_time_filters_apply_before_percentile(hass, monkeypatch):
         data={
             CONF_IMPORT_RATE_SENSOR: "sensor.test_import",
             CONF_PROFILE: [[1000, "30m"]],
-            CONF_START_AFTER: "2024-01-01T00:15:00",
-            CONF_START_BEFORE: "2024-01-01T01:15:00",
+            CONF_START_AFTER: "00:15:00",
+            CONF_START_BEFORE: "01:15:00",
         },
     )
     entry.add_to_hass(hass)
