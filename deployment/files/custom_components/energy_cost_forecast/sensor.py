@@ -40,12 +40,10 @@ SENSORS = [
         has_entity_name=True,
     ),
     SensorEntityDescription(
-        key="min_time",
-        name="Next Lowest Start Cost Time",
-        device_class=SensorDeviceClass.TIMESTAMP,
+        key="min",
+        name="Lowest Start Cost",
         has_entity_name=True,
     ),
-    SensorEntityDescription(key="min", name="Lowest Start Cost", has_entity_name=True),
     SensorEntityDescription(key="max", name="Highest Start Cost", has_entity_name=True),
     SensorEntityDescription(
         key="now_percentile",
@@ -54,12 +52,23 @@ SENSORS = [
     ),
     SensorEntityDescription(
         key="max_percentile",
-        name="Next Target Percentile Start Cost",
+        name="Next Start Cost",
         has_entity_name=True,
     ),
     SensorEntityDescription(
         key="max_percentile_time",
-        name="Next Target Percentile Start Cost Time",
+        name="Next Start Time",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        has_entity_name=True,
+    ),
+    SensorEntityDescription(
+        key="latest_percentile",
+        name="Latest Start Cost",
+        has_entity_name=True,
+    ),
+    SensorEntityDescription(
+        key="latest_percentile_time",
+        name="Latest Start Time",
         device_class=SensorDeviceClass.TIMESTAMP,
         has_entity_name=True,
     ),
@@ -125,7 +134,7 @@ class EnergyCostForecastSensor(
     @property
     def native_unit_of_measurement(self) -> str | None:
         key = self.entity_description.key
-        if key in {"now", "min", "max", "max_percentile"}:
+        if key in {"now", "min", "max", "max_percentile", "latest_percentile"}:
             return self.coordinator.data.get("cost_unit")
         if key == "now_percentile":
             return "%"
@@ -138,12 +147,12 @@ class EnergyCostForecastSensor(
         if key == "later":
             start_now = data.get("start_now_time")
             return dt_util.parse_datetime(start_now) if start_now else None
-        if key == "min_time":
-            best = data.get("min_time")
-            start = best.get("start") if best else None
-            return dt_util.parse_datetime(start) if start else None
         if key == "max_percentile_time":
             best = data.get("max_percentile_time")
+            start = best.get("start") if best else None
+            return dt_util.parse_datetime(start) if start else None
+        if key == "latest_percentile_time":
+            best = data.get("latest_percentile_time")
             start = best.get("start") if best else None
             return dt_util.parse_datetime(start) if start else None
         return data.get(key)
@@ -171,10 +180,10 @@ class EnergyCostForecastSensor(
                     attrs["min_cost"] = min(values)
                     attrs["max_cost"] = max(values)
                     attrs["average_cost"] = round(sum(values) / len(values), 4)
-        elif key == "min_time":
-            best = data.get("min_time") or {}
-            attrs.update(best)
         elif key == "max_percentile_time":
             best = data.get("max_percentile_time") or {}
+            attrs.update(best)
+        elif key == "latest_percentile_time":
+            best = data.get("latest_percentile_time") or {}
             attrs.update(best)
         return attrs

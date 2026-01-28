@@ -38,6 +38,10 @@ energy_cost_forecast:
     export_rate_sensor: sensor.octopus_export_rate
     export_power_sensor: sensor.current_export_power
     target_percentile: 25
+    start_after: "2024-01-01T06:00:00"
+    start_before: "2024-01-02T06:00:00"
+    finish_after: "2024-01-01T08:00:00"
+    finish_before: "2024-01-02T10:00:00"
     start_step_mode: fixed-interval
     start_step_minutes: 5
     update_interval_minutes: 15
@@ -93,3 +97,9 @@ attribute on the "Start Now Cost" sensor is set to `export`.
 - Costs are calculated over available rate windows; missing coverage yields no
   cost for that start time.
 - Export offset uses a single instantaneous export power sample.
+
+## Optional time filters
+
+The `start_after`, `start_before`, `finish_after`, and `finish_before` options
+limit which candidate start windows are considered. Values are local datetimes.
+Filters are applied before percentile selection.

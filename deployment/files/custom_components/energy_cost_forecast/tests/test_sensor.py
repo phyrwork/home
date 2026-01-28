@@ -46,16 +46,22 @@ async def test_timestamp_sensors_parse_times(hass):
 
     coordinator = EnergyCostForecastCoordinator(hass, entry)
     coordinator.data = {
-        "min_time": {"start": "2024-01-02T03:04:05+00:00"},
         "max_percentile_time": {"start": "2024-01-02T05:06:07+00:00"},
+        "latest_percentile_time": {"start": "2024-01-02T07:08:09+00:00"},
     }
 
     device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)}, name="Test")
-    min_description = next(item for item in SENSORS if item.key == "min_time")
     max_description = next(item for item in SENSORS if item.key == "max_percentile_time")
+    latest_description = next(
+        item for item in SENSORS if item.key == "latest_percentile_time"
+    )
 
-    min_sensor = EnergyCostForecastSensor(coordinator, entry, min_description, device_info)
     max_sensor = EnergyCostForecastSensor(coordinator, entry, max_description, device_info)
+    latest_sensor = EnergyCostForecastSensor(
+        coordinator, entry, latest_description, device_info
+    )
 
-    assert min_sensor.native_value == dt_util.parse_datetime("2024-01-02T03:04:05+00:00")
     assert max_sensor.native_value == dt_util.parse_datetime("2024-01-02T05:06:07+00:00")
+    assert latest_sensor.native_value == dt_util.parse_datetime(
+        "2024-01-02T07:08:09+00:00"
+    )

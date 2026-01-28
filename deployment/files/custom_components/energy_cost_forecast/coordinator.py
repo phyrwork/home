@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -22,6 +22,10 @@ from .const import (
     CONF_PROFILE,
     CONF_POWER_PROFILE_FILE,
     CONF_POWER_PROFILE_ENTITY,
+    CONF_START_AFTER,
+    CONF_START_BEFORE,
+    CONF_FINISH_AFTER,
+    CONF_FINISH_BEFORE,
     CONF_UPDATE_INTERVAL_MINUTES,
     DOMAIN,
     DATA_START_STEP_MODE,
@@ -124,12 +128,13 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return {
                 "now": None,
                 "later": [],
-                "min_time": None,
                 "min": None,
                 "max": None,
                 "now_percentile": None,
                 "max_percentile": None,
                 "max_percentile_time": None,
+                "latest_percentile": None,
+                "latest_percentile_time": None,
                 "rate_unit": rate_unit,
                 "cost_unit": cost_unit,
                 ATTR_PROFILE: profile_attr,
@@ -141,6 +146,25 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         total_duration = profile_duration(profile_segments)
 
+        def _parse_local_utc(value: object | None) -> datetime | None:
+            if value in (None, ""):
+                return None
+            parsed = dt_util.parse_datetime(str(value))
+            if parsed is None:
+                return None
+            if parsed.tzinfo is None:
+                tz = dt_util.DEFAULT_TIME_ZONE
+                if hasattr(tz, "localize"):
+                    parsed = tz.localize(parsed)
+                else:
+                    parsed = parsed.replace(tzinfo=tz)
+            return dt_util.as_utc(parsed)
+
+        start_after = _parse_local_utc(self.entry.data.get(CONF_START_AFTER))
+        start_before = _parse_local_utc(self.entry.data.get(CONF_START_BEFORE))
+        finish_after = _parse_local_utc(self.entry.data.get(CONF_FINISH_AFTER))
+        finish_before = _parse_local_utc(self.entry.data.get(CONF_FINISH_BEFORE))
+
         starts = candidate_starts(
             rates,
             now_utc,
@@ -150,10 +174,18 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         costs = []
         for start_dt in starts:
+            finish_dt = start_dt + total_duration
+            if start_after and start_dt < start_after:
+                continue
+            if start_before and start_dt >= start_before:
+                continue
+            if finish_after and finish_dt < finish_after:
+                continue
+            if finish_before and finish_dt >= finish_before:
+                continue
             cost = cost_profile(start_dt, rates, profile_segments)
             if cost is None:
                 continue
-            finish_dt = start_dt + total_duration
             costs.append(
                 {
                     "start": dt_util.as_local(start_dt).isoformat(),
@@ -164,35 +196,47 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         cost_min = None
         cost_max = None
-        cost_min_time = None
         cost_max_percentile_time = None
         cost_max_percentile = None
+        cost_latest_percentile_time = None
+        cost_latest_percentile = None
+        cost_min_all = None
+        cost_max_all = None
         if costs:
             values = [item["cost"] for item in costs]
-            cost_min = round(min(values), 4)
-            cost_max = round(max(values), 4)
-            min_item = min(costs, key=lambda item: item["cost"])
-            cost_min_time = {
-                "start": min_item["start"],
-                "finish": min_item["finish"],
-                "cost": min_item["cost"],
-            }
-            if cost_max is not None and cost_min is not None:
-                if abs(cost_max - cost_min) < 1e-9:
-                    threshold = cost_min
+            cost_min_all = min(values)
+            cost_max_all = max(values)
+            threshold = None
+            if cost_max_all is not None and cost_min_all is not None:
+                if abs(cost_max_all - cost_min_all) < 1e-9:
+                    threshold = cost_min_all
                 else:
-                    threshold = cost_min + (
-                        (cost_max - cost_min) * target_percentile / 100.0
+                    threshold = cost_min_all + (
+                        (cost_max_all - cost_min_all) * target_percentile / 100.0
                     )
+            eligible = []
+            if threshold is not None:
                 for item in costs:
                     if item["cost"] <= threshold + 1e-9:
-                        cost_max_percentile_time = {
-                            "start": item["start"],
-                            "finish": item["finish"],
-                            "cost": item["cost"],
-                        }
-                        cost_max_percentile = item["cost"]
-                        break
+                        eligible.append(item)
+            if eligible:
+                eligible_values = [item["cost"] for item in eligible]
+                cost_min = round(min(eligible_values), 4)
+                cost_max = round(max(eligible_values), 4)
+                next_item = eligible[0]
+                latest_item = eligible[-1]
+                cost_max_percentile_time = {
+                    "start": next_item["start"],
+                    "finish": next_item["finish"],
+                    "cost": next_item["cost"],
+                }
+                cost_max_percentile = next_item["cost"]
+                cost_latest_percentile_time = {
+                    "start": latest_item["start"],
+                    "finish": latest_item["finish"],
+                    "cost": latest_item["cost"],
+                }
+                cost_latest_percentile = latest_item["cost"]
 
         export_power_sensor = self.entry.data.get(CONF_EXPORT_POWER_SENSOR)
         export_rate_sensor = self.entry.data.get(CONF_EXPORT_RATE_SENSOR)
@@ -227,12 +271,13 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return {
                 "now": None,
                 "later": costs,
-                "min_time": cost_min_time,
                 "min": cost_min,
                 "max": cost_max,
                 "now_percentile": None,
                 "max_percentile": cost_max_percentile,
                 "max_percentile_time": cost_max_percentile_time,
+                "latest_percentile": cost_latest_percentile,
+                "latest_percentile_time": cost_latest_percentile_time,
                 "rate_unit": rate_unit,
                 "cost_unit": cost_unit,
                 "start_now_time": now_utc.isoformat(),
@@ -244,12 +289,12 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
 
         cost_now_percentile = None
-        if cost_now is not None and cost_min is not None and cost_max is not None:
-            if abs(cost_max - cost_min) < 1e-9:
+        if cost_now is not None and cost_min_all is not None and cost_max_all is not None:
+            if abs(cost_max_all - cost_min_all) < 1e-9:
                 cost_now_percentile = 0.0
             else:
                 cost_now_percentile = round(
-                    100.0 * (cost_now - cost_min) / (cost_max - cost_min),
+                    100.0 * (cost_now - cost_min_all) / (cost_max_all - cost_min_all),
                     2,
                 )
                 if cost_now_percentile < 0:
@@ -258,12 +303,13 @@ class EnergyCostForecastCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {
             "now": round(cost_now, 4) if cost_now is not None else None,
             "later": costs,
-            "min_time": cost_min_time,
             "min": cost_min,
             "max": cost_max,
             "now_percentile": cost_now_percentile,
             "max_percentile": cost_max_percentile,
             "max_percentile_time": cost_max_percentile_time,
+            "latest_percentile": cost_latest_percentile,
+            "latest_percentile_time": cost_latest_percentile_time,
             "rate_unit": rate_unit,
             "cost_unit": cost_unit,
             "start_now_time": now_utc.isoformat(),
