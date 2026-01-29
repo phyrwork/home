@@ -34,7 +34,11 @@
   export_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate
   export_power_sensor: sensor.current_export_electricity_21l4421345_2700009249389
   start_after: "23:30:00"
-  finish_before: "05:30:00"
+  # TODO: Disabled to get costing for contiguous full charge. Consider implementing
+  #   constraint relaxation into the energy cost forecast integration.
+  # finish_before: "05:30:00"
+  # Blank value clears any previously stored finish_before in the config entry.
+  finish_before: ""
   start_step_mode: fixed-interval
   start_step_minutes: 5
   power_profile_entity: sensor.car_battery_charge_power_profile

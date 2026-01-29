@@ -33,3 +33,37 @@ sensor:
         states('sensor.car_battery_energy_needed')
           not in ['unknown', 'unavailable', 'none']
       }}
+
+  - name: Car Battery Off Peak Charge Cost
+    unique_id: car_battery_off_peak_charge_cost
+    device_class: monetary
+    state_class: total
+    unit_of_measurement: GBP
+    state: >-
+      {% set energy_needed = states('sensor.car_battery_energy_needed') | float(0) %}
+      {% set rates_raw = state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates', 'rates') %}
+      {% if rates_raw is string %}
+        {% set rates = rates_raw | from_json %}
+      {% else %}
+        {% set rates = rates_raw | default([], true) %}
+      {% endif %}
+      {% set ns = namespace(values=[]) %}
+      {% for rate in rates %}
+        {% if rate.value_inc_vat is defined %}
+          {% set ns.values = ns.values + [rate.value_inc_vat] %}
+        {% elif rate.value is defined %}
+          {% set ns.values = ns.values + [rate.value] %}
+        {% endif %}
+      {% endfor %}
+      {% if ns.values %}
+        {{ (energy_needed * (ns.values | min)) | round(2) }}
+      {% else %}
+        {{ none }}
+      {% endif %}
+    availability: >-
+      {{
+        states('sensor.car_battery_energy_needed')
+          not in ['unknown', 'unavailable', 'none']
+        and state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates', 'rates')
+          not in [None, 'unknown', 'unavailable', 'none', '']
+      }}

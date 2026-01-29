@@ -96,6 +96,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         entry = existing_entries.get(unique_id)
         if entry:
             merged = dict(entry.data)
+            # TODO: Clear removed config keys on import (e.g., finish_before set to "")
+            # so disabling constraints doesn't keep old values in the config entry.
             for key in (
                 CONF_NAME,
                 CONF_IMPORT_RATE_SENSOR,
