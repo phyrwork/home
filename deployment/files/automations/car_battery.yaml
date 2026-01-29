@@ -140,3 +140,45 @@
       target:
         entity_id: switch.ev_charger
   mode: single
+
+# Fallback: ensure we still use the 23:30-05:30 off-peak window even if the
+# scheduler can't find a valid start time for the defined window.
+- id: car_battery_start_charge_fallback_off_peak
+  alias: Car Battery Start Charge Fallback Off Peak
+  description: Start charging at 23:30 if no next start time is available
+  trigger:
+    - platform: time
+      at: "23:30:00"
+  condition:
+    - condition: state
+      entity_id: switch.ev_charger
+      state: "off"
+    - condition: template
+      value_template: >-
+        {% set needed = states('sensor.car_battery_energy_needed') | float(0) %}
+        {{ needed > 0 }}
+    - condition: template
+      value_template: >-
+        {% set start_time = states('sensor.car_battery_target_cost_next_lowest_start_cost_time') %}
+        {{ start_time in ['unknown', 'unavailable', 'none', ''] }}
+  action:
+    - service: homeassistant.turn_on
+      target:
+        entity_id: switch.ev_charger
+  mode: single
+
+- id: car_battery_stop_charge_at_off_peak_end
+  alias: Car Battery Stop Charge At Off Peak End
+  description: Stop charging at 05:30 even if target is not reached
+  trigger:
+    - platform: time
+      at: "05:30:00"
+  condition:
+    - condition: state
+      entity_id: switch.ev_charger
+      state: "on"
+  action:
+    - service: homeassistant.turn_off
+      target:
+        entity_id: switch.ev_charger
+  mode: single
