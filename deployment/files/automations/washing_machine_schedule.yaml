@@ -2,15 +2,12 @@
   alias: Washing Machine Start When Optimal
   description: Start the washing machine at the best time before the deadline
   trigger:
-    - platform: state
-      entity_id:
-        - sensor.washing_machine_cost_start_later_costs
+    # "Latest start time" is the cheapest time to start to finish after the "finish after" time
+    - platform: time
+      at: sensor.washing_machine_cost_latest_start_time
     - platform: state
       entity_id: binary_sensor.washing_machine_remote_control
       to: "on"
-    - platform: time_pattern
-      minutes: "/1"
-      # Ensures we can act when best_start_time is reached without relying on other state changes.
   condition:
     - condition: state
       entity_id: binary_sensor.washing_machine_remote_control
@@ -23,24 +20,8 @@
     - condition: template
       value_template: >-
         {% raw %}
-        {% set costs = state_attr('sensor.washing_machine_cost_start_later_costs', 'costs') | default([], true) %}
-        {% set ns = namespace(best=None) %}
-        {% for item in costs %}
-          {% set finish = as_datetime(item.finish) %}
-          {% if finish %}
-            {% set finish_hour = finish.hour %}
-            {% if finish_hour >= 8 and finish_hour < 21 %}
-              {% if ns.best is none or item.cost < ns.best.cost %}
-                {% set ns.best = item %}
-              {% endif %}
-            {% endif %}
-          {% endif %}
-        {% endfor %}
-        {% if ns.best is none %}
-          false
-        {% else %}
-          {{ now() >= as_datetime(ns.best.start) }}
-        {% endif %}
+        {% set latest = as_datetime(states('sensor.washing_machine_cost_latest_start_time')) %}
+        {{ latest is not none and now() >= latest }}
         {% endraw %}
   action:
     - service: select.select_option
