@@ -12,11 +12,13 @@
     - condition: template
       value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) < {{ call_for_heat_lower_bound }} {{ ha_end }}"
   action:
+    # Landing is the coldest and least-used area; keep radiators warmer than the
+    # landing baseline to avoid wasting energy heating the stairwell.
 {% for trv in radiator_devices %}
     - service: climate.set_temperature
       target:
         entity_id: {{ trv.thermostat }}
       data:
-        temperature: "{{ ha_start }} states('input_number.landing_thermostat_baseline') | float(0) {{ ha_end }}"
+        temperature: "{{ ha_start }} (states('input_number.landing_thermostat_baseline') | float(0)) + 3 {{ ha_end }}"
 {% endfor %}
   mode: single
