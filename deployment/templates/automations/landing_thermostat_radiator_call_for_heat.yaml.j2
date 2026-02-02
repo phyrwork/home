@@ -4,7 +4,6 @@
 {% set call_for_heat_setpoint = 30 %}
 {% set call_for_heat_lower_bound = call_for_heat_setpoint - 0.01 %}
 {% set call_for_heat_delta = 0.1 %}
-{% set radiator_thermostats = radiator_devices | map(attribute='thermostat') | list %}
 
 # Baseline tracks the Landing setpoint whenever call-for-heat is inactive.
 - id: landing_thermostat_radiator_call_for_heat_baseline
@@ -31,9 +30,9 @@
     - platform: template
       value_template: >
         {{ ha_start }}
-        {% for trv in radiator_thermostats -%}
-        state_attr('{{ trv }}', 'current_temperature') | float(0)
-        < (state_attr('{{ trv }}', 'temperature') | float(0) - {{ call_for_heat_delta }})
+        {% for trv in radiator_devices -%}
+        states('{{ trv.external_temperature_sensor }}') | float(0)
+        < (state_attr('{{ trv.thermostat }}', 'temperature') | float(0) - {{ call_for_heat_delta }})
         {% if not loop.last %} or {% endif %}
         {%- endfor %}
         {{ ha_end }}
@@ -68,9 +67,9 @@
         state_attr('climate.landing', 'preset_mode') == 'eco'
         or
         (
-        {% for trv in radiator_thermostats -%}
-        state_attr('{{ trv }}', 'current_temperature') | float(0)
-        >= (state_attr('{{ trv }}', 'temperature') | float(0) - {{ call_for_heat_delta }})
+        {% for trv in radiator_devices -%}
+        states('{{ trv.external_temperature_sensor }}') | float(0)
+        >= (state_attr('{{ trv.thermostat }}', 'temperature') | float(0) - {{ call_for_heat_delta }})
         {% if not loop.last %} and {% endif %}
         {%- endfor %}
         )

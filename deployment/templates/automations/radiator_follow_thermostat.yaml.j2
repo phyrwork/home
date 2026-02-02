@@ -2,7 +2,6 @@
 {% set ha_end = '}}' %}
 {% set call_for_heat_setpoint = 30 %}
 {% set call_for_heat_lower_bound = call_for_heat_setpoint - 0.01 %}
-{% set radiator_thermostats = radiator_devices | map(attribute='thermostat') | list %}
 
 - id: radiator_follow_thermostat_setpoints
   alias: Radiator follow thermostat setpoints
@@ -13,10 +12,10 @@
     - condition: template
       value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) < {{ call_for_heat_lower_bound }} {{ ha_end }}"
   action:
-{% for trv in radiator_thermostats %}
+{% for trv in radiator_devices %}
     - service: climate.set_temperature
       target:
-        entity_id: {{ trv }}
+        entity_id: {{ trv.thermostat }}
       data:
         temperature: "{{ ha_start }} states('input_number.landing_thermostat_baseline') | float(0) {{ ha_end }}"
 {% endfor %}
