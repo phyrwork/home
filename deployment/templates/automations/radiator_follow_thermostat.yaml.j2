@@ -19,6 +19,6 @@
       target:
         entity_id: {{ trv.thermostat }}
       data:
-        temperature: "{{ ha_start }} (states('input_number.landing_thermostat_baseline') | float(0)) + 3 {{ ha_end }}"
+        temperature: "{{ ha_start }} (states('input_number.landing_thermostat_baseline') | float(0)) + 5 {{ ha_end }}"
 {% endfor %}
   mode: single
