@@ -3,6 +3,7 @@
 {# Use a list so we can add more TRVs without duplicating template logic. #}
 {% set call_for_heat_setpoint = 30 %}
 {% set call_for_heat_lower_bound = call_for_heat_setpoint - 0.01 %}
+{% set call_for_heat_delta = 0.1 %}
 {% set radiator_thermostats = [
   'climate.middle_bathroom_radiator_thermostat',
   'climate.kids_bedroom_radiator_thermostat',
@@ -26,7 +27,7 @@
         value: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) {{ ha_end }}"
   mode: single
 
-# Start call-for-heat when any radiator TRV reports heating.
+# Start call-for-heat when any radiator TRV needs heat (setpoint above current temp).
 - id: landing_thermostat_radiator_call_for_heat_start
   alias: Call for heat when landing radiators need heat
   trigger:
@@ -34,7 +35,9 @@
       value_template: >
         {{ ha_start }}
         {% for trv in radiator_thermostats -%}
-        state_attr('{{ trv }}', 'hvac_action') == 'heating'{% if not loop.last %} or {% endif %}
+        state_attr('{{ trv }}', 'current_temperature') | float(0)
+        < (state_attr('{{ trv }}', 'temperature') | float(0) - {{ call_for_heat_delta }})
+        {% if not loop.last %} or {% endif %}
         {%- endfor %}
         {{ ha_end }}
   condition:
@@ -69,7 +72,9 @@
         or
         (
         {% for trv in radiator_thermostats -%}
-        state_attr('{{ trv }}', 'hvac_action') != 'heating'{% if not loop.last %} and {% endif %}
+        state_attr('{{ trv }}', 'current_temperature') | float(0)
+        >= (state_attr('{{ trv }}', 'temperature') | float(0) - {{ call_for_heat_delta }})
+        {% if not loop.last %} and {% endif %}
         {%- endfor %}
         )
         {{ ha_end }}
