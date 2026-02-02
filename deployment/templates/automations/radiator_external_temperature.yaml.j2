@@ -2,6 +2,20 @@
 {% set ha_end = '}}' %}
 {% set trvs = [
   {
+    'id': 'downstairs_room_radiator_a',
+    'alias': 'Downstairs Room Radiator A',
+    'sensor': 'sensor.downstairs_room_temperature',
+    'switch': 'switch.downstairs_room_radiator_a_external_temperature_sensor',
+    'number': 'number.downstairs_room_radiator_a_external_temperature_sensor_value',
+  },
+  {
+    'id': 'downstairs_room_radiator_b',
+    'alias': 'Downstairs Room Radiator B',
+    'sensor': 'sensor.downstairs_room_temperature',
+    'switch': 'switch.downstairs_room_radiator_b_external_temperature_sensor',
+    'number': 'number.downstairs_room_radiator_b_external_temperature_sensor_value',
+  },
+  {
     'id': 'middle_bathroom',
     'alias': 'Middle Bathroom',
     'sensor': 'sensor.middle_bathroom_temperature',
@@ -14,6 +28,20 @@
     'sensor': 'sensor.kids_room_temperature',
     'switch': 'switch.kids_bedroom_radiator_external_temperature_sensor',
     'number': 'number.kids_bedroom_radiator_external_temperature_sensor_value',
+  },
+  {
+    'id': 'living_room',
+    'alias': 'Living Room',
+    'sensor': 'sensor.living_room_temperature',
+    'switch': 'switch.living_room_radiator_external_temperature_sensor',
+    'number': 'number.living_room_radiator_external_temperature_sensor_value',
+  },
+  {
+    'id': 'office',
+    'alias': 'Office',
+    'sensor': 'sensor.office_temperature',
+    'switch': 'switch.office_radiator_external_temperature_sensor',
+    'number': 'number.office_radiator_external_temperature_sensor_value',
   },
 ] %}
 

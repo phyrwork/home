@@ -3,8 +3,12 @@
 {% set call_for_heat_setpoint = 30 %}
 {% set call_for_heat_lower_bound = call_for_heat_setpoint - 0.01 %}
 {% set radiator_thermostats = [
+  'climate.downstairs_room_radiator_a_thermostat',
+  'climate.downstairs_room_radiator_b_thermostat',
   'climate.middle_bathroom_radiator_thermostat',
   'climate.kids_bedroom_radiator_thermostat',
+  'climate.living_room_radiator_thermostat',
+  'climate.office_radiator_thermostat',
 ] %}
 
 - id: radiator_follow_thermostat_setpoints
