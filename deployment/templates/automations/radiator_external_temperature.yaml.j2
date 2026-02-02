@@ -1,70 +1,27 @@
 {% set ha_start = '{{' %}
 {% set ha_end = '}}' %}
-{% set trvs = [
-  {
-    'id': 'downstairs_room_radiator_a',
-    'alias': 'Downstairs Room Radiator A',
-    'sensor': 'sensor.downstairs_room_temperature',
-    'switch': 'switch.downstairs_room_radiator_a_external_temperature_sensor',
-    'number': 'number.downstairs_room_radiator_a_external_temperature_sensor_value',
-  },
-  {
-    'id': 'downstairs_room_radiator_b',
-    'alias': 'Downstairs Room Radiator B',
-    'sensor': 'sensor.downstairs_room_temperature',
-    'switch': 'switch.downstairs_room_radiator_b_external_temperature_sensor',
-    'number': 'number.downstairs_room_radiator_b_external_temperature_sensor_value',
-  },
-  {
-    'id': 'middle_bathroom',
-    'alias': 'Middle Bathroom',
-    'sensor': 'sensor.middle_bathroom_temperature',
-    'switch': 'switch.middle_bathroom_radiator_external_temperature_sensor',
-    'number': 'number.middle_bathroom_radiator_external_temperature_sensor_value',
-  },
-  {
-    'id': 'kids_bedroom',
-    'alias': 'Kids Bedroom',
-    'sensor': 'sensor.kids_room_temperature',
-    'switch': 'switch.kids_bedroom_radiator_external_temperature_sensor',
-    'number': 'number.kids_bedroom_radiator_external_temperature_sensor_value',
-  },
-  {
-    'id': 'living_room',
-    'alias': 'Living Room',
-    'sensor': 'sensor.living_room_temperature',
-    'switch': 'switch.living_room_radiator_external_temperature_sensor',
-    'number': 'number.living_room_radiator_external_temperature_sensor_value',
-  },
-  {
-    'id': 'office',
-    'alias': 'Office',
-    'sensor': 'sensor.office_temperature',
-    'switch': 'switch.office_radiator_external_temperature_sensor',
-    'number': 'number.office_radiator_external_temperature_sensor_value',
-  },
-] %}
+{% set trvs = radiator_devices %}
 
 {% for trv in trvs %}
 - id: {{ trv.id }}_radiator_external_temperature_sync
   alias: {{ trv.alias }} Radiator External Temperature Sync
   trigger:
     - platform: state
-      entity_id: {{ trv.sensor }}
+      entity_id: {{ trv.external_temperature_sensor }}
   condition:
     - condition: template
       value_template: >-
-        {{ ha_start }} states('{{ trv.sensor }}') not in ['unknown', 'unavailable', 'none'] {{ ha_end }}
+        {{ ha_start }} states('{{ trv.external_temperature_sensor }}') not in ['unknown', 'unavailable', 'none'] {{ ha_end }}
   action:
     - service: switch.turn_on
       target:
-        entity_id: {{ trv.switch }}
+        entity_id: {{ trv.external_temperature_enable }}
     - service: number.set_value
       target:
-        entity_id: {{ trv.number }}
+        entity_id: {{ trv.external_temperature_value }}
       data:
         value: >-
-          {{ ha_start }} states('{{ trv.sensor }}') | float | round(1) {{ ha_end }}
+          {{ ha_start }} states('{{ trv.external_temperature_sensor }}') | float | round(1) {{ ha_end }}
   mode: single
 {% if not loop.last %}
 

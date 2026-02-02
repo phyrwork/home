@@ -170,3 +170,46 @@ battery_devices:
 
   - name: Garage Door
     entity_id: sensor.garage_door_battery
+
+radiator_devices:
+  - id: downstairs_room_radiator_a
+    alias: Downstairs Room Radiator A
+    thermostat: climate.downstairs_room_radiator_a_thermostat
+    external_temperature_sensor: sensor.downstairs_room_temperature
+    external_temperature_enable: switch.downstairs_room_radiator_a_external_temperature_sensor
+    external_temperature_value: number.downstairs_room_radiator_a_external_temperature_sensor_value
+
+  - id: downstairs_room_radiator_b
+    alias: Downstairs Room Radiator B
+    thermostat: climate.downstairs_room_radiator_b_thermostat
+    external_temperature_sensor: sensor.downstairs_room_temperature
+    external_temperature_enable: switch.downstairs_room_radiator_b_external_temperature_sensor
+    external_temperature_value: number.downstairs_room_radiator_b_external_temperature_sensor_value
+
+  - id: middle_bathroom
+    alias: Middle Bathroom
+    thermostat: climate.middle_bathroom_radiator_thermostat
+    external_temperature_sensor: sensor.middle_bathroom_temperature
+    external_temperature_enable: switch.middle_bathroom_radiator_external_temperature_sensor
+    external_temperature_value: number.middle_bathroom_radiator_external_temperature_sensor_value
+
+  - id: kids_bedroom
+    alias: Kids Bedroom
+    thermostat: climate.kids_bedroom_radiator_thermostat
+    external_temperature_sensor: sensor.kids_room_temperature
+    external_temperature_enable: switch.kids_bedroom_radiator_external_temperature_sensor
+    external_temperature_value: number.kids_bedroom_radiator_external_temperature_sensor_value
+
+  - id: living_room
+    alias: Living Room
+    thermostat: climate.living_room_radiator_thermostat
+    external_temperature_sensor: sensor.living_room_temperature
+    external_temperature_enable: switch.living_room_radiator_external_temperature_sensor
+    external_temperature_value: number.living_room_radiator_external_temperature_sensor_value
+
+  - id: office
+    alias: Office
+    thermostat: climate.office_radiator_thermostat
+    external_temperature_sensor: sensor.office_temperature
+    external_temperature_enable: switch.office_radiator_external_temperature_sensor
+    external_temperature_value: number.office_radiator_external_temperature_sensor_value
