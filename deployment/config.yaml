@@ -441,7 +441,7 @@
         dest: "{{ ha_config_dir }}/templates/{{ item }}.yaml"
       notify: reload templates
       loop:
-        - covers_battery_low
+        - battery_low
         - octopus_energy_electricity_current_export
 
     - name: install templated localtuya socket templates
@@ -477,4 +477,4 @@
         dest: "{{ ha_config_dir }}/alerts/{{ item }}.yaml"
       notify: reload core config
       loop:
-        - covers_battery_low
+        - battery_low

@@ -1,0 +1,24 @@
+{% for device in battery_devices %}
+{% set sensor_name = device.name ~ ' Battery Low' %}
+{% set sensor_slug = sensor_name | slugify %}
+{% set sensor_entity_id = 'binary_sensor.' ~ sensor_slug %}
+{% set alert_id = sensor_slug %}
+{{ alert_id }}:
+  name: {{ device.name }} battery is low or unavailable
+  message: The {{ device.name }} battery is low or unavailable
+  done_message: The {{ device.name }} battery is OK
+  entity_id: {{ sensor_entity_id }}
+
+  # Ignore for 60m, then repeat every 24h
+  repeat:
+    - 60
+    - 1440
+  skip_first: true
+
+  # Create a notification in Home Assistant
+  notifiers:
+    - persistent_notification
+  data:
+    notification_id: {{ alert_id }}
+
+{% endfor %}

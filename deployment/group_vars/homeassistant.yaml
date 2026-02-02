@@ -55,45 +55,118 @@ gas_meter_mpan: !vault |
 
 family_room_lamp_button_device_id: 126e2f6852deb5457919ddd987f34c21
 
-cover_battery_low_threshold: 30
-cover_battery_low_sensors:
-  - name: Master Bedroom Left Blind Battery Low
+battery_low_threshold: 30
+battery_devices:
+  - name: Office Remote
+    entity_id: sensor.office_remote_battery
+
+  - name: Front Garden Soil Sensor
+    entity_id: sensor.front_garden_soil_sensor_battery
+
+  - name: Kids Bedroom Motion Sensor
+    entity_id: sensor.kids_bedroom_motion_sensor_battery
+
+  - name: Downstairs Lamp Button
+    entity_id: sensor.downstairs_lamp_button_battery
+
+  - name: Downstairs Room Radiator B
+    entity_id: sensor.downstairs_room_radiator_b_battery
+
+  - name: Kids Bedroom Left Blind
+    entity_id: sensor.kids_bedroom_left_blind_battery
+
+  - name: Garage Thermometer
+    entity_id: sensor.garage_thermometer_battery
+
+  - name: Closet Motion Sensor
+    entity_id: sensor.closet_motion_sensor_battery
+
+  - name: Downstairs Monstera Soil Sensor
+    entity_id: sensor.downstairs_monstera_soil_sensor_battery
+
+  - name: Kids Bedroom Remote
+    entity_id: sensor.kids_bedroom_remote_battery
+
+  - name: Pantry Door Sensor
+    entity_id: sensor.pantry_door_battery
+
+  - name: Downstairs Room Thermometer
+    entity_id: sensor.downstairs_room_thermometer_battery
+
+  - name: Master Bedroom Left Blind
     entity_id: sensor.master_bedroom_blind_left_battery
 
-  - name: Master Bedroom Right Blind Battery Low
+  - name: Closet Remote
+    entity_id: sensor.closet_remote_battery
+
+  - name: Back Garden Soil Sensor
+    entity_id: sensor.back_garden_soil_sensor_battery
+
+  - name: Back Garden Lawn Irrigation
+    entity_id: sensor.back_garden_lawn_irrigation_battery
+
+  - name: Utility Cupboard Door
+    entity_id: sensor.utility_cupboard_door_battery
+
+  - name: Dishwasher Door
+    entity_id: sensor.dishwasher_door_battery
+
+  - name: Living Room Left Blind
+    entity_id: sensor.living_room_left_blind_battery
+
+  - name: Kids Bedroom Radiator
+    entity_id: sensor.kids_bedroom_radiator_battery
+
+  - name: Living Room Thermometer
+    entity_id: sensor.living_room_thermometer_battery
+
+  - name: Kids Bedroom Thermometer
+    entity_id: sensor.kids_bedroom_thermometer_battery
+
+  - name: Living Room Right Blind
+    entity_id: sensor.living_room_right_blind_battery
+
+  - name: Office Thermometer
+    entity_id: sensor.office_thermometer_battery
+
+  - name: Sink Water Leakage Sensor
+    entity_id: sensor.sink_water_leakage_sensor_battery
+
+  - name: Living Room Radiator
+    entity_id: sensor.living_room_radiator_battery
+
+  - name: Kitchen Remote
+    entity_id: sensor.kitchen_remote_battery
+
+  - name: Master Bedroom Right Blind
     entity_id: sensor.master_bedroom_blind_right_battery
 
-  - name: Guest Bedroom Left Blind Battery Low
-    entity_id: sensor.guest_bedroom_blind_left_battery
+  - name: Middle Bathroom Radiator
+    entity_id: sensor.middle_bathroom_radiator_battery
 
-  - name: Guest Bedroom Right Blind Battery Low
-    entity_id: sensor.guest_bedroom_blind_right_battery
+  - name: Utility Cupboard Remote
+    entity_id: sensor.utility_cupboard_remote_battery
 
-cover_battery_low_alerts:
-  - name: Master Bedroom Left Blind battery is low
-    message: The master bedroom left blind battery is low
-    done_message: The master bedroom left blind battery is OK
-    entity_id: binary_sensor.master_bedroom_left_blind_battery_low
-    alert_id: master_bedroom_left_blind_battery_low
-    notification_id: master_bedroom_left_blind_battery_low
+  - name: Office Radiator
+    entity_id: sensor.office_radiator_battery
 
-  - name: Master Bedroom Right Blind battery is low
-    message: The master bedroom right blind battery is low
-    done_message: The master bedroom right blind battery is OK
-    entity_id: binary_sensor.master_bedroom_right_blind_battery_low
-    alert_id: master_bedroom_right_blind_battery_low
-    notification_id: master_bedroom_right_blind_battery_low
+  - name: Middle Bathroom Thermometer
+    entity_id: sensor.middle_bathroom_battery
 
-  - name: Guest Bedroom Left Blind battery is low
-    message: The guest bedroom left blind battery is low
-    done_message: The guest bedroom left blind battery is OK
-    entity_id: binary_sensor.guest_bedroom_left_blind_battery_low
-    alert_id: guest_bedroom_left_blind_battery_low
-    notification_id: guest_bedroom_left_blind_battery_low
+  - name: Living Room Remote
+    entity_id: sensor.living_room_light_remote_battery
 
-  - name: Guest Bedroom Right Blind battery is low
-    message: The guest bedroom right blind battery is low
-    done_message: The guest bedroom right blind battery is OK
-    entity_id: binary_sensor.guest_bedroom_right_blind_battery_low
-    alert_id: guest_bedroom_right_blind_battery_low
-    notification_id: guest_bedroom_right_blind_battery_low
+  - name: Master Bedroom Remote
+    entity_id: sensor.master_bedroom_remote_battery
+
+  - name: Middle Bathroom Motion Sensor
+    entity_id: sensor.middle_bathroom_motion_sensor_battery
+
+  - name: Downstairs Room Radiator A
+    entity_id: sensor.downstairs_room_radiator_a_battery
+
+  - name: Kids Bedroom Right Blind
+    entity_id: sensor.kids_bedroom_right_blind_battery
+
+  - name: Garage Door
+    entity_id: sensor.garage_door_battery

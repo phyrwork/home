@@ -1,0 +1,12 @@
+binary_sensor:
+{% for device in battery_devices %}
+  # n.b. Resulting entity ID will be the slugified version of 'name'.
+  #   Frustratingly, there is no way to override this so that the entity ID prefixes
+  #   match the source sensors.
+  - name: {{ device.name }} Battery Low
+    state: >
+      {% raw %}{% set state = states('{% endraw %}{{ device.entity_id }}{% raw %}') | lower %}{% endraw %}
+      {% raw %}{{ state in ['unavailable', 'unknown', 'none'] or (state | int(-1) < {% endraw %}{{ battery_low_threshold }}{% raw %}) }}{% endraw %}
+{# This newline required to stop endfor gobbling newline preceding each list item #}
+
+{% endfor %}
