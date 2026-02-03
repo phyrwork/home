@@ -1,13 +1,12 @@
 {% set ha_start = '{{' %}
 {% set ha_end = '}}' %}
-{# Use a list so we can add more TRVs without duplicating template logic. #}
 {% set call_for_heat_setpoint = 30 %}
 {% set call_for_heat_lower_bound = call_for_heat_setpoint - 0.01 %}
 {% set call_for_heat_delta = 0.1 %}
 
 # Baseline tracks the Landing setpoint whenever call-for-heat is inactive.
-- id: landing_thermostat_radiator_call_for_heat_baseline
-  alias: Landing radiator call for heat baseline
+- id: zone_call_for_heat_baseline
+  alias: Zone call for heat baseline
   trigger:
     - platform: state
       entity_id: climate.landing
@@ -23,19 +22,13 @@
         value: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) {{ ha_end }}"
   mode: single
 
-# Start call-for-heat when any radiator TRV needs heat (setpoint above current temp).
-- id: landing_thermostat_radiator_call_for_heat_start
-  alias: Call for heat when landing radiators need heat
+# Start call-for-heat when central boiler requests heat.
+- id: zone_call_for_heat_start
+  alias: Zone call for heat start
   trigger:
-    - platform: template
-      value_template: >
-        {{ ha_start }}
-        {% for trv in radiator_devices -%}
-        states('{{ trv.external_temperature_sensor }}') | float(0)
-        < (state_attr('{{ trv.thermostat }}', 'temperature') | float(0) - {{ call_for_heat_delta }})
-        {% if not loop.last %} or {% endif %}
-        {%- endfor %}
-        {{ ha_end }}
+    - platform: state
+      entity_id: binary_sensor.landing_zone_configuration_central_boiler
+      to: "on"
   condition:
     - condition: template
       value_template: "{{ ha_start }} state_attr('climate.landing', 'preset_mode') != 'eco' {{ ha_end }}"
@@ -57,22 +50,17 @@
         temperature: "{{ ha_start }} call_target {{ ha_end }}"
   mode: single
 
-# Stop call-for-heat when all TRVs are satisfied or Nest is in eco.
-- id: landing_thermostat_radiator_call_for_heat_stop
-  alias: Stop calling for heat when landing radiators are satisfied
+# Stop call-for-heat when central boiler no longer requests heat or Nest is in eco.
+- id: zone_call_for_heat_stop
+  alias: Zone call for heat stop
   trigger:
+    - platform: state
+      entity_id: binary_sensor.landing_zone_configuration_central_boiler
+      to: "off"
     - platform: template
       value_template: >
         {{ ha_start }}
         state_attr('climate.landing', 'preset_mode') == 'eco'
-        or
-        (
-        {% for trv in radiator_devices -%}
-        states('{{ trv.external_temperature_sensor }}') | float(0)
-        >= (state_attr('{{ trv.thermostat }}', 'temperature') | float(0) - {{ call_for_heat_delta }})
-        {% if not loop.last %} and {% endif %}
-        {%- endfor %}
-        )
         {{ ha_end }}
   condition:
     - condition: template

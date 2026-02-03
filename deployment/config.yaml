@@ -196,6 +196,13 @@
         component_domain: nissan_connect
         component_version: "v0.7.5"
 
+    - role: custom_component
+      vars:
+        component_name: Versatile Thermostat
+        component_full_name: jmcollin78/versatile_thermostat
+        component_domain: versatile_thermostat
+        component_version: "8.6.0"
+
   tasks:
     - name: create zigpy ota directory
       file:
@@ -411,9 +418,8 @@
       notify: reload automations
       loop:
         - family_room_lamp_mode_energy
-        - landing_thermostat_radiator_call_for_heat
-        - radiator_external_temperature
-        - radiator_follow_thermostat
+        - zone_call_for_heat
+        - room_follow_zone
 
     - name: install templated sensors
       template:

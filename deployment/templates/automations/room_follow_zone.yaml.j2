@@ -3,21 +3,34 @@
 {% set call_for_heat_setpoint = 30 %}
 {% set call_for_heat_lower_bound = call_for_heat_setpoint - 0.01 %}
 
-- id: radiator_follow_thermostat_setpoints
-  alias: Radiator follow thermostat setpoints
+- id: room_follow_zone_setpoints
+  alias: Room follow zone setpoints
   trigger:
     - platform: state
       entity_id: input_number.landing_thermostat_baseline
+    - platform: state
+      entity_id: climate.landing
+      attribute: preset_mode
+    - platform: homeassistant
+      event: start
   condition:
     - condition: template
       value_template: "{{ ha_start }} state_attr('climate.landing', 'temperature') | float(0) < {{ call_for_heat_lower_bound }} {{ ha_end }}"
   action:
+    - variables:
+        landing_eco: "{{ ha_start }} state_attr('climate.landing', 'preset_mode') == 'eco' {{ ha_end }}"
+        target_hvac_mode: "{{ ha_start }} 'off' if landing_eco else 'heat' {{ ha_end }}"
     # Landing is the coldest and least-used area; keep radiators warmer than the
     # landing baseline to avoid wasting energy heating the stairwell.
-{% for trv in radiator_devices %}
+{% for trv in thermostat_devices %}
+    - service: climate.set_hvac_mode
+      target:
+        entity_id: {{ trv.entity_id }}
+      data:
+        hvac_mode: "{{ ha_start }} target_hvac_mode {{ ha_end }}"
     - service: climate.set_temperature
       target:
-        entity_id: {{ trv.thermostat }}
+        entity_id: {{ trv.entity_id }}
       data:
         temperature: "{{ ha_start }} (states('input_number.landing_thermostat_baseline') | float(0)) + 5 {{ ha_end }}"
 {% endfor %}

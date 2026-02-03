@@ -171,45 +171,112 @@ battery_devices:
   - name: Garage Door
     entity_id: sensor.garage_door_battery
 
-radiator_devices:
-  - id: downstairs_room_radiator_a
-    alias: Downstairs Room Radiator A
-    thermostat: climate.downstairs_room_radiator_a_thermostat
-    external_temperature_sensor: sensor.downstairs_room_temperature
-    external_temperature_enable: switch.downstairs_room_radiator_a_external_temperature_sensor
-    external_temperature_value: number.downstairs_room_radiator_a_external_temperature_sensor_value
+# VTherm inventory (config-flow only). Keep this as a source of truth for
+# re-creating VTherm entries after a reset or migration.
+# External temp here refers to "outdoor" proxy (garage temperature in our case).
+# Known behavior: room_follow_zone only reacts to landing baseline changes
+# (input_number.landing_thermostat_baseline) and landing preset changes. Manual
+# adjustments to the landing setpoint while call-for-heat is active will not
+# propagate to room setpoints. We intentionally accept this to avoid propagating
+# the call-for-heat bump (e.g., 30C) to rooms.
+zone_configuration_defaults:
+  external_temperature_sensor: sensor.garage_temperature
+  central_boiler:
+    name: Landing Zone Configuration
+    binary_sensor: binary_sensor.landing_zone_configuration_central_boiler
+    activation_threshold: 1
+    activation_service: input_boolean.vtherm_central_boiler_dummy/input_boolean.turn_on
+    deactivation_service: input_boolean.vtherm_central_boiler_dummy/input_boolean.turn_off
 
-  - id: downstairs_room_radiator_b
-    alias: Downstairs Room Radiator B
-    thermostat: climate.downstairs_room_radiator_b_thermostat
-    external_temperature_sensor: sensor.downstairs_room_temperature
-    external_temperature_enable: switch.downstairs_room_radiator_b_external_temperature_sensor
-    external_temperature_value: number.downstairs_room_radiator_b_external_temperature_sensor_value
+zone_configurations:
+  - id: landing_zone
+    name: Landing Zone Configuration
+    external_temperature_sensor: sensor.garage_temperature
+    central_boiler:
+      binary_sensor: binary_sensor.landing_zone_configuration_central_boiler
+      activation_threshold: 1
+      activation_service: input_boolean.vtherm_central_boiler_dummy/input_boolean.turn_on
+      deactivation_service: input_boolean.vtherm_central_boiler_dummy/input_boolean.turn_off
+
+thermostat_device_defaults:
+  type: thermostat_over_climate
+  external_temperature_sensor: sensor.garage_temperature
+  used_by_controls_central_boiler: true
+  type_settings:
+    auto_regulation_mode: auto_regulation_valve
+    auto_regulation_dtemp: 5
+    auto_regulation_periode_min: 10
+    auto_fan_mode: auto_fan_none
+  valve_regulation:
+    proportional_function: tpi
+    opening_threshold_degree: 5
+    max_opening_degrees: 30
+    max_closing_degree: 100
+  tpi:
+    use_tpi_central_config: false
+  advanced:
+    use_advanced_central_config: false
+
+thermostat_devices:
+  - id: kids_bedroom
+    alias: Kids Bedroom Thermostat
+    entity_id: climate.kids_bedroom_thermostat
+    underlying_entities:
+      - climate.kids_bedroom_radiator_thermostat
+    temperature_sensor: sensor.kids_room_temperature
+    valve_regulation:
+      opening_degree_entities:
+        - number.kids_bedroom_radiator_opening_degree
+      closing_degree_entities:
+        - number.kids_bedroom_radiator_closing_degree
+
+  - id: downstairs_room
+    alias: Downstairs Room Thermostat
+    entity_id: climate.downstairs_room_thermostat
+    underlying_entities:
+      - climate.downstairs_room_radiator_a_thermostat
+      - climate.downstairs_room_radiator_b_thermostat
+    temperature_sensor: sensor.downstairs_room_temperature
+    valve_regulation:
+      opening_degree_entities:
+        - number.downstairs_room_radiator_a_opening_degree
+        - number.downstairs_room_radiator_b_opening_degree
+      closing_degree_entities:
+        - number.downstairs_room_radiator_a_closing_degree
+        - number.downstairs_room_radiator_b_closing_degree
 
   - id: middle_bathroom
-    alias: Middle Bathroom
-    thermostat: climate.middle_bathroom_radiator_thermostat
-    external_temperature_sensor: sensor.middle_bathroom_temperature
-    external_temperature_enable: switch.middle_bathroom_radiator_external_temperature_sensor
-    external_temperature_value: number.middle_bathroom_radiator_external_temperature_sensor_value
-
-  - id: kids_bedroom
-    alias: Kids Bedroom
-    thermostat: climate.kids_bedroom_radiator_thermostat
-    external_temperature_sensor: sensor.kids_room_temperature
-    external_temperature_enable: switch.kids_bedroom_radiator_external_temperature_sensor
-    external_temperature_value: number.kids_bedroom_radiator_external_temperature_sensor_value
+    alias: Middle Bathroom Thermostat
+    entity_id: climate.middle_bathroom_thermostat
+    underlying_entities:
+      - climate.middle_bathroom_radiator_thermostat
+    temperature_sensor: sensor.middle_bathroom_temperature
+    valve_regulation:
+      opening_degree_entities:
+        - number.middle_bathroom_radiator_opening_degree
+      closing_degree_entities:
+        - number.middle_bathroom_radiator_closing_degree
 
   - id: living_room
-    alias: Living Room
-    thermostat: climate.living_room_radiator_thermostat
-    external_temperature_sensor: sensor.living_room_temperature
-    external_temperature_enable: switch.living_room_radiator_external_temperature_sensor
-    external_temperature_value: number.living_room_radiator_external_temperature_sensor_value
+    alias: Living Room Thermostat
+    entity_id: climate.living_room_thermostat
+    underlying_entities:
+      - climate.living_room_radiator_thermostat
+    temperature_sensor: sensor.living_room_temperature
+    valve_regulation:
+      opening_degree_entities:
+        - number.living_room_radiator_opening_degree
+      closing_degree_entities:
+        - number.living_room_radiator_closing_degree
 
   - id: office
-    alias: Office
-    thermostat: climate.office_radiator_thermostat
-    external_temperature_sensor: sensor.office_temperature
-    external_temperature_enable: switch.office_radiator_external_temperature_sensor
-    external_temperature_value: number.office_radiator_external_temperature_sensor_value
+    alias: Office Thermostat
+    entity_id: climate.office_thermostat
+    underlying_entities:
+      - climate.office_radiator_thermostat
+    temperature_sensor: sensor.office_temperature
+    valve_regulation:
+      opening_degree_entities:
+        - number.office_radiator_opening_degree
+      closing_degree_entities:
+        - number.office_radiator_closing_degree
