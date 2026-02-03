@@ -14,15 +14,11 @@
       state: "on"
     - condition: template
       value_template: >-
-        {% raw %}
         {{ states('select.washing_machine') != 'run' }}
-        {% endraw %}
     - condition: template
       value_template: >-
-        {% raw %}
         {% set latest = as_datetime(states('sensor.washing_machine_cost_latest_start_time')) %}
         {{ latest is not none and now() >= latest }}
-        {% endraw %}
   action:
     - service: select.select_option
       target:
