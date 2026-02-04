@@ -210,7 +210,7 @@ thermostat_device_defaults:
   valve_regulation:
     proportional_function: tpi
     opening_threshold_degree: 5
-    max_opening_degrees: 30
+    max_opening_degrees: 100
     max_closing_degree: 100
   tpi:
     use_tpi_central_config: false
