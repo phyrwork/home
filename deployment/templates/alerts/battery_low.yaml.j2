@@ -5,8 +5,15 @@
 {% set alert_id = sensor_slug %}
 {{ alert_id }}:
   name: {{ device.name }} battery is low or unavailable
-  message: The {{ device.name }} battery is low or unavailable
-  done_message: The {{ device.name }} battery is OK
+  message: >-
+    {% raw %}{% set state = states('{% endraw %}{{ device.entity_id }}{% raw %}') | lower %}
+    {% if state in ['unavailable', 'unknown', 'none'] %}
+      The {{ device.name }} battery status is unavailable.
+    {% else %}
+      The {{ device.name }} battery is low ({{ state }}%).
+    {% endif %}{% endraw %}
+  done_message: >-
+    {% raw %}The {{ device.name }} battery is OK ({{ states('{% endraw %}{{ device.entity_id }}{% raw %}') }}%).{% endraw %}
   entity_id: {{ sensor_entity_id }}
 
   # Ignore for 60m, then repeat every 24h
@@ -18,6 +25,7 @@
   # Create a notification in Home Assistant
   notifiers:
     - persistent_notification
+    - all_phones
   data:
     notification_id: {{ alert_id }}
 
