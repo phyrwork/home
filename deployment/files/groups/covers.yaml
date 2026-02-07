@@ -4,17 +4,17 @@ master_bedroom_covers:
     - cover.master_bedroom_blind_left
     - cover.master_bedroom_blind_right
 
-guest_bedroom_covers:
-  name: Guest Bedroom Blinds
+kids_bedroom_covers:
+  name: Kids' Bedroom Blinds
   entities:
-    - cover.guest_bedroom_blind_left
-    - cover.guest_bedroom_blind_right
+    - cover.kids_bedroom_left_blind
+    - cover.kids_bedroom_right_blind
 
 living_room_covers:
-    name: Living Room Blinds
-    entities:
-        - cover.living_room_blind_left
-        - cover.living_room_blind_right
+  name: Living Room Blinds
+  entities:
+    - cover.living_room_left_blind
+    - cover.living_room_right_blind
 
 covers:
   name: All Blinds
@@ -24,7 +24,7 @@ covers:
     # super verbose.
     - cover.master_bedroom_blind_left
     - cover.master_bedroom_blind_right
-    - cover.guest_bedroom_blind_left
-    - cover.guest_bedroom_blind_right
-    - cover.living_room_blind_left
-    - cover.living_room_blind_right
+    - cover.kids_bedroom_left_blind
+    - cover.kids_bedroom_right_blind
+    - cover.living_room_left_blind
+    - cover.living_room_right_blind
