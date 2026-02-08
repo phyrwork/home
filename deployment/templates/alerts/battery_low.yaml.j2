@@ -6,14 +6,9 @@
 {{ alert_id }}:
   name: {{ device.name }} battery is low or unavailable
   message: >-
-    {% raw %}{% set state = states('{% endraw %}{{ device.entity_id }}{% raw %}') | lower %}
-    {% if state in ['unavailable', 'unknown', 'none'] %}
-      The {{ device.name }} battery status is unavailable.
-    {% else %}
-      The {{ device.name }} battery is low ({{ state }}%).
-    {% endif %}{% endraw %}
+    {{ "{{ iif(states('" ~ device.entity_id ~ "')|lower in ['unavailable', 'unknown', 'none'], 'The " ~ device.name ~ " battery status is unavailable.', 'The " ~ device.name ~ " battery is low (' ~ states('" ~ device.entity_id ~ "') ~ '%).') }}" }}
   done_message: >-
-    {% raw %}The {{ device.name }} battery is OK ({{ states('{% endraw %}{{ device.entity_id }}{% raw %}') }}%).{% endraw %}
+    {{ "{{ 'The " ~ device.name ~ " battery is OK (' ~ states('" ~ device.entity_id ~ "') ~ '%).' }}" }}
   entity_id: {{ sensor_entity_id }}
 
   # Ignore for 60m, then repeat every 24h
