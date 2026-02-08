@@ -6,6 +6,9 @@
   - Example: `ssh root@homeassistant.local`
 - API token (long-lived access token): stored in 1Password
   - Read with: `op read "op://jxs6qrivegu7ekpzkt27seurvy/fgvzkd432x4xsjq7f3vu4zippu/password"`
+  - To avoid repeated 1Password auth prompts, load into your environment once per
+    shell session and reuse it (the token does not have the SSH key cooldown).
+    Example: `export HA_API_TOKEN="$(op read "op://jxs6qrivegu7ekpzkt27seurvy/fgvzkd432x4xsjq7f3vu4zippu/password")"`
   - Note: the HA TLS cert is for `home.newtonho.me`, so `https://homeassistant.local` may require skipping verification or using the `home.newtonho.me` hostname.
 
 ## Deployment
