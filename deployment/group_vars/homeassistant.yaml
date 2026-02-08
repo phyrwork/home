@@ -126,6 +126,12 @@ battery_devices:
   - name: Living Room Right Blind
     entity_id: sensor.living_room_right_blind_battery
 
+  - name: Office Left Blind
+    entity_id: sensor.office_left_blind_battery
+
+  - name: Office Right Blind
+    entity_id: sensor.office_right_blind_battery
+
   - name: Office Thermometer
     entity_id: sensor.office_thermometer_battery
 
