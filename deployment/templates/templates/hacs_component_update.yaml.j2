@@ -1,6 +1,20 @@
 update:
   - name: {{ component_name }}
     unique_id: {{ component_domain }}_update
-    installed_version: "{% raw %}{{ states('sensor.{% endraw %}{{ component_domain }}{% raw %}_installed_version') }}{% endraw %}"
-    latest_version: "{% raw %}{{ states('sensor.{% endraw %}{{ component_domain }}{% raw %}_latest_release') }}{% endraw %}"
+    availability: >-
+      {% raw %}{{ states('sensor.{% endraw %}{{ component_domain }}{% raw %}_installed_version') not in ['unknown', 'unavailable', 'none', ''] }}{% endraw %}
+    installed_version: >-
+      {% raw %}{% set installed = states('sensor.{% endraw %}{{ component_domain }}{% raw %}_installed_version') %}
+      {% if installed not in ['unknown', 'unavailable', 'none', ''] %}
+        {{ installed }}
+      {% else %}
+        {{ this.attributes.installed_version }}
+      {% endif %}{% endraw %}
+    latest_version: >-
+      {% raw %}{% set latest = states('sensor.{% endraw %}{{ component_domain }}{% raw %}_latest_release') %}
+      {% if latest not in ['unknown', 'unavailable', 'none', ''] %}
+        {{ latest }}
+      {% else %}
+        {{ this.attributes.latest_version or states('sensor.{% endraw %}{{ component_domain }}{% raw %}_installed_version') }}
+      {% endif %}{% endraw %}
     release_url: "https://github.com/{{ component_full_name }}/releases/latest"
