@@ -16,6 +16,12 @@ living_room_covers:
     - cover.living_room_left_blind
     - cover.living_room_right_blind
 
+office_covers:
+  name: Office Blinds
+  entities:
+    - cover.office_left_blind
+    - cover.office_right_blind
+
 covers:
   name: All Blinds
   entities:
@@ -28,3 +34,5 @@ covers:
     - cover.kids_bedroom_right_blind
     - cover.living_room_left_blind
     - cover.living_room_right_blind
+    - cover.office_left_blind
+    - cover.office_right_blind
