@@ -239,6 +239,7 @@ thermostat_devices:
   - id: downstairs_room
     alias: Downstairs Room Thermostat
     entity_id: climate.downstairs_room_thermostat
+    setpoint_offset: 2.5
     underlying_entities:
       - climate.downstairs_room_radiator_a_thermostat
       - climate.downstairs_room_radiator_b_thermostat
