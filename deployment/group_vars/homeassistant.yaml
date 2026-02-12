@@ -180,29 +180,26 @@ battery_devices:
 # VTherm inventory (config-flow only). Keep this as a source of truth for
 # re-creating VTherm entries after a reset or migration.
 # External temp here refers to "outdoor" proxy (garage temperature in our case).
-# Known behavior: room_follow_zone only reacts to landing baseline changes
-# (input_number.landing_thermostat_baseline) and landing preset changes. Manual
-# adjustments to the landing setpoint while call-for-heat is active will not
-# propagate to room setpoints. We intentionally accept this to avoid propagating
-# the call-for-heat bump (e.g., 30C) to rooms.
+# room_follow_zone mirrors landing thermostat temperature and preset mode to room
+# thermostats (plus each room's setpoint offset).
 zone_configuration_defaults:
   external_temperature_sensor: sensor.garage_temperature
   central_boiler:
-    name: Landing Zone Configuration
-    binary_sensor: binary_sensor.landing_zone_configuration_central_boiler
+    name: House Heating Zone Configuration
+    binary_sensor: binary_sensor.house_heating_zone_configuration_central_boiler
     activation_threshold: 1
-    activation_service: input_boolean.vtherm_central_boiler_dummy/input_boolean.turn_on
-    deactivation_service: input_boolean.vtherm_central_boiler_dummy/input_boolean.turn_off
+    activation_service: switch.house_heating_zone_call_for_heat/switch.turn_on
+    deactivation_service: switch.house_heating_zone_call_for_heat/switch.turn_off
 
 zone_configurations:
   - id: landing_zone
-    name: Landing Zone Configuration
+    name: House Heating Zone Configuration
     external_temperature_sensor: sensor.garage_temperature
     central_boiler:
-      binary_sensor: binary_sensor.landing_zone_configuration_central_boiler
+      binary_sensor: binary_sensor.house_heating_zone_configuration_central_boiler
       activation_threshold: 1
-      activation_service: input_boolean.vtherm_central_boiler_dummy/input_boolean.turn_on
-      deactivation_service: input_boolean.vtherm_central_boiler_dummy/input_boolean.turn_off
+      activation_service: switch.house_heating_zone_call_for_heat/switch.turn_on
+      deactivation_service: switch.house_heating_zone_call_for_heat/switch.turn_off
 
 thermostat_device_defaults:
   type: thermostat_over_climate

@@ -418,7 +418,6 @@
       notify: reload automations
       loop:
         - family_room_lamp_mode_energy
-        - zone_call_for_heat
         - room_follow_zone
 
     - name: install templated sensors
