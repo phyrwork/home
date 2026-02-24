@@ -1,3 +1,4 @@
+{% raw %}
 - id: car_battery_sync_percent_to_energy
   alias: Car Battery Sync Percent To Energy
   description: Keep kWh helpers in sync when % or capacity changes
@@ -19,6 +20,61 @@
       data:
         value: "{{ energy_target }}"
   mode: single
+
+- id: car_battery_sync_soc_target_to_intelligent_delta
+  alias: Car Battery Sync SOC Target To Intelligent Delta
+  description: >-
+    Update Octopus Intelligent charge delta from SOC target. For Octopus Charge
+    this entity behaves as delta-to-add rather than absolute SOC target.
+  trigger:
+    - platform: state
+      entity_id:
+        - input_number.car_battery_level_target
+        - sensor.car_battery_level
+    - platform: homeassistant
+      event: start
+  action:
+    - variables:
+        target_level: "{{ states('input_number.car_battery_level_target') | float(0) }}"
+        current_level: "{{ states('sensor.car_battery_level') | float(0) }}"
+        required_delta: "{{ [target_level - current_level, 0] | max | round(0) | int }}"
+        # Octopus target accepts 10-100. Guarantee some progress for non-zero deltas.
+        requested_delta: >-
+          {% if required_delta <= 0 %}
+            0
+          {% elif required_delta < 10 %}
+            10
+          {% else %}
+            {{ [required_delta, 100] | min }}
+          {% endif %}
+        applied_delta: >-
+          {{ states('number.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_charge_target') | int(-1) }}
+        # TODO: replace sensor.ev_charger_power with the Shelly EM entity once the
+        # Octopus Charge smart socket power meter is migrated.
+        charger_power: "{{ states('sensor.ev_charger_power') | float(0) }}"
+        charging_now: >-
+          {{ is_state('binary_sensor.car_charging', 'on') or charger_power > 200 }}
+        should_update: >-
+          {{
+            applied_delta >= 0
+            and requested_delta > 0
+            and requested_delta != applied_delta
+            and (
+              not charging_now
+              or (requested_delta - applied_delta) | abs >= 5
+            )
+          }}
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ should_update }}"
+          sequence:
+            - service: number.set_value
+              target:
+                entity_id: number.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_charge_target
+              data:
+                value: "{{ requested_delta }}"
+  mode: restart
 
 - id: car_battery_stop_charge_at_target
   alias: Car Battery Stop Charge At Target
@@ -132,3 +188,4 @@
       target:
         entity_id: switch.ev_charger
   mode: single
+{% endraw %}

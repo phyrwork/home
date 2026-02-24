@@ -5,18 +5,23 @@ from pathlib import Path
 
 import pytest
 import yaml
+from jinja2 import Template
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
 AUTOMATION_ID = "car_battery_start_charge_at_best_time"
 AUTOMATIONS_PATH = (
-    Path(__file__).resolve().parents[1] / "files/automations/car_battery.yaml"
+    Path(__file__).resolve().parents[1] / "templates/automations/car_battery.yaml.j2"
 )
+TEST_EV_CHARGER_DEVICE_ID = "test_ev_charger_device_id"
 
 
 def _load_automation():
-    automations = yaml.safe_load(AUTOMATIONS_PATH.read_text())
+    rendered = Template(AUTOMATIONS_PATH.read_text()).render(
+        ev_charger_device_id=TEST_EV_CHARGER_DEVICE_ID
+    )
+    automations = yaml.safe_load(rendered)
     return next(item for item in automations if item.get("id") == AUTOMATION_ID)
 
 

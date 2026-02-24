@@ -417,6 +417,7 @@
         dest: "{{ ha_config_dir }}/automations/{{ item }}.yaml"
       notify: reload automations
       loop:
+        - car_battery
         - family_room_lamp_mode_energy
         - room_follow_zone
 
