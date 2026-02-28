@@ -11,22 +11,29 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
 AUTOMATION_ID = "car_battery_start_charge_at_best_time"
+SYNC_AUTOMATION_ID = "car_battery_sync_soc_target_to_intelligent_delta"
 AUTOMATIONS_PATH = (
     Path(__file__).resolve().parents[1] / "templates/automations/car_battery.yaml.j2"
 )
 TEST_EV_CHARGER_DEVICE_ID = "test_ev_charger_device_id"
+DISPATCH_SENSOR_ID = (
+    f"binary_sensor.octopus_energy_{TEST_EV_CHARGER_DEVICE_ID}_intelligent_dispatching"
+)
+TARGET_NUMBER_ID = (
+    f"number.octopus_energy_{TEST_EV_CHARGER_DEVICE_ID}_intelligent_charge_target"
+)
 
 
-def _load_automation():
+def _load_automation(automation_id=AUTOMATION_ID):
     rendered = Template(AUTOMATIONS_PATH.read_text()).render(
         ev_charger_device_id=TEST_EV_CHARGER_DEVICE_ID
     )
     automations = yaml.safe_load(rendered)
-    return next(item for item in automations if item.get("id") == AUTOMATION_ID)
+    return next(item for item in automations if item.get("id") == automation_id)
 
 
-async def _setup_automation(hass):
-    automation = _load_automation()
+async def _setup_automation(hass, automation_id=AUTOMATION_ID):
+    automation = _load_automation(automation_id=automation_id)
     assert await async_setup_component(hass, "automation", {"automation": [automation]})
     await hass.async_block_till_done()
 
@@ -53,6 +60,39 @@ def _freeze_time(hass, freezer, when):
     async_fire_time_changed(hass, when)
 
 
+def _set_sync_base_states(
+    hass,
+    *,
+    target_level,
+    current_level,
+    applied_delta,
+    charging,
+    planned_dispatches,
+    charger_power=0,
+    last_increase_update=None,
+):
+    hass.states.async_set("input_number.car_battery_level_target", str(target_level))
+    hass.states.async_set("sensor.car_battery_level", str(current_level))
+    hass.states.async_set(TARGET_NUMBER_ID, str(applied_delta))
+    hass.states.async_set("binary_sensor.car_charging", "on" if charging else "off")
+    hass.states.async_set("sensor.ev_charger_power", str(charger_power))
+    if last_increase_update is None:
+        hass.states.async_set(
+            "input_datetime.car_battery_intelligent_target_last_increase_update",
+            "unknown",
+        )
+    else:
+        hass.states.async_set(
+            "input_datetime.car_battery_intelligent_target_last_increase_update",
+            last_increase_update,
+        )
+    hass.states.async_set(
+        DISPATCH_SENSOR_ID,
+        "off",
+        {"planned_dispatches": planned_dispatches},
+    )
+
+
 @pytest.mark.asyncio
 async def test_start_at_next_lowest_start_when_tomorrow_rates_available(hass, freezer):
     await _setup_automation(hass)
@@ -68,6 +108,215 @@ async def test_start_at_next_lowest_start_when_tomorrow_rates_available(hass, fr
 
     assert len(service_calls) == 1
     assert service_calls[0].data["entity_id"] == ["switch.ev_charger"]
+
+
+@pytest.mark.asyncio
+async def test_sync_increase_is_rate_limited_for_15_minutes(hass, freezer):
+    now = dt_util.parse_datetime("2026-01-25T10:00:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=70,
+        current_level=50,
+        applied_delta=20,
+        charging=True,
+        planned_dispatches=[],
+        last_increase_update=now.isoformat(),
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+    async_mock_service(hass, "input_datetime", "set_datetime")
+
+    _freeze_time(hass, freezer, now + timedelta(minutes=10))
+    hass.states.async_set("input_number.car_battery_level_target", "80")
+    await hass.async_block_till_done()
+
+    assert service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_increase_allowed_after_15_minutes(hass, freezer):
+    now = dt_util.parse_datetime("2026-01-25T10:00:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=70,
+        current_level=50,
+        applied_delta=20,
+        charging=True,
+        planned_dispatches=[],
+        last_increase_update=now.isoformat(),
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+    async_mock_service(hass, "input_datetime", "set_datetime")
+
+    _freeze_time(hass, freezer, now + timedelta(minutes=16))
+    hass.states.async_set("input_number.car_battery_level_target", "80")
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(service_calls[0].data["value"])) == 30
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_blocked_during_planned_dispatch_span(hass, freezer):
+    now = dt_util.parse_datetime("2026-01-25T09:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=True,
+        planned_dispatches=[
+            {
+                "start": "2026-01-25T09:00:00+00:00",
+                "end": "2026-01-25T10:00:00+00:00",
+            }
+        ],
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_allowed_before_first_planned_dispatch(hass, freezer):
+    now = dt_util.parse_datetime("2026-01-25T08:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=True,
+        planned_dispatches=[
+            {
+                "start": "2026-01-25T09:00:00+00:00",
+                "end": "2026-01-25T10:00:00+00:00",
+            }
+        ],
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(service_calls[0].data["value"])) == 10
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_allowed_after_last_planned_dispatch(hass, freezer):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=True,
+        planned_dispatches=[
+            {
+                "start": "2026-01-25T09:00:00+00:00",
+                "end": "2026-01-25T10:00:00+00:00",
+            }
+        ],
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(service_calls[0].data["value"])) == 10
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_allowed_when_dispatches_explicitly_empty(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=True,
+        planned_dispatches=[],
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(service_calls[0].data["value"])) == 10
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_blocked_when_dispatches_unavailable(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches=[],
+    )
+    hass.states.async_set(DISPATCH_SENSOR_ID, "off", {})
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_blocked_when_dispatches_unknown(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=True,
+        planned_dispatches=[],
+    )
+    hass.states.async_set(
+        DISPATCH_SENSOR_ID,
+        "off",
+        {"planned_dispatches": "unknown"},
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert service_calls == []
 
 
 @pytest.mark.asyncio

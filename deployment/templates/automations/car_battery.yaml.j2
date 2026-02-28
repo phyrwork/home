@@ -31,10 +31,15 @@
       entity_id:
         - input_number.car_battery_level_target
         - sensor.car_battery_level
+        - binary_sensor.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_dispatching
     - platform: homeassistant
       event: start
+    - platform: time_pattern
+      minutes: "/5"
   action:
     - variables:
+        applied_delta_entity_id: "number.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_charge_target"
+        dispatching_entity_id: "binary_sensor.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_dispatching"
         target_level: "{{ states('input_number.car_battery_level_target') | float(0) }}"
         current_level: "{{ states('sensor.car_battery_level') | float(0) }}"
         required_delta: "{{ [target_level - current_level, 0] | max | round(0) | int }}"
@@ -47,21 +52,76 @@
           {% else %}
             {{ [required_delta, 100] | min }}
           {% endif %}
-        applied_delta: >-
-          {{ states('number.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_charge_target') | int(-1) }}
-        # TODO: replace sensor.ev_charger_power with the Shelly EM entity once the
-        # Octopus Charge smart socket power meter is migrated.
-        charger_power: "{{ states('sensor.ev_charger_power') | float(0) }}"
-        charging_now: >-
-          {{ is_state('binary_sensor.car_charging', 'on') or charger_power > 200 }}
+        applied_delta: "{{ states(applied_delta_entity_id) | int(-1) }}"
+        last_increase_update_raw: "{{ states('input_datetime.car_battery_intelligent_target_last_increase_update') }}"
+        planned_dispatches_raw: "{{ state_attr(dispatching_entity_id, 'planned_dispatches') }}"
+        planned_dispatches_available: >-
+          {{ planned_dispatches_raw not in [none, 'unknown', 'unavailable', 'none', ''] }}
+        planned_dispatches: >-
+          {% if planned_dispatches_raw is string %}
+            {% if planned_dispatches_raw in ['unknown', 'unavailable', 'none', ''] %}
+              []
+            {% else %}
+              {{ planned_dispatches_raw | from_json }}
+            {% endif %}
+          {% else %}
+            {{ planned_dispatches_raw | default([], true) }}
+          {% endif %}
+        planned_starts: >-
+          {{ planned_dispatches | map(attribute='start') | list }}
+        planned_ends: >-
+          {{ planned_dispatches | map(attribute='end') | list }}
+        first_planned_dispatch_start: >-
+          {% if planned_starts %}
+            {{ as_datetime(planned_starts | min).isoformat() }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        last_planned_dispatch_end: >-
+          {% if planned_ends %}
+            {{ as_datetime(planned_ends | max).isoformat() }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        is_increase: "{{ requested_delta > applied_delta }}"
+        is_decrease: "{{ requested_delta < applied_delta }}"
+        # Increases are safe to allow (with rate limiting): they usually come from
+        # an explicit user target increase or a reported SOC drop, where rescheduling
+        # is acceptable.
+        increase_allowed: >-
+          {% if not is_increase %}
+            false
+          {% elif last_increase_update_raw in [none, 'unknown', 'unavailable', 'none', ''] %}
+            true
+          {% else %}
+            {{ (as_timestamp(now()) - as_timestamp(as_datetime(last_increase_update_raw))) >= 15 * 60 }}
+          {% endif %}
+        # Avoid decreases during an announced dispatch schedule window to reduce the
+        # risk of disrupting or resetting the active intelligent schedule.
+        decrease_allowed: >-
+          {% if not is_decrease %}
+            false
+          {% elif not planned_dispatches_available %}
+            false
+          {% elif planned_dispatches | count == 0 %}
+            true
+          {% else %}
+            {% set first_start = as_datetime(first_planned_dispatch_start) if first_planned_dispatch_start not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% set last_end = as_datetime(last_planned_dispatch_end) if last_planned_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% if first_start and last_end %}
+              {{ now() < first_start or now() > last_end }}
+            {% else %}
+              false
+            {% endif %}
+          {% endif %}
         should_update: >-
           {{
             applied_delta >= 0
             and requested_delta > 0
             and requested_delta != applied_delta
             and (
-              not charging_now
-              or (requested_delta - applied_delta) | abs >= 5
+              (is_increase and increase_allowed)
+              or (is_decrease and decrease_allowed)
             )
           }}
     - choose:
@@ -74,6 +134,16 @@
                 entity_id: number.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_charge_target
               data:
                 value: "{{ requested_delta }}"
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: "{{ is_increase }}"
+                  sequence:
+                    - service: input_datetime.set_datetime
+                      target:
+                        entity_id: input_datetime.car_battery_intelligent_target_last_increase_update
+                      data:
+                        datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
   mode: restart
 
 - id: car_battery_stop_charge_at_target

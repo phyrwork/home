@@ -1,0 +1,4 @@
+car_battery_intelligent_target_last_increase_update:
+  name: Car Battery Intelligent Target Last Increase Update
+  has_date: true
+  has_time: true
