@@ -22,6 +22,9 @@ DISPATCH_SENSOR_ID = (
 TARGET_NUMBER_ID = (
     f"number.octopus_energy_{TEST_EV_CHARGER_DEVICE_ID}_intelligent_charge_target"
 )
+SMART_CHARGE_SWITCH_ID = (
+    f"switch.octopus_energy_{TEST_EV_CHARGER_DEVICE_ID}_intelligent_smart_charge"
+)
 
 
 def _load_automation(automation_id=AUTOMATION_ID):
@@ -68,14 +71,17 @@ def _set_sync_base_states(
     applied_delta,
     charging,
     planned_dispatches,
+    started_dispatches=None,
     charger_power=0,
     last_increase_update=None,
+    smart_charge_on=True,
 ):
     hass.states.async_set("input_number.car_battery_level_target", str(target_level))
     hass.states.async_set("sensor.car_battery_level", str(current_level))
     hass.states.async_set(TARGET_NUMBER_ID, str(applied_delta))
     hass.states.async_set("binary_sensor.car_charging", "on" if charging else "off")
     hass.states.async_set("sensor.ev_charger_power", str(charger_power))
+    hass.states.async_set(SMART_CHARGE_SWITCH_ID, "on" if smart_charge_on else "off")
     if last_increase_update is None:
         hass.states.async_set(
             "input_datetime.car_battery_intelligent_target_last_increase_update",
@@ -89,7 +95,10 @@ def _set_sync_base_states(
     hass.states.async_set(
         DISPATCH_SENSOR_ID,
         "off",
-        {"planned_dispatches": planned_dispatches},
+        {
+            "planned_dispatches": planned_dispatches,
+            "started_dispatches": started_dispatches or [],
+        },
     )
 
 
@@ -317,6 +326,58 @@ async def test_sync_decrease_blocked_when_dispatches_unknown(
     await hass.async_block_till_done()
 
     assert service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_blocked_during_started_dispatch_when_planned_empty(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T09:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=True,
+        planned_dispatches=[],
+        started_dispatches=[
+            {
+                "start": "2026-01-25T09:00:00+00:00",
+                "end": "2026-01-25T10:00:00+00:00",
+            }
+        ],
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_turns_off_smart_charge_when_required_delta_is_zero(hass, freezer):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=75,
+        current_level=80,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches=[],
+        smart_charge_on=True,
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    turn_off_calls = async_mock_service(hass, "switch", "turn_off")
+
+    hass.states.async_set("input_number.car_battery_level_target", "70")
+    await hass.async_block_till_done()
+
+    assert len(turn_off_calls) == 1
+    assert turn_off_calls[0].data["entity_id"] == [SMART_CHARGE_SWITCH_ID]
 
 
 @pytest.mark.asyncio

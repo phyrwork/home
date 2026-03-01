@@ -40,23 +40,22 @@
     - variables:
         applied_delta_entity_id: "number.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_charge_target"
         dispatching_entity_id: "binary_sensor.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_dispatching"
+        smart_charge_switch_entity_id: "switch.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_smart_charge"
         target_level: "{{ states('input_number.car_battery_level_target') | float(0) }}"
         current_level: "{{ states('sensor.car_battery_level') | float(0) }}"
-        required_delta: "{{ [target_level - current_level, 0] | max | round(0) | int }}"
+        target_delta_required: "{{ [target_level - current_level, 0] | max | round(0) | int }}"
         # Octopus target accepts 10-100. Guarantee some progress for non-zero deltas.
-        requested_delta: >-
-          {% if required_delta <= 0 %}
+        target_delta_requested: >-
+          {% if target_delta_required <= 0 %}
             0
-          {% elif required_delta < 10 %}
+          {% elif target_delta_required < 10 %}
             10
           {% else %}
-            {{ [required_delta, 100] | min }}
+            {{ [target_delta_required, 100] | min }}
           {% endif %}
-        applied_delta: "{{ states(applied_delta_entity_id) | int(-1) }}"
-        last_increase_update_raw: "{{ states('input_datetime.car_battery_intelligent_target_last_increase_update') }}"
+        target_delta_applied: "{{ states(applied_delta_entity_id) | int(-1) }}"
+        last_increase_update_at_raw: "{{ states('input_datetime.car_battery_intelligent_target_last_increase_update') }}"
         planned_dispatches_raw: "{{ state_attr(dispatching_entity_id, 'planned_dispatches') }}"
-        planned_dispatches_available: >-
-          {{ planned_dispatches_raw not in [none, 'unknown', 'unavailable', 'none', ''] }}
         planned_dispatches: >-
           {% if planned_dispatches_raw is string %}
             {% if planned_dispatches_raw in ['unknown', 'unavailable', 'none', ''] %}
@@ -67,73 +66,108 @@
           {% else %}
             {{ planned_dispatches_raw | default([], true) }}
           {% endif %}
-        planned_starts: >-
-          {{ planned_dispatches | map(attribute='start') | list }}
-        planned_ends: >-
-          {{ planned_dispatches | map(attribute='end') | list }}
-        first_planned_dispatch_start: >-
-          {% if planned_starts %}
-            {{ as_datetime(planned_starts | min).isoformat() }}
+        started_dispatches_raw: "{{ state_attr(dispatching_entity_id, 'started_dispatches') }}"
+        started_dispatches: >-
+          {% if started_dispatches_raw is string %}
+            {% if started_dispatches_raw in ['unknown', 'unavailable', 'none', ''] %}
+              []
+            {% else %}
+              {{ started_dispatches_raw | from_json }}
+            {% endif %}
+          {% else %}
+            {{ started_dispatches_raw | default([], true) }}
+          {% endif %}
+        dispatch_attributes_available: >-
+          {{
+            planned_dispatches_raw not in [none, 'unknown', 'unavailable', 'none', '']
+            and started_dispatches_raw not in [none, 'unknown', 'unavailable', 'none', '']
+          }}
+        dispatches: >-
+          {{ planned_dispatches + started_dispatches }}
+        dispatch_start_times: >-
+          {{ dispatches | map(attribute='start') | list }}
+        dispatch_end_times: >-
+          {{ dispatches | map(attribute='end') | list }}
+        earliest_dispatch_start: >-
+          {% if dispatch_start_times %}
+            {{ as_datetime(dispatch_start_times | min).isoformat() }}
           {% else %}
             {{ none }}
           {% endif %}
-        last_planned_dispatch_end: >-
-          {% if planned_ends %}
-            {{ as_datetime(planned_ends | max).isoformat() }}
+        latest_dispatch_end: >-
+          {% if dispatch_end_times %}
+            {{ as_datetime(dispatch_end_times | max).isoformat() }}
           {% else %}
             {{ none }}
           {% endif %}
-        is_increase: "{{ requested_delta > applied_delta }}"
-        is_decrease: "{{ requested_delta < applied_delta }}"
+        is_increase: "{{ target_delta_requested > target_delta_applied }}"
+        is_decrease: "{{ target_delta_requested < target_delta_applied }}"
+        smart_charge_on: "{{ is_state(smart_charge_switch_entity_id, 'on') }}"
         # Increases are safe to allow (with rate limiting): they usually come from
         # an explicit user target increase or a reported SOC drop, where rescheduling
         # is acceptable.
-        increase_allowed: >-
+        should_allow_increase: >-
           {% if not is_increase %}
             false
-          {% elif last_increase_update_raw in [none, 'unknown', 'unavailable', 'none', ''] %}
+          {% elif last_increase_update_at_raw in [none, 'unknown', 'unavailable', 'none', ''] %}
             true
           {% else %}
-            {{ (as_timestamp(now()) - as_timestamp(as_datetime(last_increase_update_raw))) >= 15 * 60 }}
+            {{ (as_timestamp(now()) - as_timestamp(as_datetime(last_increase_update_at_raw))) >= 15 * 60 }}
           {% endif %}
         # Avoid decreases during an announced dispatch schedule window to reduce the
         # risk of disrupting or resetting the active intelligent schedule.
-        decrease_allowed: >-
+        should_allow_decrease: >-
           {% if not is_decrease %}
             false
-          {% elif not planned_dispatches_available %}
+          {% elif not dispatch_attributes_available %}
             false
-          {% elif planned_dispatches | count == 0 %}
+          {% elif dispatches | count == 0 %}
             true
           {% else %}
-            {% set first_start = as_datetime(first_planned_dispatch_start) if first_planned_dispatch_start not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
-            {% set last_end = as_datetime(last_planned_dispatch_end) if last_planned_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% set first_start = as_datetime(earliest_dispatch_start) if earliest_dispatch_start not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% set last_end = as_datetime(latest_dispatch_end) if latest_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
             {% if first_start and last_end %}
               {{ now() < first_start or now() > last_end }}
             {% else %}
               false
             {% endif %}
           {% endif %}
-        should_update: >-
+        should_disable_smart_charge: "{{ target_delta_requested <= 0 and smart_charge_on }}"
+        should_apply_target_update: >-
           {{
-            applied_delta >= 0
-            and requested_delta > 0
-            and requested_delta != applied_delta
+            target_delta_applied >= 0
+            and target_delta_requested > 0
+            and target_delta_requested != target_delta_applied
             and (
-              (is_increase and increase_allowed)
-              or (is_decrease and decrease_allowed)
+              (is_increase and should_allow_increase)
+              or (is_decrease and should_allow_decrease)
             )
           }}
     - choose:
         - conditions:
             - condition: template
-              value_template: "{{ should_update }}"
+              value_template: "{{ should_disable_smart_charge }}"
           sequence:
+            - service: switch.turn_off
+              target:
+                entity_id: "{{ smart_charge_switch_entity_id }}"
+        - conditions:
+            - condition: template
+              value_template: "{{ should_apply_target_update }}"
+          sequence:
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: "{{ not smart_charge_on }}"
+                  sequence:
+                    - service: switch.turn_on
+                      target:
+                        entity_id: "{{ smart_charge_switch_entity_id }}"
             - service: number.set_value
               target:
                 entity_id: number.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_charge_target
               data:
-                value: "{{ requested_delta }}"
+                value: "{{ target_delta_requested }}"
             - choose:
                 - conditions:
                     - condition: template
