@@ -371,13 +371,45 @@ async def test_sync_turns_off_smart_charge_when_required_delta_is_zero(hass, fre
         smart_charge_on=True,
     )
     await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    set_value_calls = async_mock_service(hass, "number", "set_value")
     turn_off_calls = async_mock_service(hass, "switch", "turn_off")
 
     hass.states.async_set("input_number.car_battery_level_target", "70")
     await hass.async_block_till_done()
 
+    assert len(set_value_calls) == 1
+    assert set_value_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(set_value_calls[0].data["value"])) == 10
     assert len(turn_off_calls) == 1
     assert turn_off_calls[0].data["entity_id"] == [SMART_CHARGE_SWITCH_ID]
+
+
+@pytest.mark.asyncio
+async def test_sync_resets_target_to_minimum_when_required_delta_is_zero_even_if_switch_already_off(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=75,
+        current_level=80,
+        applied_delta=30,
+        charging=False,
+        planned_dispatches=[],
+        smart_charge_on=False,
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    set_value_calls = async_mock_service(hass, "number", "set_value")
+    turn_off_calls = async_mock_service(hass, "switch", "turn_off")
+
+    hass.states.async_set("input_number.car_battery_level_target", "70")
+    await hass.async_block_till_done()
+
+    assert len(set_value_calls) == 1
+    assert set_value_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(set_value_calls[0].data["value"])) == 10
+    assert turn_off_calls == []
 
 
 @pytest.mark.asyncio
