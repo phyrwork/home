@@ -1,0 +1,46 @@
+sensor:
+  - name: Octopus Energy Electricity 21L4421345/2700007165105 Today Max Rate
+    unique_id: octopus_energy_electricity_21l4421345_2700007165105_today_max_rate
+    unit_of_measurement: GBP/kWh
+    state: >-
+      {% set rates_raw = state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates', 'rates') %}
+      {% if rates_raw is string %}
+        {% set rates = rates_raw | from_json %}
+      {% else %}
+        {% set rates = rates_raw | default([], true) %}
+      {% endif %}
+      {% set ns = namespace(values=[]) %}
+      {% for rate in rates %}
+        {% if rate.value_inc_vat is defined %}
+          {% set ns.values = ns.values + [rate.value_inc_vat | float] %}
+        {% elif rate.value is defined %}
+          {% set ns.values = ns.values + [rate.value | float] %}
+        {% endif %}
+      {% endfor %}
+      {% if ns.values %}
+        {{ (ns.values | max) | round(4) }}
+      {% else %}
+        {{ none }}
+      {% endif %}
+    availability: >-
+      {{
+        state_attr('sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates', 'rates')
+          not in [None, 'unknown', 'unavailable', 'none', '']
+      }}
+
+  - name: EV Petrol Effective Electricity Rate
+    unique_id: ev_petrol_effective_electricity_rate
+    unit_of_measurement: GBP/kWh
+    state: >-
+      {% set petrol_price = states('sensor.bar_hill_tesco_petrol_price') | float(none) %}
+      {% set multiplier = states('input_number.ev_petrol_effective_price_multiplier') | float(none) %}
+      {% if petrol_price is none or multiplier is none %}
+        {{ none }}
+      {% else %}
+        {{ (petrol_price * multiplier) | round(4) }}
+      {% endif %}
+    availability: >-
+      {{
+        states('sensor.bar_hill_tesco_petrol_price') not in ['unknown', 'unavailable', 'none']
+        and states('input_number.ev_petrol_effective_price_multiplier') not in ['unknown', 'unavailable', 'none']
+      }}

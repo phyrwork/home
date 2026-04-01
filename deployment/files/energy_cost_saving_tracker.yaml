@@ -1,0 +1,15 @@
+- name: EV Charger
+  power_sensor: sensor.ev_charger_energy_meter_power
+  active_power_threshold: 100
+  current_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate
+  baseline_rate_sensor: sensor.ev_petrol_effective_electricity_rate
+
+- name: Washing Machine
+  energy_sensor: sensor.washing_machine_energy
+  current_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate
+  baseline_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700007165105_today_max_rate
+
+- name: Dishwasher
+  energy_sensor: sensor.dishwasher_socket_energy
+  current_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate
+  baseline_rate_sensor: sensor.octopus_energy_electricity_21l4421345_2700007165105_today_max_rate

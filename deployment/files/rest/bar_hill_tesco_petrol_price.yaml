@@ -1,0 +1,22 @@
+resource: https://www.tesco.com/fuel_prices/fuel_prices_data.json
+scan_interval: 3600
+timeout: 30
+headers:
+  User-Agent: Mozilla/5.0
+  Accept: application/json
+sensor:
+  - name: Bar Hill Tesco Petrol Price
+    unique_id: bar_hill_tesco_petrol_price
+    unit_of_measurement: GBP/L
+    value_template: >-
+      {% set station = value_json.stations
+        | selectattr('postcode', 'equalto', 'CB23 8EL')
+        | list
+        | first %}
+      {% if station and station.prices.E10 is defined %}
+        {{ (station.prices.E10 / 100) | round(3) }}
+      {% elif station and station.prices.E5 is defined %}
+        {{ (station.prices.E5 / 100) | round(3) }}
+      {% else %}
+        {{ none }}
+      {% endif %}

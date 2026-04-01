@@ -1,0 +1,5 @@
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+energy_cost_saving_tracker.egg-info/
+

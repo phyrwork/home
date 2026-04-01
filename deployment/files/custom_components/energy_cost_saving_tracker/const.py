@@ -1,0 +1,31 @@
+DOMAIN = "energy_cost_saving_tracker"
+
+PLATFORMS = ["sensor"]
+
+CONF_NAME = "name"
+CONF_ENERGY_SENSOR = "energy_sensor"
+CONF_POWER_SENSOR = "power_sensor"
+CONF_CURRENT_RATE_SENSOR = "current_rate_sensor"
+CONF_BASELINE_RATE_SENSOR = "baseline_rate_sensor"
+CONF_ACTIVE_POWER_THRESHOLD = "active_power_threshold"
+CONF_POWER_INTEGRATION_METHOD = "power_integration_method"
+
+DEFAULT_ACTIVE_POWER_THRESHOLD = 0.0
+DEFAULT_POWER_INTEGRATION_METHOD = "left"
+POWER_INTEGRATION_METHODS = [DEFAULT_POWER_INTEGRATION_METHOD]
+
+STATE_CURRENT_RATE = "current_rate"
+STATE_BASELINE_RATE = "baseline_rate"
+STATE_CURRENT_SAVINGS_RATE = "current_savings_rate"
+STATE_TOTAL_ENERGY = "total_energy"
+STATE_TOTAL_SAVINGS = "total_savings"
+STATE_LAST_TOTAL_ENERGY = "last_total_energy"
+STATE_LAST_UPDATED_TIME = "last_updated_time"
+
+PERSISTED_STATE_KEYS = [
+    STATE_TOTAL_ENERGY,
+    STATE_TOTAL_SAVINGS,
+    STATE_LAST_TOTAL_ENERGY,
+    STATE_LAST_UPDATED_TIME,
+]
+
