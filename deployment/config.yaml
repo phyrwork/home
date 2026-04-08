@@ -381,6 +381,18 @@
           - "--exclude=.rsync-filter"
       notify: restart ha
 
+    - name: install energy cost saving tracker custom component
+      ansible.builtin.synchronize:
+        src: custom_components/energy_cost_saving_tracker
+        dest: "{{ ha_config_dir }}/custom_components/energy_cost_saving_tracker"
+        recursive: yes
+        delete: yes
+        links: yes
+        rsync_opts:
+          - "--filter=merge\\ {{ playbook_dir }}/files/custom_components/energy_cost_saving_tracker/.rsync-filter"
+          - "--exclude=.rsync-filter"
+      notify: restart ha
+
     - name: install configuration
       copy:
         src: configuration.yaml
@@ -397,6 +409,12 @@
       copy:
         src: energy_cost_forecast.yaml
         dest: "{{ ha_config_dir }}/energy_cost_forecast.yaml"
+      notify: restart ha
+
+    - name: install energy cost saving tracker configuration
+      copy:
+        src: energy_cost_saving_tracker.yaml
+        dest: "{{ ha_config_dir }}/energy_cost_saving_tracker.yaml"
       notify: restart ha
 
     - name: install waste collection schedule configuration

@@ -1,0 +1,11 @@
+{
+  "domain": "energy_cost_saving_tracker",
+  "name": "Energy Cost Saving Tracker",
+  "version": "0.1.0",
+  "documentation": "https://github.com/connor/home/blob/main/deployment/files/custom_components/energy_cost_saving_tracker/README.md",
+  "requirements": [],
+  "codeowners": ["@connor"],
+  "config_flow": true,
+  "iot_class": "local_push"
+}
+

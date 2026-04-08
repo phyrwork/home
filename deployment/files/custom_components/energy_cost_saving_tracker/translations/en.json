@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Energy Cost Saving Tracker",
+        "data": {
+          "name": "Name",
+          "energy_sensor": "Energy entity (optional)",
+          "power_sensor": "Power entity (optional)",
+          "current_rate_sensor": "Current rate entity",
+          "baseline_rate_sensor": "Baseline rate entity",
+          "active_power_threshold": "Active power threshold",
+          "power_integration_method": "Power integration method"
+        }
+      }
+    },
+    "error": {
+      "energy_or_power_required": "Configure exactly one of an energy sensor or power sensor."
+    }
+  }
+}
