@@ -75,6 +75,10 @@ def _set_sync_base_states(
     charger_power=0,
     last_increase_update=None,
     smart_charge_on=True,
+    current_dispatch_start=None,
+    current_dispatch_end=None,
+    next_dispatch_start=None,
+    next_dispatch_end=None,
 ):
     hass.states.async_set("input_number.car_battery_level_target", str(target_level))
     hass.states.async_set("sensor.car_battery_level", str(current_level))
@@ -98,6 +102,10 @@ def _set_sync_base_states(
         {
             "planned_dispatches": planned_dispatches,
             "started_dispatches": started_dispatches or [],
+            "current_start": current_dispatch_start,
+            "current_end": current_dispatch_end,
+            "next_start": next_dispatch_start,
+            "next_end": next_dispatch_end,
         },
     )
 
@@ -410,6 +418,80 @@ async def test_sync_resets_target_to_minimum_when_required_delta_is_zero_even_if
     assert set_value_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
     assert int(float(set_value_calls[0].data["value"])) == 10
     assert turn_off_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_noops_when_current_level_is_unavailable(hass, freezer):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=75,
+        current_level=80,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches=[],
+        smart_charge_on=True,
+    )
+    hass.states.async_set("sensor.car_battery_level", "unavailable")
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    set_value_calls = async_mock_service(hass, "number", "set_value")
+    turn_off_calls = async_mock_service(hass, "switch", "turn_off")
+
+    hass.states.async_set("input_number.car_battery_level_target", "70")
+    await hass.async_block_till_done()
+
+    assert set_value_calls == []
+    assert turn_off_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_noops_when_octopus_entities_are_missing(hass, freezer):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    hass.states.async_set("sensor.car_battery_level", "50")
+    hass.states.async_set(
+        "input_datetime.car_battery_intelligent_target_last_increase_update",
+        "unknown",
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    set_value_calls = async_mock_service(hass, "number", "set_value")
+    turn_on_calls = async_mock_service(hass, "switch", "turn_on")
+
+    hass.states.async_set("input_number.car_battery_level_target", "95")
+    await hass.async_block_till_done()
+
+    assert set_value_calls == []
+    assert turn_on_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_uses_dispatch_summary_when_dispatch_lists_are_stringified(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches="[{\'start\': datetime.datetime(2026, 1, 25, 22, 0), \'end\': datetime.datetime(2026, 1, 25, 23, 0)}]",
+        started_dispatches="[]",
+        next_dispatch_start="2026-01-25T22:00:00+00:00",
+        next_dispatch_end="2026-01-25T23:00:00+00:00",
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(service_calls[0].data["value"])) == 10
 
 
 @pytest.mark.asyncio
