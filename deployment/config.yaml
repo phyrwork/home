@@ -17,6 +17,34 @@
         ha_api_token: "{{ ha_api_token_cmd.stdout }}"
       no_log: true
 
+    - name: validate configured octopus intelligent entity ids exist
+      shell: |
+        python - <<'PY'
+        import json
+        from pathlib import Path
+        entity_registry = json.loads(Path("{{ ha_config_dir }}/.storage/core.entity_registry").read_text())
+        entity_ids = {
+            entity["entity_id"]
+            for entity in entity_registry["data"]["entities"]
+            if entity.get("disabled_by") is None
+        }
+        expected = [
+            "number.octopus_energy_{{ ev_charger_device_id }}_intelligent_charge_target",
+            "binary_sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatching",
+            "switch.octopus_energy_{{ ev_charger_device_id }}_intelligent_smart_charge",
+        ]
+        missing = [entity_id for entity_id in expected if entity_id not in entity_ids]
+        if missing:
+            raise SystemExit(
+                "Configured ev_charger_device_id does not match Home Assistant entity registry. Missing: "
+                + ", ".join(missing)
+            )
+        print("Validated Octopus Intelligent entity ids:", ", ".join(expected))
+        PY
+      args:
+        executable: /bin/sh
+      changed_when: false
+
   handlers:
     # n.b. Play-level handlers are callable from roles included by the play.
 
