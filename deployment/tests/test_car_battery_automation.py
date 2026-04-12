@@ -79,6 +79,8 @@ def _set_sync_base_states(
     current_dispatch_end=None,
     next_dispatch_start=None,
     next_dispatch_end=None,
+    completed_dispatches=None,
+    dispatch_state="off",
 ):
     hass.states.async_set("input_number.car_battery_level_target", str(target_level))
     hass.states.async_set("sensor.car_battery_level", str(current_level))
@@ -98,10 +100,11 @@ def _set_sync_base_states(
         )
     hass.states.async_set(
         DISPATCH_SENSOR_ID,
-        "off",
+        dispatch_state,
         {
             "planned_dispatches": planned_dispatches,
             "started_dispatches": started_dispatches or [],
+            "completed_dispatches": completed_dispatches or [],
             "current_start": current_dispatch_start,
             "current_end": current_dispatch_end,
             "next_start": next_dispatch_start,
@@ -355,6 +358,7 @@ async def test_sync_decrease_blocked_during_started_dispatch_when_planned_empty(
                 "end": "2026-01-25T10:00:00+00:00",
             }
         ],
+        dispatch_state="on",
     )
     await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
     service_calls = async_mock_service(hass, "number", "set_value")
@@ -363,6 +367,94 @@ async def test_sync_decrease_blocked_during_started_dispatch_when_planned_empty(
     await hass.async_block_till_done()
 
     assert service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_blocked_when_dispatch_sensor_on_even_if_attributes_empty(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T09:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=True,
+        planned_dispatches=[],
+        started_dispatches=[],
+        dispatch_state="on",
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_blocked_until_visible_dispatch_end_after_sensor_turns_off(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T09:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches=[],
+        started_dispatches=[
+            {
+                "start": "2026-01-25T09:00:00+00:00",
+                "end": "2026-01-25T10:00:00+00:00",
+            }
+        ],
+        dispatch_state="off",
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_decrease_allowed_after_visible_dispatch_end_from_completed_dispatch(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T10:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=80,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches=[],
+        started_dispatches=[],
+        completed_dispatches=[
+            {
+                "start": "2026-01-25T09:00:00+00:00",
+                "end": "2026-01-25T10:00:00+00:00",
+            }
+        ],
+        dispatch_state="off",
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_level_target", "90")
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(service_calls[0].data["value"])) == 10
 
 
 @pytest.mark.asyncio
