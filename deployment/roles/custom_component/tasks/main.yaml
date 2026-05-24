@@ -1,35 +1,111 @@
-- name: Check git is present
-  command: which git
-  changed_when: no
-
 - name: Ensure custom_components directory exists
   ansible.builtin.file:
     path: "{{ ha_custom_components_dir }}"
     state: directory
     mode: "0755"
 
-- name: Ensure source root directory exists
-  ansible.builtin.file:
-    path: "{{ ha_src_dir }}/github.com/{{ component_full_name | regex_replace('/[^/]+$', '') }}"
-    state: directory
-    mode: "0755"
+- name: Set custom component paths
+  ansible.builtin.set_fact:
+    component_source_id: "{{ component_full_name }}@{{ component_version }}"
+    component_archive_path: >-
+      /tmp/{{ component_domain }}-{{ component_version | regex_replace('[^A-Za-z0-9_.-]', '_') }}.tar.gz
+    component_install_path: "{{ ha_custom_components_dir }}/{{ component_domain }}"
+    component_extract_path: "{{ ha_custom_components_dir }}/.{{ component_domain }}.extract"
 
-- name: Clone repository
-  ansible.builtin.git:
-    repo: "https://github.com/{{ component_full_name }}.git"
-    dest: "{{ ha_src_dir }}/github.com/{{ component_full_name }}"
-    version: "{{ component_version }}"
-    clone: yes
-    update: yes
-  notify: restart ha
+- name: Check deployed custom component source marker
+  ansible.builtin.stat:
+    path: "{{ component_install_path }}/.deployed-source"
+  register: component_source_marker
 
-- name: Install custom component
-  ansible.builtin.copy:
-    src: "{{ ha_src_dir }}/github.com/{{ component_full_name }}/custom_components/{{ component_domain }}/"
-    dest: "{{ ha_custom_components_dir }}/{{ component_domain }}"
-    remote_src: yes
-    mode: "0755"
-  notify: restart ha
+- name: Read deployed custom component source marker
+  ansible.builtin.slurp:
+    src: "{{ component_install_path }}/.deployed-source"
+  register: component_source_marker_content
+  when: component_source_marker.stat.exists
+
+- name: Set deployed custom component source
+  ansible.builtin.set_fact:
+    component_deployed_source: >-
+      {{
+        (component_source_marker_content.content | b64decode | trim)
+        if component_source_marker.stat.exists
+        else ''
+      }}
+
+- name: Check installed custom component path
+  ansible.builtin.stat:
+    path: "{{ component_install_path }}"
+    follow: no
+  register: component_install_path_stat
+
+- name: Install custom component from pinned archive
+  when: >
+    component_deployed_source != component_source_id
+    or component_install_path_stat.stat.islnk | default(false)
+  block:
+    - name: Download custom component archive
+      ansible.builtin.get_url:
+        url: "https://codeload.github.com/{{ component_full_name }}/tar.gz/{{ component_version }}"
+        dest: "{{ component_archive_path }}"
+        mode: "0644"
+
+    - name: Remove stale custom component extract directory
+      ansible.builtin.file:
+        path: "{{ component_extract_path }}"
+        state: absent
+
+    - name: Create custom component extract directory
+      ansible.builtin.file:
+        path: "{{ component_extract_path }}"
+        state: directory
+        mode: "0755"
+
+    - name: Extract custom component from archive
+      ansible.builtin.shell: |
+        archive_root="$(tar -tzf "{{ component_archive_path }}" | sed -n '1p')"
+        tar -xzf "{{ component_archive_path }}" \
+          -C "{{ component_extract_path }}" \
+          --strip-components=3 \
+          "${archive_root}custom_components/{{ component_domain }}"
+      args:
+        executable: /bin/sh
+
+    - name: Check custom component exists in archive
+      ansible.builtin.stat:
+        path: "{{ component_extract_path }}/manifest.json"
+      register: component_manifest
+
+    - name: Fail when custom component is missing from archive
+      ansible.builtin.fail:
+        msg: >-
+          {{ component_full_name }} does not contain
+          custom_components/{{ component_domain }}/manifest.json
+          at {{ component_version }}
+      when: not component_manifest.stat.exists
+
+    - name: Remove existing custom component install directory
+      ansible.builtin.file:
+        path: "{{ component_install_path }}"
+        state: absent
+
+    - name: Move extracted custom component into Home Assistant config
+      ansible.builtin.command:
+        argv:
+          - mv
+          - "{{ component_extract_path }}"
+          - "{{ component_install_path }}"
+      notify: restart ha
+
+    - name: Write deployed custom component source marker
+      ansible.builtin.copy:
+        content: "{{ component_source_id }}\n"
+        dest: "{{ component_install_path }}/.deployed-source"
+        mode: "0644"
+
+    - name: Remove downloaded custom component archive
+      ansible.builtin.file:
+        path: "{{ component_archive_path }}"
+        state: absent
 
 - name: Install latest release sensor
   template:

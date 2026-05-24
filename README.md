@@ -84,3 +84,6 @@ Notes:
   `op` is authenticated before running.
 - Most config changes use targeted Home Assistant reload services; full restarts are
   reserved for custom components and non-reloadable config (e.g. HTTP/ZHA).
+- The Home Assistant host uses Raspberry Pi SD-card storage, so recursive filesystem
+  walks are relatively expensive. Git-backed custom components are installed directly
+  from pinned GitHub archives instead of cloned and copied on every deploy.

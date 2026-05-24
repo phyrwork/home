@@ -180,28 +180,28 @@
         component_name: Local Tuya
         component_full_name: rospogrigio/localtuya
         component_domain: localtuya
-        component_version: "v5.2.4"
+        component_version: "v5.2.5"
 
     - role: custom_component
       vars:
         component_name: Octopus Energy
         component_full_name: BottlecapDave/HomeAssistant-OctopusEnergy
         component_domain: octopus_energy
-        component_version: "44a53697647e586b513114cd8f52ba2a69e5e832"
+        component_version: "v18.2.1"
 
     - role: custom_component
       vars:
         component_name: Pirate Weather
         component_full_name: Pirate-Weather/pirate-weather-ha
         component_domain: pirateweather
-        component_version: "v1.8.3"
+        component_version: "v1.8.9"
 
     - role: custom_component
       vars:
         component_name: ZHA Toolkit
         component_full_name: mdeweerd/zha-toolkit
         component_domain: zha_toolkit
-        component_version: "v1.1.33"
+        component_version: "v1.1.38"
 
     - role: custom_component
       vars:
@@ -215,7 +215,7 @@
         component_name: Waste Collection Schedule
         component_full_name: mampfes/hacs_waste_collection_schedule
         component_domain: waste_collection_schedule
-        component_version: "2.8.0"
+        component_version: "v2.25.0"
 
     - role: custom_component
       vars:
@@ -229,7 +229,7 @@
         component_name: Versatile Thermostat
         component_full_name: jmcollin78/versatile_thermostat
         component_domain: versatile_thermostat
-        component_version: "8.6.0"
+        component_version: "10.0.1"
 
   tasks:
     - name: create zigpy ota directory
