@@ -81,6 +81,163 @@
         target_delta_requested: "{{ target_delta_requested_raw | int(0) if required_inputs_available else none }}"
         target_delta_applied: "{{ states(applied_delta_entity_id) | int(-1) if octopus_entities_available else none }}"
         smart_charge_on: "{{ is_state(smart_charge_switch_entity_id, 'on') if octopus_entities_available else false }}"
+        last_increase_update_at_raw: "{{ states('input_datetime.car_battery_intelligent_target_last_increase_update') }}"
+        is_increase: "{{ (target_delta_requested | int(0)) > (target_delta_applied | int(-1)) }}"
+        is_decrease: "{{ (target_delta_requested | int(0)) < (target_delta_applied | int(-1)) }}"
+        should_allow_increase: >-
+          {% if not is_increase %}
+            false
+          {% elif last_increase_update_at_raw in [none, 'unknown', 'unavailable', 'none', ''] %}
+            true
+          {% else %}
+            {{ (as_timestamp(now()) - as_timestamp(as_datetime(last_increase_update_at_raw))) >= 15 * 60 }}
+          {% endif %}
+        # Octopus exposes dispatch windows in a few different shapes over the
+        # lifecycle of an intelligent session. Parse all of the representations
+        # we can see so the decrease guard does not depend on one attribute
+        # always being populated.
+        planned_dispatches_raw: "{{ state_attr(dispatching_entity_id, 'planned_dispatches') }}"
+        planned_dispatches: >-
+          {% if planned_dispatches_raw is string %}
+            {% if planned_dispatches_raw in ['unknown', 'unavailable', 'none', ''] %}
+              []
+            {% elif planned_dispatches_raw[:1] == '[' and 'datetime.datetime(' not in planned_dispatches_raw %}
+              {{ planned_dispatches_raw | from_json }}
+            {% else %}
+              []
+            {% endif %}
+          {% else %}
+            {{ planned_dispatches_raw | default([], true) }}
+          {% endif %}
+        started_dispatches_raw: "{{ state_attr(dispatching_entity_id, 'started_dispatches') }}"
+        started_dispatches: >-
+          {% if started_dispatches_raw is string %}
+            {% if started_dispatches_raw in ['unknown', 'unavailable', 'none', ''] %}
+              []
+            {% elif started_dispatches_raw[:1] == '[' and 'datetime.datetime(' not in started_dispatches_raw %}
+              {{ started_dispatches_raw | from_json }}
+            {% else %}
+              []
+            {% endif %}
+          {% else %}
+            {{ started_dispatches_raw | default([], true) }}
+          {% endif %}
+        completed_dispatches_raw: "{{ state_attr(dispatching_entity_id, 'completed_dispatches') }}"
+        completed_dispatches: >-
+          {% if completed_dispatches_raw is string %}
+            {% if completed_dispatches_raw in ['unknown', 'unavailable', 'none', ''] %}
+              []
+            {% elif completed_dispatches_raw[:1] == '[' and 'datetime.datetime(' not in completed_dispatches_raw %}
+              {{ completed_dispatches_raw | from_json }}
+            {% else %}
+              []
+            {% endif %}
+          {% else %}
+            {{ completed_dispatches_raw | default([], true) }}
+          {% endif %}
+        current_dispatch_start_raw: "{{ state_attr(dispatching_entity_id, 'current_start') }}"
+        current_dispatch_end_raw: "{{ state_attr(dispatching_entity_id, 'current_end') }}"
+        next_dispatch_start_raw: "{{ state_attr(dispatching_entity_id, 'next_start') }}"
+        next_dispatch_end_raw: "{{ state_attr(dispatching_entity_id, 'next_end') }}"
+        is_dispatching: "{{ is_state(dispatching_entity_id, 'on') }}"
+        # Treat empty dispatch lists as trustworthy only when the sensor is not
+        # actively dispatching and there is no other visible window end to honor.
+        dispatch_attributes_available: >-
+          {{
+            planned_dispatches_raw not in [none, 'unknown', 'unavailable', 'none', '']
+            and started_dispatches_raw not in [none, 'unknown', 'unavailable', 'none', '']
+          }}
+        dispatch_window_summary_available: >-
+          {{
+            current_dispatch_start_raw not in [none, 'unknown', 'unavailable', 'none', '']
+            or current_dispatch_end_raw not in [none, 'unknown', 'unavailable', 'none', '']
+            or next_dispatch_start_raw not in [none, 'unknown', 'unavailable', 'none', '']
+            or next_dispatch_end_raw not in [none, 'unknown', 'unavailable', 'none', '']
+          }}
+        dispatches: >-
+          {{ planned_dispatches + started_dispatches }}
+        visible_dispatches: >-
+          {{ planned_dispatches + started_dispatches + completed_dispatches }}
+        visible_dispatch_start_times: >-
+          {{ visible_dispatches | map(attribute='start') | list }}
+        visible_dispatch_end_times: >-
+          {{ visible_dispatches | map(attribute='end') | list }}
+        earliest_visible_dispatch_start: >-
+          {% if visible_dispatch_start_times %}
+            {{ as_datetime(visible_dispatch_start_times | min).isoformat() }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        latest_visible_dispatch_end: >-
+          {% if visible_dispatch_end_times %}
+            {{ as_datetime(visible_dispatch_end_times | max).isoformat() }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        current_dispatch_start: >-
+          {% if current_dispatch_start_raw not in [none, 'unknown', 'unavailable', 'none', ''] %}
+            {{ as_datetime(current_dispatch_start_raw).isoformat() }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        current_dispatch_end: >-
+          {% if current_dispatch_end_raw not in [none, 'unknown', 'unavailable', 'none', ''] %}
+            {{ as_datetime(current_dispatch_end_raw).isoformat() }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        next_dispatch_start: >-
+          {% if next_dispatch_start_raw not in [none, 'unknown', 'unavailable', 'none', ''] %}
+            {{ as_datetime(next_dispatch_start_raw).isoformat() }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        next_dispatch_end: >-
+          {% if next_dispatch_end_raw not in [none, 'unknown', 'unavailable', 'none', ''] %}
+            {{ as_datetime(next_dispatch_end_raw).isoformat() }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        # Never decrease during an active Octopus intelligent dispatch. Once
+        # dispatching turns off, keep blocking until we are past the last
+        # visible dispatch end from any current attribute representation.
+        should_allow_decrease: >-
+          {% if not is_decrease %}
+            false
+          {% elif is_dispatching %}
+            false
+          {% elif dispatch_attributes_available and visible_dispatches | count > 0 %}
+            {% set first_start = as_datetime(earliest_visible_dispatch_start) if earliest_visible_dispatch_start not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% set last_end = as_datetime(latest_visible_dispatch_end) if latest_visible_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% if first_start and last_end %}
+              {{ now() < first_start or now() > last_end }}
+            {% else %}
+              false
+            {% endif %}
+          {% elif dispatch_window_summary_available %}
+            {% set current_start = as_datetime(current_dispatch_start) if current_dispatch_start not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% set current_end = as_datetime(current_dispatch_end) if current_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% set next_start = as_datetime(next_dispatch_start) if next_dispatch_start not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% set next_end = as_datetime(next_dispatch_end) if next_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+            {% if current_start and current_end and now() >= current_start and now() <= current_end %}
+              false
+            {% elif next_start and now() < next_start %}
+              true
+            {% elif next_end and now() > next_end %}
+              true
+            {% elif not current_start and not current_end and not next_start and not next_end %}
+              {% set last_visible_end = as_datetime(latest_visible_dispatch_end) if latest_visible_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
+              {{ last_visible_end is none or now() > last_visible_end }}
+            {% else %}
+              false
+            {% endif %}
+          {% elif latest_visible_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] %}
+            {{ now() > as_datetime(latest_visible_dispatch_end) }}
+          {% elif dispatch_attributes_available and dispatches | count == 0 %}
+            true
+          {% else %}
+            false
+          {% endif %}
         should_reset_target_to_minimum: >-
           {{
             required_inputs_available
@@ -88,6 +245,7 @@
             and
             (target_delta_requested | int(0)) <= 0
             and (target_delta_applied | int(-1)) != 10
+            and should_allow_decrease
           }}
         should_disable_smart_charge: "{{ required_inputs_available and (target_delta_requested | int(0)) <= 0 and smart_charge_on }}"
     - choose:
@@ -119,20 +277,6 @@
                       target:
                         entity_id: "{{ smart_charge_switch_entity_id }}"
       default:
-        - variables:
-            # Increases are intentionally rate-limited to avoid spamming Octopus with
-            # upward target changes while a session is being planned.
-            last_increase_update_at_raw: "{{ states('input_datetime.car_battery_intelligent_target_last_increase_update') }}"
-            is_increase: "{{ (target_delta_requested | int(0)) > (target_delta_applied | int(-1)) }}"
-            is_decrease: "{{ (target_delta_requested | int(0)) < (target_delta_applied | int(-1)) }}"
-            should_allow_increase: >-
-              {% if not is_increase %}
-                false
-              {% elif last_increase_update_at_raw in [none, 'unknown', 'unavailable', 'none', ''] %}
-                true
-              {% else %}
-                {{ (as_timestamp(now()) - as_timestamp(as_datetime(last_increase_update_at_raw))) >= 15 * 60 }}
-              {% endif %}
         - choose:
             - conditions:
                 - condition: template
@@ -169,161 +313,6 @@
                           data:
                             datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
           default:
-            - variables:
-                # Octopus exposes dispatch windows in a few different shapes over the
-                # lifecycle of an intelligent session. Parse all of the representations
-                # we can see so the decrease guard does not depend on one attribute
-                # always being populated.
-                planned_dispatches_raw: "{{ state_attr(dispatching_entity_id, 'planned_dispatches') }}"
-                planned_dispatches: >-
-                  {% if planned_dispatches_raw is string %}
-                    {% if planned_dispatches_raw in ['unknown', 'unavailable', 'none', ''] %}
-                      []
-                    {% elif planned_dispatches_raw[:1] == '[' and 'datetime.datetime(' not in planned_dispatches_raw %}
-                      {{ planned_dispatches_raw | from_json }}
-                    {% else %}
-                      []
-                    {% endif %}
-                  {% else %}
-                    {{ planned_dispatches_raw | default([], true) }}
-                  {% endif %}
-                started_dispatches_raw: "{{ state_attr(dispatching_entity_id, 'started_dispatches') }}"
-                started_dispatches: >-
-                  {% if started_dispatches_raw is string %}
-                    {% if started_dispatches_raw in ['unknown', 'unavailable', 'none', ''] %}
-                      []
-                    {% elif started_dispatches_raw[:1] == '[' and 'datetime.datetime(' not in started_dispatches_raw %}
-                      {{ started_dispatches_raw | from_json }}
-                    {% else %}
-                      []
-                    {% endif %}
-                  {% else %}
-                    {{ started_dispatches_raw | default([], true) }}
-                  {% endif %}
-                completed_dispatches_raw: "{{ state_attr(dispatching_entity_id, 'completed_dispatches') }}"
-                completed_dispatches: >-
-                  {% if completed_dispatches_raw is string %}
-                    {% if completed_dispatches_raw in ['unknown', 'unavailable', 'none', ''] %}
-                      []
-                    {% elif completed_dispatches_raw[:1] == '[' and 'datetime.datetime(' not in completed_dispatches_raw %}
-                      {{ completed_dispatches_raw | from_json }}
-                    {% else %}
-                      []
-                    {% endif %}
-                  {% else %}
-                    {{ completed_dispatches_raw | default([], true) }}
-                  {% endif %}
-                current_dispatch_start_raw: "{{ state_attr(dispatching_entity_id, 'current_start') }}"
-                current_dispatch_end_raw: "{{ state_attr(dispatching_entity_id, 'current_end') }}"
-                next_dispatch_start_raw: "{{ state_attr(dispatching_entity_id, 'next_start') }}"
-                next_dispatch_end_raw: "{{ state_attr(dispatching_entity_id, 'next_end') }}"
-                is_dispatching: "{{ is_state(dispatching_entity_id, 'on') }}"
-                # Treat empty dispatch lists as trustworthy only when the sensor is not
-                # actively dispatching and there is no other visible window end to honor.
-                dispatch_attributes_available: >-
-                  {{
-                    planned_dispatches_raw not in [none, 'unknown', 'unavailable', 'none', '']
-                    and started_dispatches_raw not in [none, 'unknown', 'unavailable', 'none', '']
-                  }}
-                dispatch_window_summary_available: >-
-                  {{
-                    current_dispatch_start_raw not in [none, 'unknown', 'unavailable', 'none', '']
-                    or current_dispatch_end_raw not in [none, 'unknown', 'unavailable', 'none', '']
-                    or next_dispatch_start_raw not in [none, 'unknown', 'unavailable', 'none', '']
-                    or next_dispatch_end_raw not in [none, 'unknown', 'unavailable', 'none', '']
-                  }}
-                dispatches: >-
-                  {{ planned_dispatches + started_dispatches }}
-                visible_dispatches: >-
-                  {{ planned_dispatches + started_dispatches + completed_dispatches }}
-                dispatch_start_times: >-
-                  {{ dispatches | map(attribute='start') | list }}
-                dispatch_end_times: >-
-                  {{ dispatches | map(attribute='end') | list }}
-                visible_dispatch_end_times: >-
-                  {{ visible_dispatches | map(attribute='end') | list }}
-                earliest_dispatch_start: >-
-                  {% if dispatch_start_times %}
-                    {{ as_datetime(dispatch_start_times | min).isoformat() }}
-                  {% else %}
-                    {{ none }}
-                  {% endif %}
-                latest_dispatch_end: >-
-                  {% if dispatch_end_times %}
-                    {{ as_datetime(dispatch_end_times | max).isoformat() }}
-                  {% else %}
-                    {{ none }}
-                  {% endif %}
-                latest_visible_dispatch_end: >-
-                  {% if visible_dispatch_end_times %}
-                    {{ as_datetime(visible_dispatch_end_times | max).isoformat() }}
-                  {% else %}
-                    {{ none }}
-                  {% endif %}
-                current_dispatch_start: >-
-                  {% if current_dispatch_start_raw not in [none, 'unknown', 'unavailable', 'none', ''] %}
-                    {{ as_datetime(current_dispatch_start_raw).isoformat() }}
-                  {% else %}
-                    {{ none }}
-                  {% endif %}
-                current_dispatch_end: >-
-                  {% if current_dispatch_end_raw not in [none, 'unknown', 'unavailable', 'none', ''] %}
-                    {{ as_datetime(current_dispatch_end_raw).isoformat() }}
-                  {% else %}
-                    {{ none }}
-                  {% endif %}
-                next_dispatch_start: >-
-                  {% if next_dispatch_start_raw not in [none, 'unknown', 'unavailable', 'none', ''] %}
-                    {{ as_datetime(next_dispatch_start_raw).isoformat() }}
-                  {% else %}
-                    {{ none }}
-                  {% endif %}
-                next_dispatch_end: >-
-                  {% if next_dispatch_end_raw not in [none, 'unknown', 'unavailable', 'none', ''] %}
-                    {{ as_datetime(next_dispatch_end_raw).isoformat() }}
-                  {% else %}
-                    {{ none }}
-                  {% endif %}
-                # Never decrease during an active Octopus intelligent dispatch. Once
-                # dispatching turns off, keep blocking until we are past the last
-                # visible dispatch end from any current attribute representation.
-                should_allow_decrease: >-
-                  {% if not is_decrease %}
-                    false
-                  {% elif is_dispatching %}
-                    false
-                  {% elif dispatch_attributes_available and dispatches | count > 0 %}
-                    {% set first_start = as_datetime(earliest_dispatch_start) if earliest_dispatch_start not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
-                    {% set last_end = as_datetime(latest_dispatch_end) if latest_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
-                    {% if first_start and last_end %}
-                      {{ now() < first_start or now() > last_end }}
-                    {% else %}
-                      false
-                    {% endif %}
-                  {% elif dispatch_window_summary_available %}
-                    {% set current_start = as_datetime(current_dispatch_start) if current_dispatch_start not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
-                    {% set current_end = as_datetime(current_dispatch_end) if current_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
-                    {% set next_start = as_datetime(next_dispatch_start) if next_dispatch_start not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
-                    {% set next_end = as_datetime(next_dispatch_end) if next_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
-                    {% if current_start and current_end and now() >= current_start and now() <= current_end %}
-                      false
-                    {% elif next_start and now() < next_start %}
-                      true
-                    {% elif next_end and now() > next_end %}
-                      true
-                    {% elif not current_start and not current_end and not next_start and not next_end %}
-                      {% set last_visible_end = as_datetime(latest_visible_dispatch_end) if latest_visible_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] else none %}
-                      {{ last_visible_end is none or now() > last_visible_end }}
-                    {% else %}
-                      false
-                    {% endif %}
-                  {% elif latest_visible_dispatch_end not in [none, 'unknown', 'unavailable', 'none', ''] %}
-                    {{ now() > as_datetime(latest_visible_dispatch_end) }}
-                  {% elif dispatch_attributes_available and dispatches | count == 0 %}
-                    true
-                  {% else %}
-                    false
-                  {% endif %}
             - choose:
                 - conditions:
                     - condition: template

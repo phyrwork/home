@@ -425,6 +425,76 @@ async def test_sync_decrease_blocked_until_visible_dispatch_end_after_sensor_tur
 
 
 @pytest.mark.asyncio
+async def test_sync_decrease_blocked_between_multi_slot_dispatches_on_soc_change(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T02:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=95,
+        current_level=75,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches=[
+            {
+                "start": "2026-01-25T03:00:00+00:00",
+                "end": "2026-01-25T04:00:00+00:00",
+            }
+        ],
+        completed_dispatches=[
+            {
+                "start": "2026-01-25T01:00:00+00:00",
+                "end": "2026-01-25T02:00:00+00:00",
+            }
+        ],
+        dispatch_state="off",
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("sensor.car_battery_level", "85")
+    await hass.async_block_till_done()
+
+    assert service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_reset_to_minimum_blocked_between_multi_slot_dispatches(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T02:30:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=80,
+        current_level=75,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches=[
+            {
+                "start": "2026-01-25T03:00:00+00:00",
+                "end": "2026-01-25T04:00:00+00:00",
+            }
+        ],
+        completed_dispatches=[
+            {
+                "start": "2026-01-25T01:00:00+00:00",
+                "end": "2026-01-25T02:00:00+00:00",
+            }
+        ],
+        dispatch_state="off",
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    set_value_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("sensor.car_battery_level", "85")
+    await hass.async_block_till_done()
+
+    assert set_value_calls == []
+
+
+@pytest.mark.asyncio
 async def test_sync_decrease_allowed_after_visible_dispatch_end_from_completed_dispatch(
     hass, freezer
 ):
