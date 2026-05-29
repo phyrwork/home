@@ -6,9 +6,22 @@
   - Example: `ssh root@homeassistant.local`
 - API token (long-lived access token): stored in 1Password
   - Read with: `op read "op://jxs6qrivegu7ekpzkt27seurvy/fgvzkd432x4xsjq7f3vu4zippu/password"`
-  - To avoid repeated 1Password auth prompts, load into your environment once per
-    shell session and reuse it (the token does not have the SSH key cooldown).
-    Example: `export HA_API_TOKEN="$(op read "op://jxs6qrivegu7ekpzkt27seurvy/fgvzkd432x4xsjq7f3vu4zippu/password")"`
+  - Agents must not call `op read` separately for every HA API request. When a
+    task needs more than one HA API request, copy the token into a restrictive
+    tempfile for the current shell/session, export from that file, and delete the
+    tempfile when the session is complete. Never print the token.
+    ```sh
+    HA_API_TOKEN_FILE="${TMPDIR:-/tmp}/ha-api-token.$USER"
+    if [ ! -s "$HA_API_TOKEN_FILE" ]; then
+      umask 077
+      op read "op://jxs6qrivegu7ekpzkt27seurvy/fgvzkd432x4xsjq7f3vu4zippu/password" > "$HA_API_TOKEN_FILE"
+    fi
+    export HA_API_TOKEN="$(cat "$HA_API_TOKEN_FILE")"
+    ```
+    Cleanup:
+    ```sh
+    rm -f "$HA_API_TOKEN_FILE"
+    ```
   - Note: the HA TLS cert is for `home.newtonho.me`, so `https://homeassistant.local` may require skipping verification or using the `home.newtonho.me` hostname.
 
 ## Deployment
