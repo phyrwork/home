@@ -6,7 +6,7 @@
   action:
     - service: switch.turn_off
       target:
-        entity_id: switch.lawn_irrigation
+        entity_id: switch.back_garden_lawn_irrigation
   mode: single
 
 - alias: "Turn on lawn irrigation at sunrise if needed"

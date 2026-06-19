@@ -1,5 +1,5 @@
 platform: integration
-source: sensor.lawn_irrigation_volume_flow_rate
+source: sensor.back_garden_lawn_irrigation_volume_flow_rate
 name: Lawn Irrigation Volume Total
 # id: lawn_irrigation_volume_total
 round: 2

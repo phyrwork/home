@@ -21,7 +21,7 @@ lawn_irrigation:
 
         # Control entities
         volume_sensor_id: sensor.lawn_irrigation_volume_total
-        switch_id: switch.lawn_irrigation
+        switch_id: switch.back_garden_lawn_irrigation
     
         # Remember where the flow-meter stands at the beginning
         total_start_volume: "{{ states(volume_sensor_id)|float(0) }}"
