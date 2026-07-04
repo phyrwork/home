@@ -52,26 +52,17 @@ class InputInterval:
 
 
 @dataclass(frozen=True, slots=True)
-class State:
-    """Represents simulation state after processing an input interval."""
+class ReserveInterval:
+    """Defines required battery energy across one planning interval."""
 
-    time: datetime
-    """Timezone-aware time represented by this state."""
+    interval: TimeInterval
+    """Time interval represented by this reserve."""
 
-    battery: battery.State
-    """Projected battery state at this time."""
+    start_energy_kwh: Decimal
+    """Energy required when entering the interval."""
 
-    charge_power_kw: Decimal
-    """Signed battery power during the preceding interval.
-
-    Positive values represent charging; negative values represent discharging.
-    """
-
-    grid_import_kwh: Decimal
-    """Energy imported during the preceding interval."""
-
-    grid_export_kwh: Decimal
-    """Energy exported during the preceding interval."""
+    end_energy_kwh: Decimal
+    """Energy required when leaving the interval."""
 
 
 def fuse_forecasts(
@@ -131,96 +122,6 @@ def fuse_forecasts(
     return tuple(result)
 
 
-def simulate_interval(
-    *,
-    spec: battery.Spec,
-    state: battery.State,
-    source: InputInterval,
-) -> State:
-    """Simulate battery and grid energy flows for one planner interval."""
-    duration = source.interval.end - source.interval.start
-    if duration <= timedelta():
-        raise ValueError("Interval end must be after its start")
-
-    duration_hours = _duration_decimal(duration) / Decimal(3_600_000_000)
-    if source.tariff.import_price_is_off_peak:
-        charge_kwh = min(
-            spec.maximum_charge_power_kw * duration_hours,
-            (spec.capacity_kwh - state.energy_kwh) / spec.charge_efficiency,
-        )
-        net_grid_kwh = source.load_kwh + charge_kwh - source.solar_kwh
-        return State(
-            time=source.interval.end,
-            battery=battery.State(
-                energy_kwh=state.energy_kwh
-                + charge_kwh * spec.charge_efficiency,
-            ),
-            charge_power_kw=charge_kwh / duration_hours,
-            grid_import_kwh=max(net_grid_kwh, Decimal()),
-            grid_export_kwh=max(-net_grid_kwh, Decimal()),
-        )
-
-    net_solar_kwh = source.solar_kwh - source.load_kwh
-    if net_solar_kwh >= 0:
-        charge_kwh = min(
-            net_solar_kwh,
-            spec.maximum_charge_power_kw * duration_hours,
-            (spec.capacity_kwh - state.energy_kwh) / spec.charge_efficiency,
-        )
-        return State(
-            time=source.interval.end,
-            battery=battery.State(
-                energy_kwh=state.energy_kwh
-                + charge_kwh * spec.charge_efficiency,
-            ),
-            charge_power_kw=charge_kwh / duration_hours,
-            grid_import_kwh=Decimal(),
-            grid_export_kwh=net_solar_kwh - charge_kwh,
-        )
-
-    deficit_kwh = -net_solar_kwh
-    discharge_kwh = min(
-        deficit_kwh,
-        spec.maximum_discharge_power_kw * duration_hours,
-        (state.energy_kwh - spec.minimum_energy_kwh)
-        * spec.discharge_efficiency,
-    )
-    return State(
-        time=source.interval.end,
-        battery=battery.State(
-            energy_kwh=state.energy_kwh
-            - discharge_kwh / spec.discharge_efficiency,
-        ),
-        charge_power_kw=-discharge_kwh / duration_hours,
-        grid_import_kwh=deficit_kwh - discharge_kwh,
-        grid_export_kwh=Decimal(),
-    )
-
-
-def simulate(
-    *,
-    spec: battery.Spec,
-    initial_state: battery.State,
-    intervals: Sequence[InputInterval],
-) -> tuple[State, ...]:
-    """Simulate a battery trajectory across contiguous planner intervals."""
-    result: list[State] = []
-    state = initial_state
-    previous_end: datetime | None = None
-    for source in intervals:
-        if previous_end is not None and source.interval.start != previous_end:
-            raise ValueError("Planner intervals must be contiguous and ordered")
-        interval_state = simulate_interval(
-            spec=spec,
-            state=state,
-            source=source,
-        )
-        result.append(interval_state)
-        state = interval_state.battery
-        previous_end = source.interval.end
-    return tuple(result)
-
-
 def reserve(
     *,
     spec: battery.Spec,
@@ -228,11 +129,32 @@ def reserve(
     reserve_margin_kwh: Decimal,
 ) -> Decimal:
     """Calculate forecast reserve including a battery-energy margin."""
+    reserves = reserve_intervals(
+        spec=spec,
+        intervals=intervals,
+        reserve_margin_kwh=reserve_margin_kwh,
+    )
+    if reserves:
+        return reserves[0].start_energy_kwh
+    return min(
+        spec.capacity_kwh,
+        spec.minimum_energy_kwh + reserve_margin_kwh,
+    )
+
+
+def reserve_intervals(
+    *,
+    spec: battery.Spec,
+    intervals: Sequence[InputInterval],
+    reserve_margin_kwh: Decimal,
+) -> tuple[ReserveInterval, ...]:
+    """Calculate the required battery-energy trajectory."""
     if reserve_margin_kwh < 0:
         raise ValueError("Reserve margin must not be negative")
     _validate_contiguous_intervals(intervals)
 
     required_kwh = spec.minimum_energy_kwh
+    required_at_start: list[Decimal] = []
     for source in reversed(intervals):
         duration_hours = (
             _duration_decimal(source.interval.end - source.interval.start)
@@ -272,10 +194,25 @@ def reserve(
                 required_kwh
                 + supplied_kwh / spec.discharge_efficiency,
             )
+        required_at_start.append(required_kwh)
 
-    return min(
-        spec.capacity_kwh,
-        required_kwh + reserve_margin_kwh,
+    boundary_energy = [
+        min(spec.capacity_kwh, value + reserve_margin_kwh)
+        for value in reversed(required_at_start)
+    ]
+    boundary_energy.append(
+        min(
+            spec.capacity_kwh,
+            spec.minimum_energy_kwh + reserve_margin_kwh,
+        )
+    )
+    return tuple(
+        ReserveInterval(
+            interval=source.interval,
+            start_energy_kwh=boundary_energy[index],
+            end_energy_kwh=boundary_energy[index + 1],
+        )
+        for index, source in enumerate(intervals)
     )
 
 

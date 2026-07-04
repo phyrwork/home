@@ -126,119 +126,6 @@ def test_fuse_rejects_overlapping_tariffs() -> None:
         )
 
 
-def test_simulate_off_peak_charges_at_maximum_from_net_ac_flow() -> None:
-    result = planner.simulate_interval(
-        spec=SPEC,
-        state=battery.State(energy_kwh=Decimal("10")),
-        source=_input_interval(load_kwh="1", solar_kwh="2", off_peak=True),
-    )
-
-    assert result == planner.State(
-        time=NOW + HOUR,
-        battery=battery.State(energy_kwh=Decimal("15.70")),
-        charge_power_kw=Decimal("6"),
-        grid_import_kwh=Decimal("5"),
-        grid_export_kwh=Decimal("0"),
-    )
-
-
-def test_simulate_peak_solar_surplus_charges_then_exports() -> None:
-    result = planner.simulate_interval(
-        spec=SPEC,
-        state=battery.State(energy_kwh=Decimal("10")),
-        source=_input_interval(load_kwh="1", solar_kwh="10"),
-    )
-
-    assert result == planner.State(
-        time=NOW + HOUR,
-        battery=battery.State(energy_kwh=Decimal("15.70")),
-        charge_power_kw=Decimal("6"),
-        grid_import_kwh=Decimal("0"),
-        grid_export_kwh=Decimal("3"),
-    )
-
-
-def test_simulate_peak_deficit_discharges_then_imports() -> None:
-    result = planner.simulate_interval(
-        spec=SPEC,
-        state=battery.State(energy_kwh=Decimal("10")),
-        source=_input_interval(load_kwh="10", solar_kwh="0"),
-    )
-
-    assert result == planner.State(
-        time=NOW + HOUR,
-        battery=battery.State(
-            energy_kwh=Decimal("10") - Decimal("6") / Decimal("0.95"),
-        ),
-        charge_power_kw=Decimal("-6"),
-        grid_import_kwh=Decimal("4"),
-        grid_export_kwh=Decimal("0"),
-    )
-
-
-def test_simulate_respects_battery_energy_bounds() -> None:
-    charged = planner.simulate_interval(
-        spec=SPEC,
-        state=battery.State(energy_kwh=Decimal("31.05")),
-        source=_input_interval(load_kwh="0", solar_kwh="0", off_peak=True),
-    )
-    discharged = planner.simulate_interval(
-        spec=SPEC,
-        state=battery.State(energy_kwh=Decimal("4.2")),
-        source=_input_interval(load_kwh="2", solar_kwh="0"),
-    )
-
-    assert charged.battery.energy_kwh == SPEC.capacity_kwh
-    assert charged.charge_power_kw == Decimal("1")
-    assert charged.grid_import_kwh == Decimal("1")
-    assert discharged.battery.energy_kwh == SPEC.minimum_energy_kwh
-    assert discharged.charge_power_kw == Decimal("-0.95")
-    assert discharged.grid_import_kwh == Decimal("1.05")
-
-
-def test_simulate_chains_interval_end_states_without_synthetic_initial_state() -> None:
-    intervals = (
-        _input_interval(load_kwh="0", solar_kwh="0", off_peak=True),
-        _input_interval(
-            load_kwh="10",
-            solar_kwh="0",
-            start=NOW + HOUR,
-        ),
-    )
-
-    result = planner.simulate(
-        spec=SPEC,
-        initial_state=battery.State(energy_kwh=Decimal("10")),
-        intervals=intervals,
-    )
-
-    assert len(result) == len(intervals)
-    assert result[0].time == NOW + HOUR
-    assert result[0].battery.energy_kwh == Decimal("15.70")
-    assert result[1].time == NOW + 2 * HOUR
-    assert result[1].battery.energy_kwh == (
-        result[0].battery.energy_kwh - Decimal("6") / Decimal("0.95")
-    )
-
-
-def test_simulate_rejects_discontinuous_intervals() -> None:
-    intervals = (
-        _input_interval(load_kwh="0", solar_kwh="0"),
-        _input_interval(
-            load_kwh="0",
-            solar_kwh="0",
-            start=NOW + 2 * HOUR,
-        ),
-    )
-
-    with pytest.raises(ValueError, match="contiguous and ordered"):
-        planner.simulate(
-            spec=SPEC,
-            initial_state=battery.State(energy_kwh=Decimal("10")),
-            intervals=intervals,
-        )
-
-
 def test_reserve_calculates_requirement_backward_from_horizon() -> None:
     spec = battery.Spec(
         capacity_kwh=Decimal("10"),
@@ -270,6 +157,39 @@ def test_reserve_calculates_requirement_backward_from_horizon() -> None:
     )
 
     assert result == Decimal("7")
+
+
+def test_reserve_intervals_describe_required_energy_at_each_boundary() -> None:
+    spec = battery.Spec(
+        capacity_kwh=Decimal("10"),
+        minimum_energy_kwh=Decimal("2"),
+        maximum_charge_power_kw=Decimal("6"),
+        maximum_discharge_power_kw=Decimal("6"),
+        charge_efficiency=Decimal("1"),
+        discharge_efficiency=Decimal("1"),
+    )
+    intervals = (
+        _input_interval(load_kwh="4", solar_kwh="0"),
+        _input_interval(
+            load_kwh="2",
+            solar_kwh="0",
+            start=NOW + HOUR,
+        ),
+    )
+
+    result = planner.reserve_intervals(
+        spec=spec,
+        intervals=intervals,
+        reserve_margin_kwh=Decimal(),
+    )
+
+    assert [
+        (item.start_energy_kwh, item.end_energy_kwh)
+        for item in result
+    ] == [
+        (Decimal("8"), Decimal("4")),
+        (Decimal("4"), Decimal("2")),
+    ]
 
 
 def test_reserve_accounts_for_efficiency_and_solar_charging() -> None:

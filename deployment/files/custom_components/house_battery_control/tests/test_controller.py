@@ -1,10 +1,12 @@
 """Tests for battery controller decisions."""
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
-from custom_components.house_battery_control import battery, controller, tariff
+from custom_components.house_battery_control import battery, controller, planner, tariff
+from custom_components.house_battery_control.interval import TimeInterval
 
 SPEC = battery.Spec(
     capacity_kwh=Decimal("32"),
@@ -25,6 +27,14 @@ OFF_PEAK = tariff.Tariff(
     import_price_is_off_peak=True,
 )
 RESERVE = Decimal("10")
+RESERVE_INTERVAL = planner.ReserveInterval(
+    interval=TimeInterval(
+        datetime(2026, 7, 4, tzinfo=UTC),
+        datetime(2026, 7, 4, 1, tzinfo=UTC),
+    ),
+    start_energy_kwh=RESERVE,
+    end_energy_kwh=RESERVE,
+)
 HYSTERESIS = Decimal("1")
 
 
@@ -68,6 +78,25 @@ def test_select_command_stops_export_at_reserve() -> None:
     assert result == controller.SelfConsumption(minimum_energy_kwh=RESERVE)
 
 
+def test_select_command_releases_current_demand_after_export_is_protected() -> None:
+    reserve = planner.ReserveInterval(
+        interval=RESERVE_INTERVAL.interval,
+        start_energy_kwh=Decimal("10"),
+        end_energy_kwh=Decimal("6"),
+    )
+
+    result = controller.select_command(
+        spec=SPEC,
+        state=battery.State(energy_kwh=Decimal("10")),
+        tariff=PEAK,
+        reserve=reserve,
+        export_hysteresis_kwh=HYSTERESIS,
+        previous_command=controller.ForceExport(target_energy_kwh=Decimal("10")),
+    )
+
+    assert result == controller.SelfConsumption(minimum_energy_kwh=Decimal("6"))
+
+
 @pytest.mark.parametrize(
     ("reserve_energy_kwh", "export_hysteresis_kwh", "message"),
     (
@@ -85,7 +114,11 @@ def test_select_command_rejects_invalid_policy(
             spec=SPEC,
             state=battery.State(energy_kwh=Decimal("16")),
             tariff=PEAK,
-            reserve_energy_kwh=reserve_energy_kwh,
+            reserve=planner.ReserveInterval(
+                interval=RESERVE_INTERVAL.interval,
+                start_energy_kwh=reserve_energy_kwh,
+                end_energy_kwh=reserve_energy_kwh,
+            ),
             export_hysteresis_kwh=export_hysteresis_kwh,
             previous_command=None,
         )
@@ -101,7 +134,7 @@ def _select(
         spec=SPEC,
         state=battery.State(energy_kwh=energy_kwh),
         tariff=current_tariff,
-        reserve_energy_kwh=RESERVE,
+        reserve=RESERVE_INTERVAL,
         export_hysteresis_kwh=HYSTERESIS,
         previous_command=previous_command,
     )

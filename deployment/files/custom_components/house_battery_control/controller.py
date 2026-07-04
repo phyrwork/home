@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TypeAlias
 
-from . import battery, tariff
+from . import battery, planner, tariff
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +44,19 @@ def select_command(
     spec: battery.Spec,
     state: battery.State,
     tariff: tariff.Tariff,
-    reserve_energy_kwh: Decimal,
+    reserve: planner.ReserveInterval,
     export_hysteresis_kwh: Decimal,
     previous_command: Command | None,
 ) -> Command:
     """Select the desired inverter command from current controller inputs."""
-    if not spec.minimum_energy_kwh <= reserve_energy_kwh <= spec.capacity_kwh:
+    if not (
+        spec.minimum_energy_kwh
+        <= reserve.start_energy_kwh
+        <= spec.capacity_kwh
+        and spec.minimum_energy_kwh
+        <= reserve.end_energy_kwh
+        <= spec.capacity_kwh
+    ):
         raise ValueError("Reserve energy must be within battery limits")
     if export_hysteresis_kwh < 0:
         raise ValueError("Export hysteresis must not be negative")
@@ -59,11 +66,11 @@ def select_command(
 
     if (
         isinstance(previous_command, ForceExport)
-        and state.energy_kwh > reserve_energy_kwh
+        and state.energy_kwh > reserve.start_energy_kwh
     ):
-        return ForceExport(target_energy_kwh=reserve_energy_kwh)
+        return ForceExport(target_energy_kwh=reserve.start_energy_kwh)
 
-    if state.energy_kwh > reserve_energy_kwh + export_hysteresis_kwh:
-        return ForceExport(target_energy_kwh=reserve_energy_kwh)
+    if state.energy_kwh > reserve.start_energy_kwh + export_hysteresis_kwh:
+        return ForceExport(target_energy_kwh=reserve.start_energy_kwh)
 
-    return SelfConsumption(minimum_energy_kwh=reserve_energy_kwh)
+    return SelfConsumption(minimum_energy_kwh=reserve.end_energy_kwh)

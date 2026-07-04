@@ -22,8 +22,8 @@ uninstalled equipment.
    - `dependencies.solis_cloud`
 2. `planner.fuse_forecasts` aligns tariff, load, and solar forecasts into
    self-contained `planner.InputInterval` values.
-3. The reserve planner simulates battery energy without deliberate arbitrage
-   export and calculates the energy that must be protected.
+3. The reserve planner calculates the energy that must be protected without
+   including deliberate arbitrage export.
 4. The real-time controller selects a typed internal command.
 5. The SolisCloud adapter maps the internal command to inverter controls.
 6. Home Assistant exposes inputs, diagnostics, desired state, and confirmed
@@ -39,8 +39,6 @@ uninstalled equipment.
 - Class documentation uses Google-style docstrings.
 - Attribute documentation is a string literal directly below the attribute.
 - Power limits live in `battery.Spec`, not individual controller commands.
-- Positive simulated `charge_power_kw` means charging; negative means
-  discharging.
 - Battery charge/discharge power is measured on the AC side of the inverter.
 - Charge efficiency converts AC input into stored battery energy; discharge
   efficiency converts stored battery energy into AC output.
@@ -55,7 +53,7 @@ uninstalled equipment.
 - `battery.State`
 - `planner.Input`
 - `planner.InputInterval`
-- `planner.State`
+- `planner.ReserveInterval`
 - `controller.GridCharge`
 - `controller.ForceExport`
 - `controller.SelfConsumption`
@@ -67,18 +65,23 @@ uninstalled equipment.
 ```python
 if cheap_import_active:
     GridCharge(target_energy_kwh=capacity)
-elif previous_command is ForceExport and battery_energy_kwh > reserve_energy_kwh:
-    ForceExport(target_energy_kwh=reserve_energy_kwh)
-elif battery_energy_kwh > reserve_energy_kwh + export_hysteresis_kwh:
-    ForceExport(target_energy_kwh=reserve_energy_kwh)
+elif previous_command is ForceExport and battery_energy_kwh > reserve.start_energy_kwh:
+    ForceExport(target_energy_kwh=reserve.start_energy_kwh)
+elif battery_energy_kwh > reserve.start_energy_kwh + export_hysteresis_kwh:
+    ForceExport(target_energy_kwh=reserve.start_energy_kwh)
 else:
-    SelfConsumption(minimum_energy_kwh=reserve_energy_kwh)
+    SelfConsumption(minimum_energy_kwh=reserve.end_energy_kwh)
 ```
 
 Commands carry safe stop targets. Solis charge/discharge power comes from the
 current `battery.Spec`. Hysteresis uses the last desired command, avoiding cloud
 confirmation latency breaking the export latch. `Hold` is reserved for fail-safe
 handling of missing or stale inputs.
+
+Each `ReserveInterval` is one segment of the reverse-planned reserve trajectory.
+Its starting energy protects current and future demand from forced export; its
+ending energy permits the current interval's demand to consume the energy that
+was reserved for it.
 
 ### Off-peak cycling arbitrage
 
@@ -128,19 +131,10 @@ pass:
    discharge-power or capacity limits is unavoidable grid import and does not
    inflate the reserve.
 
-`planner.reserve` adds an explicit non-negative `reserve_margin_kwh` after the
-theoretical reverse pass and clamps the result to battery capacity. Home
-Assistant will initially supply an adjustable 2 kWh margin.
-
-Peak grid import is calculated from a trajectory by summing
-`State.grid_import_kwh` for corresponding input intervals whose tariff is not
-off-peak. `State` remains entirely interval-local rather than mixing in a
-trajectory accumulator.
-
-Full-trajectory simulation returns one `planner.State` per input interval,
-timestamped at the interval end. It does not include an initial `planner.State`,
-because the initial battery state has no preceding interval from which power or
-grid-flow values could truthfully be reported.
+`planner.reserve_intervals` adds an explicit non-negative
+`reserve_margin_kwh` at every trajectory boundary and clamps each value to
+battery capacity. Home Assistant will initially supply an adjustable 2 kWh
+margin.
 
 ## Tariff policy
 
@@ -172,12 +166,11 @@ in configuration, so tariff price changes require no manual update.
 ## Pairing plan
 
 - [x] Define tariff policy and the exact meaning of off-peak import.
-- [x] Implement and test one-interval battery simulation.
-- [x] Implement and test full trajectory simulation.
 - [x] Implement and test reserve calculation.
 - [x] Decide the reserve safety margin: adjustable kWh, initially 2 kWh.
 - [x] Implement the reserve safety margin.
 - [x] Implement and test real-time controller decision and hysteresis.
+- [x] Add a test-only controller simulator and scenario suite.
 - [x] Add the initial flattened hourly non-EV house-load forecast.
 - [ ] Optionally refresh the house-load profiles from history at most weekly.
 - [x] Compare Forecast.Solar predictions with actual house solar generation and
@@ -185,8 +178,7 @@ in configuration, so tariff price changes require no manual update.
 - [ ] Add Home Assistant manifest, configuration, coordinator, and update
       triggers.
 - [ ] Define and install stub battery/inverter entities.
-- [ ] Expose reserve, trajectory, desired command, confirmed command, freshness,
-      and errors.
+- [ ] Expose reserve, desired command, confirmed command, freshness, and errors.
 - [ ] Implement idempotent SolisCloud command application.
 - [ ] Replace stub Solis telemetry/control after installation.
 - [ ] Add conservative behavior for missing/stale forecasts and API failures.
