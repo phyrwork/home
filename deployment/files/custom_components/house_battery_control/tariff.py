@@ -16,6 +16,9 @@ class Tariff:
     export_price_per_kwh: Decimal
     """Price received for exported energy."""
 
+    import_price_is_off_peak: bool
+    """Whether the import price is classified as off-peak."""
+
 
 @dataclass(frozen=True, slots=True)
 class TariffInterval:

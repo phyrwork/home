@@ -29,9 +29,15 @@ def to_tariff_intervals(
     """Map fused Octopus import rates and an export price to domain tariffs."""
     source_rates = cast(Sequence[Rate], json.loads(rates)) if isinstance(rates, str) else rates
     export_price = to_decimal(export_price_per_kwh)
+    rates_with_prices = tuple(
+        (source, to_decimal(source["value_inc_vat"])) for source in source_rates
+    )
+    if not rates_with_prices:
+        return ()
+    peak_import_price = max(price for _, price in rates_with_prices)
     result: list[tariff.TariffInterval] = []
 
-    for source in source_rates:
+    for source, import_price in rates_with_prices:
         interval = TimeInterval(
             start=to_datetime(source["start"]),
             end=to_datetime(source["end"]),
@@ -43,8 +49,9 @@ def to_tariff_intervals(
             tariff.TariffInterval(
                 interval=interval,
                 tariff=tariff.Tariff(
-                    import_price_per_kwh=to_decimal(source["value_inc_vat"]),
+                    import_price_per_kwh=import_price,
                     export_price_per_kwh=export_price,
+                    import_price_is_off_peak=import_price < peak_import_price,
                 ),
             )
         )
