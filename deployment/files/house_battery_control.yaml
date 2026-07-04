@@ -1,0 +1,22 @@
+battery:
+  capacity_kwh: 32.1536
+  minimum_state_of_charge_percent: 10
+  charge_efficiency: 0.95
+  discharge_efficiency: 0.95
+  state_of_charge_entity_id: input_number.house_battery_state_of_charge
+  power_limit_entity_id: input_number.house_battery_power_limit
+
+tariff:
+  import_price_entity_id: sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates
+  export_price_entity_id: sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate
+
+solar:
+  config_entry_id: 79c4415a9ea776404127c1b61ba240cf
+
+policy:
+  reserve_margin_entity_id: input_number.house_battery_reserve_margin
+  export_hysteresis_entity_id: input_number.house_battery_export_hysteresis
+
+inverter:
+  operating_mode_entity_id: input_select.house_battery_operating_mode
+  state_of_charge_target_entity_id: input_number.house_battery_state_of_charge_target

@@ -25,6 +25,7 @@ notify: !include_dir_merge_list notify/
 zha: !include zha.yaml
 energy_cost_forecast: !include energy_cost_forecast.yaml
 energy_cost_saving_tracker: !include energy_cost_saving_tracker.yaml
+house_battery_control: !include house_battery_control.yaml
 waste_collection_schedule: !include waste_collection_schedule.yaml
 
 # HTTPS only access

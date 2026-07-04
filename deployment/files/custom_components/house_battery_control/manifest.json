@@ -1,0 +1,8 @@
+{
+  "domain": "house_battery_control",
+  "name": "House Battery Control",
+  "version": "0.1.0",
+  "requirements": [],
+  "codeowners": ["@connor"],
+  "iot_class": "local_push"
+}
