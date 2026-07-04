@@ -1,33 +1,33 @@
 """Forecast.Solar dependency types and mappings."""
 
-from collections.abc import Mapping
-from datetime import datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import TypedDict
 
 from .. import energy
 from ..interval import TimeInterval
+from ._common import DecimalValue, to_datetime, to_decimal
 
 WATT_HOURS_PER_KILOWATT_HOUR = Decimal(1000)
 
 
-class Estimate(Protocol):
-    """Defines the Forecast.Solar estimate data consumed by this integration."""
+class Forecast(TypedDict):
+    """Describes Home Assistant's Forecast.Solar energy response."""
 
-    wh_period: Mapping[datetime, int]
-    """Forecast energy in watt-hours keyed by interval start."""
+    wh_hours: dict[str, DecimalValue]
+    """Forecast energy in watt-hours keyed by ISO 8601 interval start."""
 
 
-def to_energy_intervals(estimate: Estimate) -> tuple[energy.EnergyInterval, ...]:
-    """Map a Forecast.Solar estimate to domain energy intervals."""
-    periods = sorted(estimate.wh_period.items())
+def to_energy_intervals(forecast: Forecast) -> tuple[energy.EnergyInterval, ...]:
+    """Map a Home Assistant Forecast.Solar response to energy intervals."""
+    periods = sorted(
+        (to_datetime(timestamp), to_decimal(watt_hours))
+        for timestamp, watt_hours in forecast["wh_hours"].items()
+    )
     if len(periods) < 2:
         return ()
 
     result: list[energy.EnergyInterval] = []
     for index, (start, watt_hours) in enumerate(periods):
-        if start.tzinfo is None or start.utcoffset() is None:
-            raise ValueError("Forecast.Solar timestamps must be timezone-aware")
         if watt_hours < 0:
             raise ValueError("Forecast.Solar energy cannot be negative")
 
@@ -41,7 +41,7 @@ def to_energy_intervals(estimate: Estimate) -> tuple[energy.EnergyInterval, ...]
         result.append(
             energy.EnergyInterval(
                 interval=TimeInterval(start=start, end=end),
-                energy_kwh=Decimal(watt_hours) / WATT_HOURS_PER_KILOWATT_HOUR,
+                energy_kwh=watt_hours / WATT_HOURS_PER_KILOWATT_HOUR,
             )
         )
     return tuple(result)
