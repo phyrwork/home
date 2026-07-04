@@ -180,8 +180,8 @@ in configuration, so tariff price changes require no manual update.
 - [x] Implement and test real-time controller decision and hysteresis.
 - [x] Add the initial flattened hourly non-EV house-load forecast.
 - [ ] Optionally refresh the house-load profiles from history at most weekly.
-- [ ] Compare Forecast.Solar predictions with actual house solar generation and
-      decide whether bias compensation is needed.
+- [x] Compare Forecast.Solar predictions with actual house solar generation and
+      calibrate its effective capacity.
 - [ ] Add Home Assistant manifest, configuration, coordinator, and update
       triggers.
 - [ ] Define and install stub battery/inverter entities.
@@ -238,3 +238,17 @@ negative residuals caused by meter timing to zero. Reject an entire day if an
 hour has a materially negative derived load, or if any source interval is
 missing; for example, grid-import statistics are clearly incomplete during EV
 charging on 20 June.
+
+## Solar forecast calibration
+
+Forecast.Solar is UI-configured with a 45-degree tilt, 152-degree compass
+azimuth, and an effective capacity of 4270 W. The physical array remains
+2400 W; that value is retained in `input_number.solar_installed_size` and used
+to reject pulse-meter power spikes.
+
+The effective Forecast.Solar capacity was derived from nine complete days,
+25 June through 3 July 2026. Across 196 retained same-day and day-ahead
+forecast updates, the aggregate actual-to-forecast ratio was 1.779, so
+2400 W was scaled to 4270 W. This improves the native Home Assistant forecast
+as well as planner input. Recheck the calibration after collecting a longer,
+seasonally varied sample.

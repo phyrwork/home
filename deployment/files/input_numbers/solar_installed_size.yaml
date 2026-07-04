@@ -1,3 +1,11 @@
+# Physical rooftop array capacity, also used to reject pulse-meter power spikes.
+#
+# Forecast.Solar is configured separately through its UI-only config entry. Its
+# effective capacity is 4270 W, not 2400 W: from 25 June through 3 July 2026,
+# 196 retained same-day/day-ahead forecast updates consistently under-predicted
+# actual generation, with an aggregate actual/forecast ratio of 1.779. Using
+# 2400 W * 1.779 rounds to 4270 W and also corrects HA's native forecast UI.
+# Recheck this calibration with a longer, seasonally varied sample.
 solar_installed_size:
   name: Solar Installed Size
   min: 0
