@@ -26,8 +26,10 @@ uninstalled equipment.
    including deliberate arbitrage export.
 4. The real-time controller selects a typed internal command.
 5. The SolisCloud adapter maps the internal command to inverter controls.
-6. Home Assistant exposes inputs, diagnostics, desired state, and confirmed
-   applied state.
+6. A Home Assistant coordinator recalculates and immediately applies each
+   decision through the configured inverter dependency.
+7. Home Assistant exposes one read-only control sensor for diagnostics. Stub
+   helper entities represent applied inverter state until the equipment exists.
 
 ## Established conventions
 
@@ -74,9 +76,9 @@ else:
 ```
 
 Commands carry safe stop targets. Solis charge/discharge power comes from the
-current `battery.Spec`. Hysteresis uses the last desired command, avoiding cloud
-confirmation latency breaking the export latch. `Hold` is reserved for fail-safe
-handling of missing or stale inputs.
+current `battery.Spec`. Hysteresis uses the last successfully applied command.
+Missing or stale inputs, application failure, and orderly Home Assistant
+shutdown use `SelfConsumption` down to the physical minimum as the fail-safe.
 
 Each `ReserveInterval` is one segment of the reverse-planned reserve trajectory.
 Its starting energy protects current and future demand from forced export; its
@@ -175,14 +177,52 @@ in configuration, so tariff price changes require no manual update.
 - [ ] Optionally refresh the house-load profiles from history at most weekly.
 - [x] Compare Forecast.Solar predictions with actual house solar generation and
       calibrate its effective capacity.
-- [ ] Add Home Assistant manifest, configuration, coordinator, and update
-      triggers.
-- [ ] Define and install stub battery/inverter entities.
-- [ ] Expose reserve, desired command, confirmed command, freshness, and errors.
+- [x] Add Home Assistant manifest and typed configuration.
+- [x] Implement the coordinator calculation, source triggers, expiry scheduling,
+      failure retry, and fail-safe lifecycle.
+- [x] Wire coordinator startup and shutdown into integration setup.
+- [x] Define stub battery/inverter entities in IaC.
+- [ ] Install stub battery/inverter entities.
+- [x] Expose control, reserve, calculation context, forecast coverage, and
+      coordinator health through one diagnostic sensor; stub helpers expose the
+      successfully applied control.
+- [x] Implement idempotent stub inverter command application.
 - [ ] Implement idempotent SolisCloud command application.
 - [ ] Replace stub Solis telemetry/control after installation.
 - [ ] Add conservative behavior for missing/stale forecasts and API failures.
 - [ ] Add deployment wiring and verify on the live HA instance.
+
+## Home Assistant coordinator design
+
+- `Decision` contains only the current `planner.ReserveInterval` and selected
+  `controller.Command`. The reserve interval itself defines when the decision
+  applies and expires.
+- The coordinator retains private typed calculation context for diagnostics;
+  forecasts remain transient.
+- Recalculate at startup, on configured source-entity changes, and exactly at
+  the current reserve interval's end. Coalesce bursts of source changes.
+- Fetch Forecast.Solar during each calculation. Hourly load and half-hourly
+  tariff boundaries ensure it is normally refreshed at least hourly without a
+  general polling loop.
+- On failure, apply the fail-safe and retry after one minute.
+- On orderly Home Assistant shutdown, cancel listeners and timers, then make a
+  best-effort fail-safe application.
+- Defer the first calculation until Home Assistant has started so source
+  integrations and helpers are available.
+- The coordinator is authoritative. Stub inverter entities are read-only to the
+  user and are not update triggers.
+- Apply controls immediately and idempotently. Set target state of charge
+  before changing operating mode. Round target state of charge upward to a
+  whole percentage so boundary conversion never violates the calculated
+  reserve.
+- The temporary actuator lives in `dependencies.stub_inverter`; it consumes
+  normalized `dependencies.solis_cloud.Control` values and writes the stub
+  `input_number` and `input_select`.
+- Expose one `sensor.house_battery_control`. Its state is the selected operating
+  mode. Scalar attributes record battery energy/SOC, current load and solar,
+  net load, tariff prices/classification, reserve start/end, command target,
+  applied SOC target and power, expiry, planning horizon, and each forecast's
+  coverage end. Do not expose complete forecast arrays.
 
 ## Load forecast decision
 

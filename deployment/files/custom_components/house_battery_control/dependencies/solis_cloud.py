@@ -1,7 +1,7 @@
 """SolisCloud dependency types and mappings."""
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from enum import StrEnum
 from typing import TypedDict
 
@@ -91,7 +91,7 @@ def _energy_percent(energy_kwh: Decimal, spec: battery.Spec) -> Decimal:
         raise ValueError("Battery capacity must be positive")
     percent = energy_kwh * PERCENT / spec.capacity_kwh
     _validate_percent(percent)
-    return percent
+    return percent.to_integral_value(rounding=ROUND_CEILING)
 
 
 def _validate_percent(percent: Decimal) -> None:

@@ -25,11 +25,11 @@ async def async_read_input(
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("Planning time must be timezone-aware")
 
-    power_limit_kw = _state_decimal(hass, config.battery.power_limit_entity_id)
+    power_limit_kw = read_decimal(hass, config.battery.power_limit_entity_id)
     battery_spec = config.battery.to_spec(power_limit_kw)
     battery_state = solis_cloud.to_battery_state(
         {
-            "state_of_charge_percent": _state_decimal(
+            "state_of_charge_percent": read_decimal(
                 hass,
                 config.battery.state_of_charge_entity_id,
             )
@@ -45,7 +45,7 @@ async def async_read_input(
         )
     tariff_forecast = octopus_energy.to_tariff_intervals(
         cast(str | Sequence[Rate], rates),
-        _state_decimal(hass, config.tariff.export_price_entity_id),
+        read_decimal(hass, config.tariff.export_price_entity_id),
     )
     future_tariffs = tuple(
         item for item in tariff_forecast if item.interval.end > now
@@ -95,7 +95,8 @@ def _state(hass: HomeAssistant, entity_id: str) -> State:
     return state
 
 
-def _state_decimal(hass: HomeAssistant, entity_id: str) -> Decimal:
+def read_decimal(hass: HomeAssistant, entity_id: str) -> Decimal:
+    """Read a finite decimal value from a required Home Assistant entity."""
     value = _state(hass, entity_id).state
     try:
         result = Decimal(value)
