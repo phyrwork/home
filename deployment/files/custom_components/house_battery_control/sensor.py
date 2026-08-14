@@ -4,7 +4,12 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
+from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -24,20 +29,31 @@ async def async_setup_platform(
     coordinator = hass.data[DOMAIN]
     if not isinstance(coordinator, Coordinator):
         return
-    async_add_entities((ControlSensor(coordinator),))
+    async_add_entities(
+        (
+            ControlSensor(coordinator),
+            BatteryEnergySensor(coordinator),
+            ReserveTargetSensor(coordinator),
+            ReserveBalanceSensor(coordinator),
+        )
+    )
 
 
-class ControlSensor(CoordinatorEntity[Coordinator], SensorEntity):
-    """Expose the current control decision and its calculation context."""
-
-    _attr_name = "House Battery Control"
-    _attr_unique_id = DOMAIN
-    _attr_icon = "mdi:home-battery"
+class _SnapshotSensor(CoordinatorEntity[Coordinator], SensorEntity):
+    """Base an entity's availability on the latest controller snapshot."""
 
     @property
     def available(self) -> bool:
         """Return whether a successful decision is available."""
         return super().available and self.coordinator.data is not None
+
+
+class ControlSensor(_SnapshotSensor):
+    """Expose the current control decision and its calculation context."""
+
+    _attr_name = "House Battery Control"
+    _attr_unique_id = DOMAIN
+    _attr_icon = "mdi:home-battery"
 
     @property
     def native_value(self) -> str | None:
@@ -90,6 +106,63 @@ class ControlSensor(CoordinatorEntity[Coordinator], SensorEntity):
             "load_forecast_end": snapshot.load_forecast_end.isoformat(),
             "solar_forecast_end": snapshot.solar_forecast_end.isoformat(),
         }
+
+
+class _EnergySensor(_SnapshotSensor):
+    """Expose a controller energy value in kilowatt-hours."""
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 2
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+
+class BatteryEnergySensor(_EnergySensor):
+    """Expose the integration's normalized stored battery energy."""
+
+    _attr_name = "House Battery Energy"
+    _attr_unique_id = f"{DOMAIN}_energy"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the current stored battery energy."""
+        snapshot = self.coordinator.data
+        if snapshot is None:
+            return None
+        return float(snapshot.battery_state.energy_kwh)
+
+
+class ReserveTargetSensor(_EnergySensor):
+    """Expose the battery energy currently required by the planner."""
+
+    _attr_name = "House Battery Reserve Target"
+    _attr_unique_id = f"{DOMAIN}_reserve_target"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the current reserve target."""
+        snapshot = self.coordinator.data
+        if snapshot is None:
+            return None
+        return float(snapshot.decision.reserve.start_energy_kwh)
+
+
+class ReserveBalanceSensor(_EnergySensor):
+    """Expose stored battery energy relative to the reserve target."""
+
+    _attr_name = "House Battery Reserve Balance"
+    _attr_unique_id = f"{DOMAIN}_reserve_balance"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return positive surplus or negative reserve shortfall energy."""
+        snapshot = self.coordinator.data
+        if snapshot is None:
+            return None
+        return float(
+            snapshot.battery_state.energy_kwh
+            - snapshot.decision.reserve.start_energy_kwh
+        )
 
 
 def _command_target(command: controller.Command) -> float | None:

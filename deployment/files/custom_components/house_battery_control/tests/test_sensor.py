@@ -1,7 +1,10 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
 
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 
 from custom_components.house_battery_control import (
@@ -19,7 +22,10 @@ from custom_components.house_battery_control.coordinator import (
 from custom_components.house_battery_control.dependencies import solis_cloud
 from custom_components.house_battery_control.interval import TimeInterval
 from custom_components.house_battery_control.sensor import (
+    BatteryEnergySensor,
     ControlSensor,
+    ReserveBalanceSensor,
+    ReserveTargetSensor,
     async_setup_platform,
 )
 
@@ -78,7 +84,15 @@ async def test_exposes_decision_and_diagnostic_context(
 
     await async_setup_platform(hass, {}, async_add_entities)
 
-    sensor = async_add_entities.call_args.args[0][0]
+    entities = async_add_entities.call_args.args[0]
+    assert [type(entity) for entity in entities] == [
+        ControlSensor,
+        BatteryEnergySensor,
+        ReserveTargetSensor,
+        ReserveBalanceSensor,
+    ]
+
+    sensor = entities[0]
     assert isinstance(sensor, ControlSensor)
     assert sensor.native_value == "force_export"
     assert sensor.available
@@ -104,15 +118,54 @@ async def test_exposes_decision_and_diagnostic_context(
     }
 
 
+def test_exposes_battery_and_reserve_energy(hass: HomeAssistant) -> None:
+    coordinator = Coordinator(hass, MagicMock())
+    coordinator.async_set_updated_data(snapshot())
+
+    energy = BatteryEnergySensor(coordinator)
+    reserve_target = ReserveTargetSensor(coordinator)
+    reserve_balance = ReserveBalanceSensor(coordinator)
+
+    assert energy.native_value == 16.0
+    assert reserve_target.native_value == 8.0
+    assert reserve_balance.native_value == 8.0
+    for sensor in (energy, reserve_target, reserve_balance):
+        assert sensor.available
+        assert sensor.device_class is SensorDeviceClass.ENERGY
+        assert sensor.native_unit_of_measurement is UnitOfEnergy.KILO_WATT_HOUR
+        assert sensor.suggested_display_precision == 2
+        assert sensor.state_class is SensorStateClass.MEASUREMENT
+
+
+def test_reserve_balance_reports_a_shortfall_as_negative(
+    hass: HomeAssistant,
+) -> None:
+    coordinator = Coordinator(hass, MagicMock())
+    coordinator.async_set_updated_data(
+        replace(
+            snapshot(),
+            battery_state=battery.State(energy_kwh=Decimal("6")),
+        )
+    )
+
+    assert ReserveBalanceSensor(coordinator).native_value == -2.0
+
+
 def test_unavailable_without_a_successful_decision(hass: HomeAssistant) -> None:
     coordinator = Coordinator(hass, MagicMock())
-    sensor = ControlSensor(coordinator)
+    sensors = (
+        ControlSensor(coordinator),
+        BatteryEnergySensor(coordinator),
+        ReserveTargetSensor(coordinator),
+        ReserveBalanceSensor(coordinator),
+    )
 
-    assert not sensor.available
-    assert sensor.native_value is None
-    assert sensor.extra_state_attributes is None
+    for sensor in sensors:
+        assert not sensor.available
+        assert sensor.native_value is None
+    assert sensors[0].extra_state_attributes is None
 
     coordinator.async_set_updated_data(snapshot())
     coordinator.last_update_success = False
 
-    assert not sensor.available
+    assert all(not sensor.available for sensor in sensors)
