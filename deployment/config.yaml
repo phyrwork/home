@@ -174,6 +174,9 @@
         component_full_name: hacs/integration
         component_domain: hacs
         component_version: "2.0.5"
+        component_archive_format: zip
+        component_archive_url: >-
+          https://github.com/hacs/integration/releases/download/2.0.5/hacs.zip
 
     - role: custom_component
       vars:
@@ -188,6 +191,20 @@
         component_full_name: BottlecapDave/HomeAssistant-OctopusEnergy
         component_domain: octopus_energy
         component_version: "v18.2.1"
+
+    - role: custom_component
+      vars:
+        component_name: Solis Inverter
+        component_full_name: hultenvp/solis-sensor
+        component_domain: solis
+        component_version: "v4.0.1"
+
+    - role: custom_component
+      vars:
+        component_name: Solis Cloud Control
+        component_full_name: mkuthan/solis-cloud-control
+        component_domain: solis_cloud_control
+        component_version: "v2.21.0"
 
     - role: custom_component
       vars:
@@ -421,6 +438,18 @@
           - "--exclude=.rsync-filter"
       notify: restart ha
 
+    - name: install house battery control custom component
+      ansible.builtin.synchronize:
+        src: custom_components/house_battery_control/
+        dest: "{{ ha_config_dir }}/custom_components/house_battery_control"
+        recursive: yes
+        delete: yes
+        links: yes
+        rsync_opts:
+          - "--exclude=__pycache__"
+          - "--exclude=tests"
+      notify: restart ha
+
     - name: install configuration
       copy:
         src: configuration.yaml
@@ -443,6 +472,12 @@
       copy:
         src: energy_cost_saving_tracker.yaml
         dest: "{{ ha_config_dir }}/energy_cost_saving_tracker.yaml"
+      notify: restart ha
+
+    - name: install house battery control configuration
+      copy:
+        src: house_battery_control.yaml
+        dest: "{{ ha_config_dir }}/house_battery_control.yaml"
       notify: restart ha
 
     - name: install waste collection schedule configuration

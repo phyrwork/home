@@ -182,7 +182,10 @@ in configuration, so tariff price changes require no manual update.
       failure retry, and fail-safe lifecycle.
 - [x] Wire coordinator startup and shutdown into integration setup.
 - [x] Define stub battery/inverter entities in IaC.
-- [ ] Install stub battery/inverter entities.
+- [x] Install stub battery/inverter entities.
+- [x] Pin the Solis telemetry and control integrations in IaC.
+- [x] Install the Solis telemetry and control integrations.
+- [ ] Configure the Solis telemetry and control integrations.
 - [x] Expose control, reserve, calculation context, forecast coverage, and
       coordinator health through one diagnostic sensor; stub helpers expose the
       successfully applied control.
@@ -190,7 +193,7 @@ in configuration, so tariff price changes require no manual update.
 - [ ] Implement idempotent SolisCloud command application.
 - [ ] Replace stub Solis telemetry/control after installation.
 - [ ] Add conservative behavior for missing/stale forecasts and API failures.
-- [ ] Add deployment wiring and verify on the live HA instance.
+- [x] Add deployment wiring and verify on the live HA instance.
 
 ## Home Assistant coordinator design
 

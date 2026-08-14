@@ -6,9 +6,18 @@
 
 - name: Set custom component paths
   ansible.builtin.set_fact:
-    component_source_id: "{{ component_full_name }}@{{ component_version }}"
+    component_source_id: >-
+      {{ component_full_name }}@{{ component_version }}{{
+        '#zip' if component_archive_format | default('tar.gz') == 'zip' else ''
+      }}
     component_archive_path: >-
-      /tmp/{{ component_domain }}-{{ component_version | regex_replace('[^A-Za-z0-9_.-]', '_') }}.tar.gz
+      /tmp/{{ component_domain }}-{{ component_version | regex_replace('[^A-Za-z0-9_.-]', '_') }}.{{
+        'zip' if component_archive_format | default('tar.gz') == 'zip' else 'tar.gz'
+      }}
+    component_download_url: >-
+      {{ component_archive_url | default(
+        'https://codeload.github.com/' ~ component_full_name ~ '/tar.gz/' ~ component_version
+      ) }}
     component_install_path: "{{ ha_custom_components_dir }}/{{ component_domain }}"
     component_extract_path: "{{ ha_custom_components_dir }}/.{{ component_domain }}.extract"
 
@@ -45,7 +54,7 @@
   block:
     - name: Download custom component archive
       ansible.builtin.get_url:
-        url: "https://codeload.github.com/{{ component_full_name }}/tar.gz/{{ component_version }}"
+        url: "{{ component_download_url }}"
         dest: "{{ component_archive_path }}"
         mode: "0644"
 
@@ -69,6 +78,14 @@
           "${archive_root}custom_components/{{ component_domain }}"
       args:
         executable: /bin/sh
+      when: component_archive_format | default('tar.gz') == 'tar.gz'
+
+    - name: Extract custom component from ZIP release
+      ansible.builtin.unarchive:
+        src: "{{ component_archive_path }}"
+        dest: "{{ component_extract_path }}"
+        remote_src: true
+      when: component_archive_format | default('tar.gz') == 'zip'
 
     - name: Check custom component exists in archive
       ansible.builtin.stat:
