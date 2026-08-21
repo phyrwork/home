@@ -531,7 +531,7 @@
 
     - name: install templated templates
       template:
-        src: "templates/{{ item }}.yaml.j2"
+        src: "{{ playbook_dir }}/templates/templates/{{ item }}.yaml.j2"
         dest: "{{ ha_config_dir }}/templates/{{ item }}.yaml"
       notify: reload templates
       loop:
@@ -540,7 +540,7 @@
 
     - name: install templated localtuya socket templates
       template:
-        src: "templates/localtuya_socket_power.yaml.j2"
+        src: "{{ playbook_dir }}/templates/templates/localtuya_socket_power.yaml.j2"
         dest: "{{ ha_config_dir }}/templates/{{ item.file }}.yaml"
       vars:
         name: "{{ item.name }}"
