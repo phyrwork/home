@@ -190,7 +190,7 @@
         component_name: Octopus Energy
         component_full_name: BottlecapDave/HomeAssistant-OctopusEnergy
         component_domain: octopus_energy
-        component_version: "v18.2.1"
+        component_version: "v18.3.3"
 
     - role: custom_component
       vars:
