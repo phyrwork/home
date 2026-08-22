@@ -12,5 +12,9 @@ BATTERY_CYCLE_COST_PER_KWH = Decimal("0.0165")
 OCTOPUS_RATE_SOURCE_MAX_AGE = timedelta(hours=26)
 OCTOPUS_EXPORT_SOURCE_MAX_AGE = timedelta(hours=26)
 OCTOPUS_DISPATCH_SOURCE_MAX_AGE = timedelta(minutes=10)
+# Forecasts are produced by a different integration from tariff data.  Keep a
+# separate, named bound so a caller cannot extend forecast validity by
+# supplying an arbitrary ``fresh_until`` value.
+FORECAST_SOURCE_MAX_AGE = timedelta(hours=2)
 MAXIMUM_SOURCE_FUTURE_SKEW = timedelta(minutes=2)
 OCTOPUS_RATE_UNIT = "GBP/kWh"

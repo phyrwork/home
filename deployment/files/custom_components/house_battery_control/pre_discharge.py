@@ -18,6 +18,7 @@ from typing import Any, Sequence
 
 from .domain_constants import (
     BATTERY_CYCLE_COST_PER_KWH,
+    FORECAST_SOURCE_MAX_AGE,
     MAXIMUM_GRID_IMPORT_POWER_KW,
     MAXIMUM_SOURCE_FUTURE_SKEW,
     OCTOPUS_DISPATCH_SOURCE_MAX_AGE,
@@ -64,6 +65,21 @@ class BatteryEnergyObservation:
     observed_at: datetime
     source: str
     revision: str
+    family: str = "solis.telemetry.stored_energy"
+
+
+@dataclass(frozen=True, slots=True)
+class EnergyObservationAuthority:
+    """T0004-bound identity for a stored-energy observation.
+
+    The reader/coordinator supplies these values from the authoritative T0004
+    snapshot.  A strategy must never accept an arbitrary non-empty source as
+    proof of battery energy.
+    """
+
+    source: str
+    family: str
+    revision: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +99,17 @@ class HeadroomIssue:
 
 
 @dataclass(frozen=True, slots=True)
+class ScheduleLedgerEntry:
+    """One exact simulated segment of the encoded continuous slot."""
+
+    start: datetime
+    end: datetime
+    start_energy_kwh: Decimal
+    end_energy_kwh: Decimal
+    discretionary_ac_export_kwh: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class PreDischargePlanResult:
     status: PreDischargePlanningStatus
     desired_window_start_energy_kwh: Decimal | None = None
@@ -96,6 +123,7 @@ class PreDischargePlanResult:
     expiry: datetime | None = None
     conservative_margin_per_stored_kwh: Decimal | None = None
     conservative_value: Decimal | None = None
+    schedule_ledger: tuple[ScheduleLedgerEntry, ...] = ()
     input_fingerprint: str | None = None
     fresh_until: datetime | None = None
     issues: tuple[HeadroomIssue, ...] = ()
@@ -208,6 +236,8 @@ def _validate_energy(energy: BatteryEnergyObservation, now: datetime) -> tuple[D
             raise ValueError("energy source must be non-empty")
         if not isinstance(energy.revision, str) or not energy.revision:
             raise ValueError("energy revision must be non-empty")
+        if not isinstance(energy.family, str) or not energy.family:
+            raise ValueError("energy family must be non-empty")
     except (TypeError, ValueError) as exc:
         return HeadroomIssue("ENERGY_INVALID", str(exc))
     fresh_until, issue = _fresh(observed, now)
@@ -250,7 +280,7 @@ def _validate_forecast_observation(
 ) -> tuple[datetime, HeadroomIssue | None]:
     """Validate forecast provenance without trusting caller-supplied freshness."""
     if observation is None:
-        return now + OCTOPUS_RATE_SOURCE_MAX_AGE, None
+        return now, HeadroomIssue("FORECAST_UNAVAILABLE", "forecast observation authority is required")
     if type(observation) is not ForecastObservation:
         return now, HeadroomIssue("FORECAST_INVALID", "forecast observation has an unexpected concrete type")
     try:
@@ -264,11 +294,35 @@ def _validate_forecast_observation(
             raise ValueError("forecast retrieval is in the future")
         if fresh_until < retrieved:
             raise ValueError("forecast freshness deadline precedes retrieval")
+        if fresh_until != retrieved + FORECAST_SOURCE_MAX_AGE:
+            raise ValueError("forecast freshness deadline does not match FORECAST_SOURCE_MAX_AGE")
     except (TypeError, ValueError) as exc:
         return now, HeadroomIssue("FORECAST_INVALID", str(exc))
     if now > fresh_until:
         return fresh_until, HeadroomIssue("FORECAST_STALE", "forecast observation is stale")
     return fresh_until, None
+
+
+def _validate_energy_authority(
+    energy: BatteryEnergyObservation,
+    authority: EnergyObservationAuthority | None,
+) -> HeadroomIssue | None:
+    if type(authority) is not EnergyObservationAuthority:
+        return HeadroomIssue("ENERGY_UNAVAILABLE", "T0004 energy observation authority is required")
+    try:
+        for label in ("source", "family", "revision"):
+            value = getattr(authority, label)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"energy authority {label} must be non-empty")
+        if energy.source != authority.source:
+            raise ValueError("energy source does not match T0004 authority")
+        if energy.family != authority.family:
+            raise ValueError("energy family does not match T0004 authority")
+        if energy.revision != authority.revision:
+            raise ValueError("energy revision does not match T0004 authority")
+    except (AttributeError, TypeError, ValueError) as exc:
+        return HeadroomIssue("ENERGY_INVALID", str(exc))
+    return None
 
 
 def _source_until(
@@ -420,7 +474,7 @@ def _window_import_rates(
         return (), HeadroomIssue("IMPORT_UNAVAILABLE", "import source observation is unavailable")
     if not isinstance(import_source.retrieved_at, datetime) or now - import_source.retrieved_at > OCTOPUS_RATE_SOURCE_MAX_AGE:
         return (), HeadroomIssue("IMPORT_UNAVAILABLE", "import source observation is stale")
-    if import_source.retrieved_at > now + MAXIMUM_FUTURE_CLOCK_SKEW:
+    if import_source.retrieved_at > now + MAXIMUM_SOURCE_FUTURE_SKEW:
         return (), HeadroomIssue("IMPORT_UNAVAILABLE", "import source observation is in the future")
     evaluated = evaluate_trusted_import_rates(
         import_rates=trusted_import.intervals,
@@ -470,7 +524,7 @@ def _export_coverage(
         return (), HeadroomIssue("EXPORT_UNAVAILABLE", "export source observation is unavailable")
     if not isinstance(source.retrieved_at, datetime) or now - source.retrieved_at > OCTOPUS_EXPORT_SOURCE_MAX_AGE:
         return (), HeadroomIssue("EXPORT_UNAVAILABLE", "export source observation is stale")
-    if source.retrieved_at > now + MAXIMUM_FUTURE_CLOCK_SKEW:
+    if source.retrieved_at > now + MAXIMUM_SOURCE_FUTURE_SKEW:
         return (), HeadroomIssue("EXPORT_UNAVAILABLE", "export source observation is in the future")
     usable: list[ExportRateInterval] = []
     cursor = _utc(start)
@@ -491,15 +545,35 @@ def _export_coverage(
     return tuple(usable), None
 
 
-def _wall_safe(start: datetime, end: datetime) -> HeadroomIssue | None:
-    if start.fold or end.fold:
-        return HeadroomIssue("DST_AMBIGUOUS", "ambiguous local wall time is not schedule representable")
-    if start.utcoffset() != end.utcoffset():
-        return HeadroomIssue("DST_TRANSITION", "schedule interval crosses a daylight-saving transition")
-    for value, label in ((start, "start"), (end, "end")):
-        roundtrip = value.astimezone(timezone.utc).astimezone(value.tzinfo)
-        if roundtrip.replace(fold=0) != value.replace(fold=0):
+def _wall_safe(start: datetime, end: datetime, zone: tzinfo | None = None) -> HeadroomIssue | None:
+    """Reject ambiguous/nonexistent endpoints and transitions in a slot."""
+    zone = zone or start.tzinfo
+    if zone is None:
+        return HeadroomIssue("DST_INVALID", "schedule timezone is missing")
+    left, right = start.astimezone(zone), end.astimezone(zone)
+
+    def classify(value: datetime, label: str) -> HeadroomIssue | None:
+        naive = value.replace(tzinfo=None)
+        candidates = (naive.replace(tzinfo=zone, fold=0), naive.replace(tzinfo=zone, fold=1))
+        valid = [candidate for candidate in candidates if candidate.astimezone(timezone.utc).astimezone(zone).replace(fold=0) == candidate.replace(fold=0)]
+        if not valid:
             return HeadroomIssue("DST_NONEXISTENT", f"{label} local wall time is nonexistent")
+        if len({candidate.utcoffset() for candidate in valid}) > 1 or value.fold:
+            return HeadroomIssue("DST_AMBIGUOUS", f"{label} local wall time is ambiguous")
+        return None
+
+    for value, label in ((left, "start"), (right, "end")):
+        issue = classify(value, label)
+        if issue:
+            return issue
+    if _utc(right) <= _utc(left):
+        return HeadroomIssue("SCHEDULE_INVALID", "schedule interval is not ordered")
+    cursor = left
+    while cursor < right:
+        probe = min(cursor + timedelta(minutes=1), right)
+        if probe.utcoffset() != left.utcoffset():
+            return HeadroomIssue("DST_TRANSITION", "schedule interval crosses a daylight-saving transition")
+        cursor = probe
     return None
 
 
@@ -512,63 +586,96 @@ def _minute_ceil(value: datetime) -> datetime:
     return floor if floor == value else floor + _MINUTE
 
 
-def _allocate_latest(
-    *,
-    intervals: Sequence[ReserveInputInterval],
-    baseline_starts: Sequence[Decimal],
-    baseline_ends: Sequence[Decimal],
-    reserve_starts: Sequence[Decimal],
-    reserve_ends: Sequence[Decimal],
-    baseline_ac: Sequence[Decimal],
-    target: Decimal,
-    maximum_discharge: Decimal,
-    discharge_eff: Decimal,
-) -> tuple[Decimal, datetime | None, datetime | None, Decimal]:
-    remaining = target
-    used = _ZERO
-    start: datetime | None = None
-    end: datetime | None = None
-    started = False
-    for index in range(len(intervals) - 1, -1, -1):
-        item = intervals[index]
-        duration = _hours(item.interval.start, item.interval.end)
-        output_rate = max(_ZERO, maximum_discharge - baseline_ac[index])
-        stored_rate = output_rate / discharge_eff
-        if stored_rate <= _ZERO:
-            # Once the suffix has started, a zero-capacity interval makes the
-            # otherwise tempting earlier piece disjoint.  A Solis schedule is
-            # one continuous slot; never collapse that gap into one intent.
-            if started:
-                break
-            continue
-        available_end = baseline_ends[index] - reserve_ends[index]
-        available_start = baseline_starts[index] - reserve_starts[index]
-        available = max(_ZERO, min(available_end, available_start))
-        possible = min(available, stored_rate * duration)
-        amount = min(remaining, possible)
-        if amount <= _ZERO:
-            if started:
-                break
-            continue
-        # Allocate the tail of this interval, retaining the exact proportional
-        # rule for partial forecast intervals.
-        span = amount / stored_rate
-        piece_start = item.interval.end - _delta_hours(span)
-        if span == duration:
-            piece_start = item.interval.start
-        piece_end = item.interval.end
-        if end is None:
-            end = piece_end
-        start = piece_start
-        started = True
-        used += amount
-        remaining -= amount
-        if remaining <= _ZERO:
-            break
-    return used, start, end, remaining
+@dataclass(frozen=True, slots=True)
+class _Simulation:
+    safe: bool
+    withdrawal_kwh: Decimal
+    target_stop: datetime | None
+    ledger: tuple[tuple[datetime, datetime, Decimal, Decimal, Decimal], ...]
+    issue: HeadroomIssue | None = None
 
 
-def plan_pre_discharge_headroom(
+def _reserve_at(reserve_plan: ReservePlanResult, intervals: Sequence[ReserveInputInterval], instant: datetime) -> Decimal | HeadroomIssue:
+    for source, reserve in zip(intervals, reserve_plan.trajectory, strict=True):
+        if _utc(source.interval.start) <= _utc(instant) <= _utc(source.interval.end):
+            duration = _hours(source.interval.start, source.interval.end)
+            fraction = _hours(source.interval.start, instant) / duration
+            left = _decimal(reserve.start_energy_kwh, "reserve start")
+            right = _decimal(reserve.end_energy_kwh, "reserve end")
+            return left + (right - left) * fraction
+    return HeadroomIssue("RESERVE_ALIGNMENT", "reserve trajectory does not cover simulation boundary")
+
+
+def _source_at(intervals: Sequence[ReserveInputInterval], instant: datetime) -> ReserveInputInterval | None:
+    for item in intervals:
+        if _utc(item.interval.start) <= _utc(instant) < _utc(item.interval.end):
+            return item
+    return intervals[-1] if intervals and _utc(instant) == _utc(intervals[-1].interval.end) else None
+
+
+def _simulate_continuous(
+    *, intervals: Sequence[ReserveInputInterval], reserve_plan: ReservePlanResult,
+    start_energy: Decimal, action_start: datetime, action_end: datetime,
+    maximum_charge: Decimal, maximum_discharge: Decimal, charge_eff: Decimal,
+    discharge_eff: Decimal, capacity: Decimal, minimum: Decimal, target: Decimal,
+) -> _Simulation:
+    """Simulate one continuous slot, carrying discretionary depletion forward."""
+    if _utc(action_end) <= _utc(action_start):
+        return _Simulation(False, _ZERO, None, (), HeadroomIssue("SCHEDULE_INVALID", "empty action interval"))
+    points = {_utc(intervals[0].interval.start), _utc(intervals[-1].interval.end), _utc(action_start), _utc(action_end)}
+    for item in intervals:
+        points.update((_utc(item.interval.start), _utc(item.interval.end)))
+    points = sorted(point for point in points if _utc(intervals[0].interval.start) <= point <= _utc(intervals[-1].interval.end))
+    energy, withdrawal, stop = start_energy, _ZERO, None
+    ledger: list[tuple[datetime, datetime, Decimal, Decimal, Decimal]] = []
+    for left, right in zip(points, points[1:]):
+        if right <= left:
+            continue
+        item = _source_at(intervals, left)
+        if item is None:
+            return _Simulation(False, withdrawal, stop, tuple(ledger), HeadroomIssue("FORECAST_COVERAGE", "simulation forecast has a gap"))
+        duration = _hours(left, right)
+        source_duration = _hours(item.interval.start, item.interval.end)
+        load = _decimal(item.load_kwh, "load_kwh") * duration / source_duration
+        solar = _decimal(item.solar_kwh, "solar_kwh") * duration / source_duration
+        deficit = load - solar
+        if deficit > _ZERO:
+            grid = min(deficit, MAXIMUM_GRID_IMPORT_POWER_KW * duration)
+            baseline_ac = deficit - grid
+            if baseline_ac > maximum_discharge * duration:
+                return _Simulation(False, withdrawal, stop, tuple(ledger), HeadroomIssue("DISCHARGE_POWER_EXCEEDED", "baseline household demand exceeds commissioned discharge output"))
+            baseline_delta = -baseline_ac / discharge_eff
+        else:
+            baseline_ac = _ZERO
+            baseline_delta = min(-deficit, maximum_charge * duration) * charge_eff
+        reserve_left = _reserve_at(reserve_plan, intervals, left)
+        reserve_right = _reserve_at(reserve_plan, intervals, right)
+        if isinstance(reserve_left, HeadroomIssue) or isinstance(reserve_right, HeadroomIssue):
+            return _Simulation(False, withdrawal, stop, tuple(ledger), reserve_left if isinstance(reserve_left, HeadroomIssue) else reserve_right)
+        discretionary_ac = _ZERO
+        active_left, active_right = max(left, _utc(action_start)), min(right, _utc(action_end))
+        if active_left < active_right:
+            active_hours = _hours(active_left, active_right)
+            baseline_rate = baseline_ac / duration
+            remaining_output = max(_ZERO, (maximum_discharge - baseline_rate) * active_hours)
+            remaining_target = max(_ZERO, target - withdrawal)
+            discretionary_stored = min(remaining_target, remaining_output / discharge_eff)
+            discretionary_ac = discretionary_stored * discharge_eff
+            if discretionary_stored > _ZERO and stop is None and withdrawal + discretionary_stored >= target:
+                stop = active_left + _delta_hours(discretionary_ac / max(_ZERO, maximum_discharge - baseline_rate))
+                stop = min(stop, active_right)
+            withdrawal += discretionary_stored
+        end_energy = energy + baseline_delta - discretionary_ac / discharge_eff
+        if energy < reserve_left or energy < minimum or energy > capacity:
+            return _Simulation(False, withdrawal, stop, tuple(ledger), HeadroomIssue("RESERVE_BREACH", "trajectory starts below reserve"))
+        if end_energy < reserve_right or end_energy < minimum or end_energy > capacity:
+            return _Simulation(False, withdrawal, stop, tuple(ledger), HeadroomIssue("RESERVE_BREACH", "trajectory ends below reserve"))
+        ledger.append((left, right, energy, end_energy, discretionary_ac))
+        energy = end_energy
+    return _Simulation(True, withdrawal, stop, tuple(ledger))
+
+
+def _plan_pre_discharge_headroom(
     *,
     energy: BatteryEnergyObservation,
     forecast_intervals: Sequence[ReserveInputInterval],
@@ -590,6 +697,7 @@ def plan_pre_discharge_headroom(
     cycle_cost_per_kwh: Any = BATTERY_CYCLE_COST_PER_KWH,
     forecast_observation: ForecastObservation | None = None,
     inverter_timezone: tzinfo | None = None,
+    energy_authority: EnergyObservationAuthority | None = None,
 ) -> PreDischargePlanResult:
     """Plan the latest safe, profitable standard-window pre-discharge."""
     try:
@@ -609,16 +717,13 @@ def plan_pre_discharge_headroom(
         window_start, window_end = _aware(standard_window.start, "window start"), _aware(standard_window.end, "window end")
         if _utc(window_end) <= _utc(window_start):
             raise ValueError("standard window must be ordered")
-        if inverter_timezone is not None and not isinstance(inverter_timezone, tzinfo):
-            raise ValueError("inverter_timezone must be a tzinfo")
-        if inverter_timezone is not None:
-            if window_start.tzinfo != inverter_timezone or window_end.tzinfo != inverter_timezone:
-                raise ValueError("window times must use the configured inverter timezone")
-        local_start = window_start.astimezone(inverter_timezone or window_start.tzinfo)
-        local_end = window_end.astimezone(inverter_timezone or window_end.tzinfo)
-        if local_start.date() != local_end.date():
-            raise ValueError("cross-midnight and multi-day schedules are not representable")
-        wall_issue = _wall_safe(window_start, window_end)
+        if not isinstance(inverter_timezone, tzinfo):
+            raise ValueError("inverter_timezone must be explicit")
+        local_start = window_start.astimezone(inverter_timezone)
+        local_end = window_end.astimezone(inverter_timezone)
+        if _utc(window_end) - _utc(window_start) >= _DAY:
+            raise ValueError("schedule interval must be shorter than 24 hours")
+        wall_issue = _wall_safe(local_start, local_end, inverter_timezone)
         if wall_issue:
             return _issue(PreDischargePlanningStatus.INVALID, wall_issue.code, wall_issue.detail)
     except (TypeError, ValueError) as exc:
@@ -629,16 +734,26 @@ def plan_pre_discharge_headroom(
         status = PreDischargePlanningStatus.UNAVAILABLE if energy_value.code in {"ENERGY_STALE", "ENERGY_IN_FUTURE"} else PreDischargePlanningStatus.INVALID
         return _issue(status, energy_value.code, energy_value.detail)
     observed_kwh, fresh_until = energy_value
+    energy_authority_issue = _validate_energy_authority(energy, energy_authority)
+    if energy_authority_issue:
+        status = PreDischargePlanningStatus.UNAVAILABLE if energy_authority_issue.code.endswith("UNAVAILABLE") else PreDischargePlanningStatus.INVALID
+        return _issue(status, energy_authority_issue.code, energy_authority_issue.detail)
     forecast_fresh_until, forecast_issue = _validate_forecast_observation(forecast_observation, now=now)
     if forecast_issue:
-        status = PreDischargePlanningStatus.UNAVAILABLE if forecast_issue.code.endswith("STALE") else PreDischargePlanningStatus.INVALID
+        status = PreDischargePlanningStatus.UNAVAILABLE if forecast_issue.code.endswith(("STALE", "UNAVAILABLE")) else PreDischargePlanningStatus.INVALID
         return _issue(status, forecast_issue.code, forecast_issue.detail)
     fresh_until = min(fresh_until, forecast_fresh_until)
     if _utc(energy.observed_at) > _utc(window_start):
         return _issue(PreDischargePlanningStatus.UNAVAILABLE, "ENERGY_AFTER_WINDOW_START", "energy observation is after the window start")
-    forecast_issue = _validate_intervals(forecast_intervals, energy.observed_at, window_start)
+    try:
+        horizon_end = forecast_intervals[-1].interval.end
+    except (IndexError, AttributeError, TypeError):
+        return _issue(PreDischargePlanningStatus.INVALID, "FORECAST_INVALID", "forecast horizon is empty or malformed")
+    forecast_issue = _validate_intervals(forecast_intervals, energy.observed_at, horizon_end)
     if forecast_issue:
         return _issue(PreDischargePlanningStatus.INVALID, forecast_issue.code, forecast_issue.detail)
+    if _utc(horizon_end) < _utc(window_end):
+        return _issue(PreDischargePlanningStatus.UNAVAILABLE, "FORECAST_COVERAGE", "forecast does not cover the complete refill window")
     # Reserve trajectories may include the refill window.  For this strategy,
     # only boundaries through the window start are needed for the backward
     # overlay, but all supplied material inputs remain in the fingerprint.
@@ -697,18 +812,18 @@ def plan_pre_discharge_headroom(
         except (AttributeError, TypeError, ValueError) as exc:
             return _issue(PreDischargePlanningStatus.INVALID, "DISPATCH_INVALID", str(exc))
 
-    # Re-run the exact commissioned T0013 planner over the same forecast and
-    # trusted tariff evidence.  A caller-provided trajectory is diagnostic
-    # input only and can never authorize a discharge by itself.
+    # Re-run T0013 over the complete supplied horizon, including refill and
+    # later demand.  A pre-window-only proof can be unsafe when later demand
+    # raises the reverse reserve floor.
     if type(reserve_plan) is not ReservePlanResult:
         return _issue(PreDischargePlanningStatus.INVALID, "RESERVE_INVALID", "reserve plan has an unexpected concrete type")
     proved_reserve = plan_commissioned_reserve(
-        intervals=pre_window_intervals,
+        intervals=forecast_intervals,
         trusted_import=trusted_import,
         import_source=import_source,
         dispatch_source=dispatch_source,
-        start=pre_window_intervals[0].interval.start,
-        end=pre_window_intervals[-1].interval.end,
+        start=forecast_intervals[0].interval.start,
+        end=forecast_intervals[-1].interval.end,
         now=now,
         capacity_kwh=capacity,
         minimum_energy_kwh=minimum,
@@ -724,11 +839,11 @@ def plan_pre_discharge_headroom(
         )
         detail = "; ".join(issue.detail for issue in proved_reserve.issues) or "T0013 reserve proof is not complete"
         return _issue(status, "RESERVE_" + proved_reserve.status.value, detail)
+    if len(reserve_plan.trajectory) != len(proved_reserve.trajectory) or any(
+        left != right for left, right in zip(reserve_plan.trajectory, proved_reserve.trajectory, strict=True)
+    ):
+        return _issue(PreDischargePlanningStatus.UNAVAILABLE, "RESERVE_FINGERPRINT_MISMATCH", "supplied reserve trajectory does not equal the complete recomputed result")
     reserve_plan = proved_reserve
-    reserve_bounds = _reserve_for_intervals(reserve_plan, pre_window_intervals, pre_window_intervals)
-    if isinstance(reserve_bounds, HeadroomIssue):
-        return _issue(PreDischargePlanningStatus.UNAVAILABLE, reserve_bounds.code, reserve_bounds.detail)
-    reserve_starts, reserve_ends = reserve_bounds
 
     # The observation may pre-date ``now``.  Simulate that historical slice
     # only to establish today's starting energy; no proposed intent may start
@@ -737,8 +852,8 @@ def plan_pre_discharge_headroom(
         return _issue(PreDischargePlanningStatus.INFEASIBLE, "NO_ACTION_TIME", "window has already started")
     observed_to_now = _slice_forecast(pre_window_intervals, energy.observed_at, now)
     action_intervals = _slice_forecast(pre_window_intervals, now, window_start)
-    past_reserves = _reserve_for_intervals(reserve_plan, pre_window_intervals, observed_to_now)
-    action_reserves = _reserve_for_intervals(reserve_plan, pre_window_intervals, action_intervals)
+    past_reserves = _reserve_for_intervals(reserve_plan, forecast_intervals, observed_to_now)
+    action_reserves = _reserve_for_intervals(reserve_plan, forecast_intervals, action_intervals)
     if isinstance(past_reserves, HeadroomIssue) or isinstance(action_reserves, HeadroomIssue):
         problem = past_reserves if isinstance(past_reserves, HeadroomIssue) else action_reserves
         return _issue(PreDischargePlanningStatus.UNAVAILABLE, problem.code, problem.detail)
@@ -792,6 +907,7 @@ def plan_pre_discharge_headroom(
         export_source=export_source,
         dispatch_source=dispatch_source,
         forecast_observation=forecast_observation,
+        energy_authority=energy_authority,
         inverter_timezone=inverter_timezone,
         commissioned=commissioned,
         authority=authority,
@@ -810,6 +926,7 @@ def plan_pre_discharge_headroom(
             "octopus_rate_source_max_age": OCTOPUS_RATE_SOURCE_MAX_AGE,
             "octopus_export_source_max_age": OCTOPUS_EXPORT_SOURCE_MAX_AGE,
             "octopus_dispatch_source_max_age": OCTOPUS_DISPATCH_SOURCE_MAX_AGE,
+            "forecast_source_max_age": FORECAST_SOURCE_MAX_AGE,
         },
     )
     fingerprint = _fingerprint(**common_inputs)
@@ -824,126 +941,50 @@ def plan_pre_discharge_headroom(
             fresh_until=fresh_until,
         )
 
-    # Quantize the end down first.  This is intentionally conservative: any
-    # fractional cheap-window start is left free of discharge.
-    quantized_end = _minute_floor(window_start)
-    pre_window = _slice_forecast(forecast_intervals, now, quantized_end)
-    if not pre_window:
+    # Encode both boundaries in the inverter timezone.  Search minute starts
+    # backwards using one continuous forward simulator; disjoint forecast
+    # pieces are never merged into a Solis schedule.
+    local_end = _minute_floor(window_start.astimezone(inverter_timezone))
+    quantized_end = local_end
+    if _utc(quantized_end) <= _utc(now):
         return _issue(PreDischargePlanningStatus.INFEASIBLE, "NO_PREWINDOW_TIME", "no minute-representable pre-window time remains")
-    # Use the full-interval boundary arrays for aligned forecasts.  The normal
-    # Solis/OCTOPUS path is minute-aligned; partial boundary support is handled
-    # by the exact clipping and the conservative endpoint proof below.
-    quantized_reserves = _reserve_for_intervals(reserve_plan, pre_window_intervals, pre_window)
-    if isinstance(quantized_reserves, HeadroomIssue):
-        return _issue(PreDischargePlanningStatus.UNAVAILABLE, quantized_reserves.code, quantized_reserves.detail)
-    quantized_reserve_starts, quantized_reserve_ends = quantized_reserves
-    prefix_intervals = _slice_forecast(forecast_intervals, now, quantized_end)
-    prefix_reserves = _reserve_for_intervals(reserve_plan, pre_window_intervals, prefix_intervals)
-    if isinstance(prefix_reserves, HeadroomIssue):
-        return _issue(PreDischargePlanningStatus.UNAVAILABLE, prefix_reserves.code, prefix_reserves.detail)
-    prefix_starts, prefix_ends = prefix_reserves
-    prefix_baseline = _forward_baseline(
-        energy=energy_at_now,
-        intervals=prefix_intervals,
-        reserve_starts=prefix_starts,
-        reserve_ends=prefix_ends,
-        capacity=capacity,
-        minimum=minimum,
-        charge_eff=charge_eff,
-        discharge_eff=discharge_eff,
-        maximum_charge=maximum_charge,
-        maximum_discharge=maximum_discharge,
-    )
-    if isinstance(prefix_baseline, HeadroomIssue):
-        return _issue(PreDischargePlanningStatus.INFEASIBLE, prefix_baseline.code, prefix_baseline.detail)
-    prefix_baseline_starts, prefix_baseline_ends, prefix_baseline_ac, _ = prefix_baseline
-    # Locate the exact suffix represented by the quantized discharge interval.
-    suffix_offset = len(prefix_intervals) - len(pre_window)
-    allocation = _allocate_latest(
-        intervals=pre_window,
-        baseline_starts=prefix_baseline_starts[suffix_offset:],
-        baseline_ends=prefix_baseline_ends[suffix_offset:],
-        reserve_starts=quantized_reserve_starts,
-        reserve_ends=quantized_reserve_ends,
-        baseline_ac=prefix_baseline_ac[suffix_offset:],
-        target=desired_withdrawal,
-        maximum_discharge=maximum_discharge,
-        discharge_eff=discharge_eff,
-    )
-    reachable_withdrawal, proposed_start, proposed_end, uncreated = allocation
-    if reachable_withdrawal <= _ZERO or proposed_start is None or proposed_end is None:
-        return _issue(PreDischargePlanningStatus.INFEASIBLE, "NO_REACHABLE_HEADROOM", "reserve or commissioned output leaves no safe export interval")
-    # Round the start earlier, then repeat allocation in the rounded interval.
-    quantized_start = _minute_floor(proposed_start)
-    if _utc(quantized_start) < _utc(now):
-        quantized_start = _minute_ceil(now)
-    quantized_end = min(_minute_floor(proposed_end), _minute_floor(window_start))
-    if _utc(quantized_end) <= _utc(quantized_start) or quantized_end - quantized_start >= _DAY:
-        return _issue(PreDischargePlanningStatus.INVALID, "SCHEDULE_NOT_REPRESENTABLE", "quantized interval is empty or at least 24 hours")
-    wall_issue = _wall_safe(quantized_start, quantized_end)
-    if wall_issue:
-        return _issue(PreDischargePlanningStatus.INVALID, wall_issue.code, wall_issue.detail)
-    # Re-run the complete forward proof and latest-start allocation after both
-    # boundary quantizations.  This prevents a rounded schedule from relying
-    # on energy or reserve that existed only in a fractional interval.
-    final_intervals = _slice_forecast(forecast_intervals, quantized_start, quantized_end)
-    final_reserves = _reserve_for_intervals(reserve_plan, pre_window_intervals, final_intervals)
-    if isinstance(final_reserves, HeadroomIssue):
-        return _issue(PreDischargePlanningStatus.UNAVAILABLE, final_reserves.code, final_reserves.detail)
-    final_reserve_starts, final_reserve_ends = final_reserves
-    before_intervals = _slice_forecast(forecast_intervals, now, quantized_start)
-    before_reserves = _reserve_for_intervals(reserve_plan, pre_window_intervals, before_intervals)
-    if isinstance(before_reserves, HeadroomIssue):
-        return _issue(PreDischargePlanningStatus.UNAVAILABLE, before_reserves.code, before_reserves.detail)
-    before_reserve_starts, before_reserve_ends = before_reserves
-    before_baseline = _forward_baseline(
-        energy=energy_at_now,
-        intervals=before_intervals,
-        reserve_starts=before_reserve_starts,
-        reserve_ends=before_reserve_ends,
-        capacity=capacity,
-        minimum=minimum,
-        charge_eff=charge_eff,
-        discharge_eff=discharge_eff,
-        maximum_charge=maximum_charge,
-        maximum_discharge=maximum_discharge,
-    )
-    if isinstance(before_baseline, HeadroomIssue):
-        return _issue(PreDischargePlanningStatus.INFEASIBLE, before_baseline.code, before_baseline.detail)
-    final_start_energy = before_baseline[1][-1] if before_baseline[1] else energy_at_now
-    final_baseline = _forward_baseline(
-        energy=final_start_energy,
-        intervals=final_intervals,
-        reserve_starts=final_reserve_starts,
-        reserve_ends=final_reserve_ends,
-        capacity=capacity,
-        minimum=minimum,
-        charge_eff=charge_eff,
-        discharge_eff=discharge_eff,
-        maximum_charge=maximum_charge,
-        maximum_discharge=maximum_discharge,
-    )
-    if isinstance(final_baseline, HeadroomIssue):
-        return _issue(PreDischargePlanningStatus.INFEASIBLE, final_baseline.code, final_baseline.detail)
-    final_allocation = _allocate_latest(
-        intervals=final_intervals,
-        baseline_starts=final_baseline[0],
-        baseline_ends=final_baseline[1],
-        reserve_starts=final_reserve_starts,
-        reserve_ends=final_reserve_ends,
-        baseline_ac=final_baseline[2],
-        target=desired_withdrawal,
-        maximum_discharge=maximum_discharge,
-        discharge_eff=discharge_eff,
-    )
-    reachable_withdrawal, final_start, final_end, uncreated = final_allocation
-    if reachable_withdrawal <= _ZERO or final_start is None or final_end is None:
-        return _issue(PreDischargePlanningStatus.INFEASIBLE, "NO_REACHABLE_HEADROOM", "rounded interval leaves no safe export capacity")
-    # The allocation is now exact for the quantized interval.  Restrict
-    # economic authorization to that interval and desired energy.
-    proposed_start = final_start
-    proposed_end = final_end
-    planned = min(reachable_withdrawal, desired_withdrawal)
+    best: tuple[datetime, _Simulation] | None = None
+    latest_safe: tuple[datetime, _Simulation] | None = None
+    horizon_minutes = int((_utc(quantized_end) - _utc(now)).total_seconds() // 60)
+    for offset in range(horizon_minutes + 1):
+        candidate = local_end - offset * _MINUTE
+        if _utc(candidate) < _utc(now):
+            break
+        if _utc(candidate) == _utc(quantized_end):
+            continue
+        wall_issue = _wall_safe(candidate, quantized_end, inverter_timezone)
+        if wall_issue:
+            continue
+        simulation = _simulate_continuous(
+            intervals=forecast_intervals, reserve_plan=reserve_plan,
+            start_energy=observed_kwh, action_start=candidate, action_end=quantized_end,
+            maximum_charge=maximum_charge, maximum_discharge=maximum_discharge,
+            charge_eff=charge_eff, discharge_eff=discharge_eff, capacity=capacity,
+            minimum=minimum, target=desired_withdrawal,
+        )
+        if not simulation.safe:
+            continue
+        if latest_safe is None or simulation.withdrawal_kwh > latest_safe[1].withdrawal_kwh:
+            latest_safe = (candidate, simulation)
+        if simulation.withdrawal_kwh >= desired_withdrawal:
+            best = (candidate, simulation)
+            break
+    if best is None:
+        best = latest_safe
+    if best is None or best[1].withdrawal_kwh <= _ZERO:
+        return _issue(PreDischargePlanningStatus.INFEASIBLE, "NO_REACHABLE_HEADROOM", "reserve or commissioned output leaves no safe continuous export interval")
+    quantized_start, simulation = best
+    proposed_start, proposed_end = quantized_start, quantized_end
+    planned = min(simulation.withdrawal_kwh, desired_withdrawal)
+    if _utc(proposed_end) - _utc(proposed_start) >= _DAY:
+        return _issue(PreDischargePlanningStatus.INVALID, "SCHEDULE_NOT_REPRESENTABLE", "quantized interval is at least 24 hours")
+    # Economics covers every encoded discharge instant, even when target-stop
+    # would end discretionary withdrawal before the slot boundary.
     exports, issue = _export_coverage(export_rates, proposed_start, proposed_end, export_source, now)
     if issue:
         status = PreDischargePlanningStatus.UNAVAILABLE if issue.code.endswith("UNAVAILABLE") or issue.code in {"EXPORT_COVERAGE", "EXPORT_PROVENANCE"} else PreDischargePlanningStatus.INVALID
@@ -980,18 +1021,32 @@ def plan_pre_discharge_headroom(
         expiry=fresh_until,
         conservative_margin_per_stored_kwh=conservative_margin,
         conservative_value=conservative_margin * planned,
+        schedule_ledger=tuple(
+            ScheduleLedgerEntry(left, right, start_energy, end_energy, discretionary_ac)
+            for left, right, start_energy, end_energy, discretionary_ac in simulation.ledger
+        ),
         input_fingerprint=fingerprint,
         fresh_until=fresh_until,
     )
+
+
+def plan_pre_discharge_headroom(**kwargs: Any) -> PreDischargePlanResult:
+    """Typed fail-closed boundary for malformed external sequences."""
+    try:
+        return _plan_pre_discharge_headroom(**kwargs)
+    except Exception as exc:  # malformed third-party records are data, not crashes
+        return _issue(PreDischargePlanningStatus.INVALID, "INPUT_INVALID", str(exc))
 
 
 commissioned_pre_discharge_headroom = plan_pre_discharge_headroom
 
 __all__ = [
     "BatteryEnergyObservation",
+    "EnergyObservationAuthority",
     "ForecastObservation",
     "EnergyObservation",
     "HeadroomIssue",
+    "ScheduleLedgerEntry",
     "PreDischargePlanResult",
     "PreDischargePlanningStatus",
     "PreDischargeResult",
