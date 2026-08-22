@@ -1,3 +1,5 @@
+# One-time SolisCloud commissioning: EMS is disabled for this plant so cloud
+# dispatch cannot overwrite Home Assistant inverter controls.
 battery:
   capacity_kwh: 32.1536
   minimum_state_of_charge_percent: 10
