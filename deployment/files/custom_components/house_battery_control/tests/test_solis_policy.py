@@ -1,5 +1,6 @@
 """Focused tests for the Solis policy fail-safe and healthy baseline."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -132,3 +133,82 @@ async def test_healthy_baseline_selects_feed_in_priority_and_proves_no_slots():
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.FEED_IN_PRIORITY.value
     assert ha.states[actuator.config.persistent.allow_grid_charging_entity_id]["state"] == "on"
     assert result.slot_result is None
+
+
+async def _cancel_repeatedly_during_write(actuator, ha, operation):
+    gate = asyncio.Event()
+    started = asyncio.Event()
+    original_call = ha.async_call
+
+    async def blocked_call(domain, service, data, *, blocking=True):
+        started.set()
+        await gate.wait()
+        return await original_call(domain, service, data, blocking=blocking)
+
+    ha.async_call = blocked_call
+    task = asyncio.create_task(operation())
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_fail_safe_completes_slot_and_persistent_cleanup_before_cancellation():
+    actuator, ha, _observation = policy()
+
+    await _cancel_repeatedly_during_write(actuator, ha, actuator.async_apply_fail_safe)
+
+    assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
+    assert ha.states[actuator.config.persistent.grid_peak_shaving_entity_id]["state"] == "on"
+    assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
+    assert all(
+        ha.states[direction.enable_entity_id]["state"] == "off"
+        for slot in actuator.config.slots
+        for direction in (slot.charge, slot.discharge)
+    )
+
+
+@pytest.mark.asyncio
+async def test_healthy_cancellation_falls_back_without_lock_deadlock():
+    actuator, ha, observation = policy()
+
+    await _cancel_repeatedly_during_write(
+        actuator,
+        ha,
+        lambda: actuator.async_apply_healthy(
+            observation=observation,
+            reserve_soc_percent=10,
+            intent=None,
+            now=NOW,
+        ),
+    )
+
+    assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
+    assert ha.states[actuator.config.persistent.grid_peak_shaving_entity_id]["state"] == "on"
+    assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_healthy_rejects_reserve_below_required_capability():
+    actuator, ha, observation = policy()
+    entity_id = actuator.config.protection.battery_reserve_soc_entity_id
+    ha.states[entity_id]["state"] = "5"
+    ha.states[entity_id]["attributes"]["max"] = "5"
+    observation = read_solis_state(actuator.config, ha.states, NOW)
+
+    result = await actuator.async_apply_healthy(
+        observation=observation,
+        reserve_soc_percent=10,
+        intent=None,
+        now=NOW,
+    )
+
+    assert not result.success
+    assert result.safe
+    assert "cannot represent" in result.message
+    assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
+    assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
