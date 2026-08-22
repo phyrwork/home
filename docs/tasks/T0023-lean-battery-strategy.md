@@ -1,6 +1,6 @@
 # T0023 — Lean battery strategy and full-SOC cycling
 
-Status: Council approved
+Status: Implemented
 
 ## Objective
 
@@ -40,4 +40,3 @@ inputs and the current cycle state, select exactly one action:
 - Pure tests pass.
 - No charging and discharging intent can be returned together.
 - The API is small enough for the coordinator cutover to consume directly.
-
