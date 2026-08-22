@@ -537,6 +537,7 @@
       loop:
         - battery_low
         - octopus_energy_electricity_current_export
+        - octopus_fused_day_rates
 
     - name: install templated localtuya socket templates
       template:

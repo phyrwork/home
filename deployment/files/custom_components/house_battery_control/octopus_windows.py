@@ -89,11 +89,13 @@ class AdjustedRateInterval:
     source_day: str
     source_event: str
     source_revision_at: datetime
-    is_intelligent_adjusted: bool = False
+    retrieval_source_entity_id: str
+    dispatch_source_entity_id: str
+    event_minimum: Decimal
+    event_unique_price_count: int
+    is_intelligent_adjusted: bool
     unit: str = OCTOPUS_RATE_UNIT
     is_capped: bool | None = None
-    event_minimum: Decimal | None = None
-    event_unique_price_count: int | None = None
 
     def __post_init__(self) -> None:
         _aware(self.start, "start")
@@ -108,13 +110,14 @@ class AdjustedRateInterval:
         _text(self.tariff, "tariff")
         _text(self.source_day, "source_day")
         _text(self.source_event, "source_event")
+        _text(self.retrieval_source_entity_id, "retrieval_source_entity_id")
+        _text(self.dispatch_source_entity_id, "dispatch_source_entity_id")
         _aware(self.source_revision_at, "source_revision_at")
         _bool(self.is_intelligent_adjusted, "is_intelligent_adjusted")
         if self.is_capped is not None:
             _bool(self.is_capped, "is_capped")
-        if self.event_minimum is not None:
-            object.__setattr__(self, "event_minimum", _decimal(self.event_minimum, "event_minimum"))
-        if self.event_unique_price_count is not None and (
+        object.__setattr__(self, "event_minimum", _decimal(self.event_minimum, "event_minimum"))
+        if (
             type(self.event_unique_price_count) is not int or self.event_unique_price_count < 1
         ):
             raise ValueError("event_unique_price_count must be a positive integer")
@@ -130,8 +133,10 @@ class ExportRateInterval:
     source: str
     tariff: str
     retrieved_at: datetime
-    source_day: str = "unknown"
-    source_event: str = "unknown"
+    source_day: str
+    source_event: str
+    source_revision_at: datetime
+    retrieval_source_entity_id: str
     unit: str = OCTOPUS_RATE_UNIT
     is_capped: bool | None = None
 
@@ -147,7 +152,9 @@ class ExportRateInterval:
         _text(self.tariff, "tariff")
         _text(self.source_day, "source_day")
         _text(self.source_event, "source_event")
+        _text(self.retrieval_source_entity_id, "retrieval_source_entity_id")
         _aware(self.retrieved_at, "retrieved_at")
+        _aware(self.source_revision_at, "source_revision_at")
         if self.is_capped is not None:
             _bool(self.is_capped, "is_capped")
 
@@ -192,6 +199,16 @@ class CheapWindowResult:
     issues: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class TrustedImportResult:
+    """A complete import-classification view independent of export value."""
+
+    coverage_status: CoverageStatus
+    intervals: tuple[AdjustedRateInterval, ...] = ()
+    diagnostic_intervals: tuple[AdjustedRateInterval, ...] = ()
+    issues: tuple[str, ...] = ()
+
+
 def _classification(value: Any) -> CheapClassification:
     try:
         return CheapClassification(value)
@@ -216,7 +233,8 @@ def parse_fused_import_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
         required = (
             "start", "end", "value_inc_vat", "unit", "is_intelligent_adjusted",
             "classification", "source", "source_event", "source_day", "tariff",
-            "source_revision_at", "event_min_rate", "event_unique_price_count",
+            "source_revision_at", "retrieval_source_entity_id",
+            "dispatch_source_entity_id", "event_min_rate", "event_unique_price_count",
         )
         missing = [key for key in required if key not in record]
         if missing:
@@ -249,11 +267,17 @@ def parse_fused_import_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
             source_day=_text(record["source_day"], "source_day"),
             source_event=event,
             source_revision_at=_parse_datetime(record["source_revision_at"], "source_revision_at"),
+            retrieval_source_entity_id=_text(
+                record["retrieval_source_entity_id"], "retrieval_source_entity_id"
+            ),
+            dispatch_source_entity_id=_text(
+                record["dispatch_source_entity_id"], "dispatch_source_entity_id"
+            ),
+            event_minimum=event_min,
+            event_unique_price_count=unique_count,
             is_intelligent_adjusted=adjusted,
             unit=record["unit"],
             is_capped=is_capped,
-            event_minimum=event_min,
-            event_unique_price_count=unique_count,
         )
         result.append(interval)
         if adjusted and price != event_min:
@@ -277,16 +301,175 @@ def parse_fused_import_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
                 # Every minimum in a two/three-rate standard event, and every
                 # adjusted interval, must be classified explicitly.
                 raise ValueError("cheap interval is not classified consistently")
+    issue = _validate_import_interval_sequence(result)
+    if issue:
+        raise ValueError(issue)
     return tuple(result)
 
 
 def _adjusted_for(interval: AdjustedRateInterval) -> bool:
-    """Recover the adjustment flag from the mandatory classification contract."""
+    """Return the producer-normalized upstream adjustment flag."""
 
-    # ``AdjustedRateInterval`` intentionally stores the normalized source
-    # classification rather than duplicating a mutable boolean.  A bonus
-    # classification is the only adjusted interval that can pass the parser.
     return interval.is_intelligent_adjusted
+
+
+def _validate_import_interval_sequence(
+    intervals: Sequence[AdjustedRateInterval],
+) -> str | None:
+    """Validate direct objects as strictly as fused parser output."""
+
+    allowed = {
+        CheapClassification.STANDARD_CHEAP,
+        CheapClassification.BONUS_DISPATCH,
+        CheapClassification.NOT_CHEAP,
+    }
+    groups: dict[str, list[AdjustedRateInterval]] = {}
+    previous: AdjustedRateInterval | None = None
+    for interval in intervals:
+        if type(interval) is not AdjustedRateInterval:
+            return "import rate has an unexpected concrete type"
+        if type(interval.classification) is not CheapClassification or interval.classification not in allowed:
+            return "import rate classification is not allowlisted"
+        try:
+            _aware(interval.start, "start")
+            _aware(interval.end, "end")
+            _aware(interval.source_revision_at, "source_revision_at")
+            _text(interval.source, "source")
+            _text(interval.source_event, "source_event")
+            _text(interval.source_day, "source_day")
+            _text(interval.tariff, "tariff")
+            _text(interval.retrieval_source_entity_id, "retrieval_source_entity_id")
+            _text(interval.dispatch_source_entity_id, "dispatch_source_entity_id")
+            _bool(interval.is_intelligent_adjusted, "is_intelligent_adjusted")
+            _decimal(interval.import_price, "import_price")
+            _decimal(interval.event_minimum, "event_minimum")
+        except (AttributeError, ValueError) as exc:
+            return str(exc)
+        if interval.unit != OCTOPUS_RATE_UNIT:
+            return "import rate unit is not canonical"
+        if type(interval.event_unique_price_count) is not int or interval.event_unique_price_count < 1:
+            return "event unique-price count is invalid"
+        if _instant(interval.end) <= _instant(interval.start):
+            return "import interval end must be after start"
+        if previous is not None:
+            if _instant(interval.start) < _instant(previous.start):
+                return "import intervals are not ordered by UTC instant"
+            if _instant(interval.start) < _instant(previous.end):
+                return "import intervals overlap or are duplicated"
+        previous = interval
+        groups.setdefault(interval.source_event, []).append(interval)
+
+    for event, group in groups.items():
+        first = group[0]
+        expected_metadata = (
+            first.source,
+            first.tariff,
+            first.source_day,
+            first.source_revision_at,
+            first.unit,
+            first.retrieval_source_entity_id,
+            first.dispatch_source_entity_id,
+            first.event_minimum,
+            first.event_unique_price_count,
+        )
+        if any(
+            (
+                item.source,
+                item.tariff,
+                item.source_day,
+                item.source_revision_at,
+                item.unit,
+                item.retrieval_source_entity_id,
+                item.dispatch_source_entity_id,
+                item.event_minimum,
+                item.event_unique_price_count,
+            )
+            != expected_metadata
+            for item in group
+        ):
+            return f"event provenance metadata is inconsistent: {event}"
+        prices = [item.import_price for item in group]
+        if min(prices) != first.event_minimum:
+            return f"event minimum does not match rates: {event}"
+        if len(set(prices)) != first.event_unique_price_count:
+            return f"event unique-price count does not match rates: {event}"
+        for item in group:
+            expected_classification = (
+                CheapClassification.BONUS_DISPATCH
+                if item.is_intelligent_adjusted and item.import_price == first.event_minimum
+                else CheapClassification.STANDARD_CHEAP
+                if (
+                    not item.is_intelligent_adjusted
+                    and item.import_price == first.event_minimum
+                    and first.event_unique_price_count in (2, 3)
+                )
+                else CheapClassification.NOT_CHEAP
+            )
+            if item.is_intelligent_adjusted and item.import_price != first.event_minimum:
+                return f"adjusted rate is not at event minimum: {event}"
+            if item.classification is not expected_classification:
+                return f"rate classification contradicts event provenance: {event}"
+    return None
+
+
+def _validate_export_interval_sequence(
+    intervals: Sequence[ExportRateInterval],
+) -> str | None:
+    previous: ExportRateInterval | None = None
+    groups: dict[str, list[ExportRateInterval]] = {}
+    for interval in intervals:
+        if type(interval) is not ExportRateInterval:
+            return "export rate has an unexpected concrete type"
+        try:
+            _aware(interval.start, "start")
+            _aware(interval.end, "end")
+            _aware(interval.retrieved_at, "retrieved_at")
+            _aware(interval.source_revision_at, "source_revision_at")
+            _text(interval.source, "source")
+            _text(interval.source_event, "source_event")
+            _text(interval.source_day, "source_day")
+            _text(interval.tariff, "tariff")
+            _text(interval.retrieval_source_entity_id, "retrieval_source_entity_id")
+            _decimal(interval.export_price, "export_price")
+        except (AttributeError, ValueError) as exc:
+            return str(exc)
+        if interval.unit != OCTOPUS_RATE_UNIT:
+            return "export rate unit is not canonical"
+        if _instant(interval.end) <= _instant(interval.start):
+            return "export interval end must be after start"
+        if previous is not None:
+            if _instant(interval.start) < _instant(previous.start):
+                return "export intervals are not ordered by UTC instant"
+            if _instant(interval.start) < _instant(previous.end):
+                return "export intervals overlap or are duplicated"
+        previous = interval
+        groups.setdefault(interval.source_event, []).append(interval)
+    for event, group in groups.items():
+        first = group[0]
+        expected_metadata = (
+            first.source,
+            first.tariff,
+            first.source_day,
+            first.source_revision_at,
+            first.retrieved_at,
+            first.unit,
+            first.retrieval_source_entity_id,
+        )
+        if any(
+            (
+                item.source,
+                item.tariff,
+                item.source_day,
+                item.source_revision_at,
+                item.retrieved_at,
+                item.unit,
+                item.retrieval_source_entity_id,
+            )
+            != expected_metadata
+            for item in group
+        ):
+            return f"export event provenance metadata is inconsistent: {event}"
+    return None
 
 
 def parse_public_import_event(
@@ -296,6 +479,8 @@ def parse_public_import_event(
     source_day: str,
     source_event: str,
     source_revision_at: datetime,
+    retrieval_source_entity_id: str,
+    dispatch_source_entity_id: str,
     unit: str = OCTOPUS_RATE_UNIT,
 ) -> tuple[AdjustedRateInterval, ...]:
     """Validate one upstream public event before it is fused.
@@ -351,13 +536,18 @@ def parse_public_import_event(
                 source_day=_text(source_day, "source_day"),
                 source_event=_text(source_event, "source_event"),
                 source_revision_at=source_revision_at,
+                retrieval_source_entity_id=retrieval_source_entity_id,
+                dispatch_source_entity_id=dispatch_source_entity_id,
+                event_minimum=supplied_min,
+                event_unique_price_count=unique_count,
                 is_intelligent_adjusted=adjusted,
                 unit=unit,
                 is_capped=raw.get("is_capped"),
-                event_minimum=supplied_min,
-                event_unique_price_count=unique_count,
             )
         )
+    issue = _validate_import_interval_sequence(result)
+    if issue:
+        raise ValueError(issue)
     return tuple(result)
 
 
@@ -367,7 +557,9 @@ def parse_public_export_event(
     source: str,
     source_event: str,
     retrieved_at: datetime,
-    source_day: str = "unknown",
+    source_day: str,
+    source_revision_at: datetime,
+    retrieval_source_entity_id: str,
     unit: str = OCTOPUS_RATE_UNIT,
 ) -> tuple[ExportRateInterval, ...]:
     """Validate one public export event for use in the forecast."""
@@ -397,10 +589,15 @@ def parse_public_export_event(
                 retrieved_at=retrieved_at,
                 source_day=source_day,
                 source_event=source_event,
+                source_revision_at=source_revision_at,
+                retrieval_source_entity_id=retrieval_source_entity_id,
                 unit=unit,
                 is_capped=raw.get("is_capped"),
             )
         )
+    issue = _validate_export_interval_sequence(result)
+    if issue:
+        raise ValueError(issue)
     return tuple(result)
 
 
@@ -416,7 +613,11 @@ def parse_fused_export_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
     for record in records:
         if not isinstance(record, Mapping):
             raise ValueError("each fused export rate must be an object")
-        required = ("start", "end", "value_inc_vat", "unit", "source", "source_event", "source_day", "tariff", "retrieved_at")
+        required = (
+            "start", "end", "value_inc_vat", "unit", "source", "source_event",
+            "source_day", "tariff", "retrieved_at", "source_revision_at",
+            "retrieval_source_entity_id",
+        )
         missing = [key for key in required if key not in record]
         if missing:
             raise ValueError(f"fused export rate missing mandatory fields: {', '.join(missing)}")
@@ -430,10 +631,20 @@ def parse_fused_export_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
                 retrieved_at=_parse_datetime(record["retrieved_at"], "retrieved_at"),
                 source_day=_text(record["source_day"], "source_day"),
                 source_event=_text(record["source_event"], "source_event"),
+                source_revision_at=_parse_datetime(
+                    record["source_revision_at"], "source_revision_at"
+                ),
+                retrieval_source_entity_id=_text(
+                    record["retrieval_source_entity_id"],
+                    "retrieval_source_entity_id",
+                ),
                 unit=record["unit"],
                 is_capped=record.get("is_capped"),
             )
         )
+    issue = _validate_export_interval_sequence(result)
+    if issue:
+        raise ValueError(issue)
     return tuple(result)
 
 
@@ -508,6 +719,111 @@ def _min_instant(a: datetime, b: datetime) -> datetime:
     return a if _instant(a) <= _instant(b) else b
 
 
+def _coverage_status(issue: str | None) -> CoverageStatus:
+    if issue and ("overlap" in issue or "duplicate" in issue or "ordered" in issue):
+        return CoverageStatus.INVALID
+    return CoverageStatus.GAPPED
+
+
+def evaluate_trusted_import_rates(
+    *,
+    import_rates: Sequence[AdjustedRateInterval],
+    start: datetime,
+    end: datetime,
+    now: datetime,
+    import_source: RateSourceObservation | None,
+    dispatch_source: DispatchSourceObservation | None = None,
+) -> TrustedImportResult:
+    """Build a complete trusted import-classification view for reserve planning."""
+
+    try:
+        start = _aware(start, "requested start")
+        end = _aware(end, "requested end")
+        now = _aware(now, "now")
+        if _instant(end) <= _instant(start):
+            raise ValueError("requested horizon must be non-empty and ordered")
+    except ValueError as exc:
+        return TrustedImportResult(CoverageStatus.INVALID, issues=(str(exc),))
+    if not isinstance(import_rates, Sequence) or isinstance(import_rates, (str, bytes)):
+        return TrustedImportResult(CoverageStatus.INVALID, issues=("import rates must be a sequence",))
+    issue = _validate_import_interval_sequence(import_rates)
+    if issue:
+        return TrustedImportResult(
+            CoverageStatus.INVALID,
+            diagnostic_intervals=tuple(
+                item for item in import_rates if type(item) is AdjustedRateInterval
+            ),
+            issues=(issue,),
+        )
+    diagnostics = tuple(import_rates)
+    freshness = _fresh(import_source, now, OCTOPUS_RATE_SOURCE_MAX_AGE, "import rate source")
+    if freshness:
+        return TrustedImportResult(
+            CoverageStatus.UNAVAILABLE,
+            diagnostic_intervals=diagnostics,
+            issues=(freshness,),
+        )
+    assert import_source is not None
+    if any(
+        item.retrieval_source_entity_id != import_source.source for item in import_rates
+    ):
+        return TrustedImportResult(
+            CoverageStatus.INVALID,
+            diagnostic_intervals=diagnostics,
+            issues=("import retrieval source does not match observation",),
+        )
+    if any(
+        item.source_revision_at > now + MAXIMUM_SOURCE_FUTURE_SKEW
+        for item in import_rates
+    ):
+        return TrustedImportResult(
+            CoverageStatus.UNAVAILABLE,
+            diagnostic_intervals=diagnostics,
+            issues=("import rate source revision is in the future",),
+        )
+    covered, coverage_issue = _coverage(import_rates, start, end)
+    if not covered:
+        return TrustedImportResult(
+            _coverage_status(coverage_issue),
+            diagnostic_intervals=diagnostics,
+            issues=(coverage_issue or "import coverage unavailable",),
+        )
+    bonus = tuple(
+        item
+        for item in import_rates
+        if item.classification is CheapClassification.BONUS_DISPATCH
+        and _instant(item.end) > _instant(start)
+        and _instant(item.start) < _instant(end)
+    )
+    if bonus:
+        dispatch_freshness = _fresh(
+            dispatch_source,
+            now,
+            OCTOPUS_DISPATCH_SOURCE_MAX_AGE,
+            "dispatch source",
+        )
+        if dispatch_freshness:
+            return TrustedImportResult(
+                CoverageStatus.UNAVAILABLE,
+                diagnostic_intervals=diagnostics,
+                issues=(dispatch_freshness,),
+            )
+        assert dispatch_source is not None
+        if any(
+            item.dispatch_source_entity_id != dispatch_source.source for item in bonus
+        ):
+            return TrustedImportResult(
+                CoverageStatus.INVALID,
+                diagnostic_intervals=diagnostics,
+                issues=("dispatch source does not match bonus provenance",),
+            )
+    return TrustedImportResult(
+        CoverageStatus.COMPLETE,
+        intervals=diagnostics,
+        diagnostic_intervals=diagnostics,
+    )
+
+
 def evaluate_cheap_windows(
     *,
     import_rates: Sequence[AdjustedRateInterval],
@@ -540,24 +856,47 @@ def evaluate_cheap_windows(
     except ValueError as exc:
         return CheapWindowResult(CoverageStatus.INVALID, issues=(str(exc),))
 
-    for label, rates in (("import", import_rates), ("export", export_rates)):
-        if not isinstance(rates, Sequence):
-            return CheapWindowResult(CoverageStatus.INVALID, issues=(f"{label} rates must be a sequence",))
-        for item in rates:
-            if not isinstance(item, (AdjustedRateInterval, ExportRateInterval)):
-                return CheapWindowResult(CoverageStatus.INVALID, issues=(f"invalid {label} interval",))
+    if not isinstance(import_rates, Sequence) or isinstance(import_rates, (str, bytes)):
+        return CheapWindowResult(CoverageStatus.INVALID, issues=("import rates must be a sequence",))
+    if not isinstance(export_rates, Sequence) or isinstance(export_rates, (str, bytes)):
+        return CheapWindowResult(CoverageStatus.INVALID, issues=("export rates must be a sequence",))
+    import_validation_issue = _validate_import_interval_sequence(import_rates)
+    export_validation_issue = _validate_export_interval_sequence(export_rates)
+    if import_validation_issue or export_validation_issue:
+        return CheapWindowResult(
+            CoverageStatus.INVALID,
+            issues=tuple(
+                issue
+                for issue in (import_validation_issue, export_validation_issue)
+                if issue
+            ),
+        )
 
     import_freshness = _fresh(import_source, now, OCTOPUS_RATE_SOURCE_MAX_AGE, "import rate source")
     export_freshness = _fresh(export_source, now, OCTOPUS_EXPORT_SOURCE_MAX_AGE, "export rate source")
     if import_freshness or export_freshness:
         return CheapWindowResult(CoverageStatus.UNAVAILABLE, issues=tuple(x for x in (import_freshness, export_freshness) if x))
 
+    assert import_source is not None
+    assert export_source is not None
+    provenance_issues: list[str] = []
+    if any(item.retrieval_source_entity_id != import_source.source for item in import_rates):
+        provenance_issues.append("import retrieval source does not match observation")
+    if any(item.retrieval_source_entity_id != export_source.source for item in export_rates):
+        provenance_issues.append("export retrieval source does not match observation")
+    if any(item.retrieved_at != export_source.retrieved_at for item in export_rates):
+        provenance_issues.append("export retrieval timestamp does not match observation")
+    if provenance_issues:
+        return CheapWindowResult(CoverageStatus.INVALID, issues=tuple(provenance_issues))
+
     future_limit = now + MAXIMUM_SOURCE_FUTURE_SKEW
     future_issues: list[str] = []
     if any(item.source_revision_at > future_limit for item in import_rates):
         future_issues.append("import rate source revision is in the future")
-    if any(item.retrieved_at > future_limit for item in export_rates):
+    if any(item.source_revision_at > future_limit for item in export_rates):
         future_issues.append("export rate source revision is in the future")
+    if any(item.retrieved_at > future_limit for item in export_rates):
+        future_issues.append("export rate retrieval is in the future")
     if any(now - item.retrieved_at > OCTOPUS_EXPORT_SOURCE_MAX_AGE for item in export_rates):
         future_issues.append("export rate interval provenance is stale")
     if future_issues:
@@ -566,17 +905,15 @@ def evaluate_cheap_windows(
     import_covered, import_issue = _coverage(import_rates, start, end)
     export_covered, export_issue = _coverage(export_rates, start, end)
     if not import_covered or not export_covered:
-        status = CoverageStatus.INVALID if "overlapping" in (import_issue or "") or "after start" in (import_issue or "") or "overlapping" in (export_issue or "") else CoverageStatus.GAPPED
+        status = _coverage_status(import_issue if not import_covered else export_issue)
         return CheapWindowResult(status, issues=tuple(x for x in (import_issue, export_issue) if x))
 
     diagnostics: list[CheapWindowComponent] = []
     candidates: list[CheapWindowComponent] = []
-    sorted_import = sorted(import_rates, key=lambda item: _instant(item.start))
-    sorted_export = sorted(export_rates, key=lambda item: _instant(item.start))
-    for imported in sorted_import:
+    for imported in import_rates:
         if imported.classification is CheapClassification.NOT_CHEAP:
             continue
-        for exported in sorted_export:
+        for exported in export_rates:
             intersection_start = _max_instant(imported.start, exported.start)
             intersection_end = _min_instant(imported.end, exported.end)
             left = max(_instant(intersection_start), _instant(start))
@@ -605,11 +942,21 @@ def evaluate_cheap_windows(
         dispatch_freshness = _fresh(dispatch_source, now, OCTOPUS_DISPATCH_SOURCE_MAX_AGE, "dispatch source")
         if dispatch_freshness:
             return CheapWindowResult(CoverageStatus.UNAVAILABLE, diagnostic_components=tuple(diagnostics), issues=(dispatch_freshness,))
+        assert dispatch_source is not None
+        if any(
+            item.rate_interval.classification is CheapClassification.BONUS_DISPATCH
+            and item.rate_interval.dispatch_source_entity_id != dispatch_source.source
+            for item in candidates
+        ):
+            return CheapWindowResult(
+                CoverageStatus.INVALID,
+                diagnostic_components=tuple(diagnostics),
+                issues=("dispatch source does not match bonus provenance",),
+            )
 
     if not candidates:
         return CheapWindowResult(CoverageStatus.TRUSTED_EMPTY, diagnostic_components=tuple(diagnostics))
 
-    candidates.sort(key=lambda item: _instant(item.interval.start))
     windows: list[CheapWindow] = []
     current: list[CheapWindowComponent] = []
     for component in candidates:

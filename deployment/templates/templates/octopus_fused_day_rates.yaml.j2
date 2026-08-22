@@ -1,0 +1,117 @@
+{% set import_base = ("octopus_energy_electricity_" ~ electricity_meter_serial_number ~ "_" ~ electricity_meter_mpan_import) | lower %}
+{% set export_meter_base = ("octopus_energy_electricity_" ~ electricity_meter_serial_number ~ "_" ~ electricity_meter_mpan_export) | lower %}
+{% set export_base = export_meter_base ~ "_export" %}
+{% set import_retrieval = "sensor." ~ import_base ~ "_rates_data_last_retrieved" %}
+{% set export_retrieval = "sensor." ~ export_meter_base ~ "_rates_data_last_retrieved" %}
+{% set dispatch_retrieval = ("sensor.octopus_energy_" ~ ev_charger_device_id ~ "_intelligent_dispatches_data_last_retrieved") | lower %}
+sensor:
+  - name: Octopus Energy Electricity {{ electricity_meter_serial_number }}/{{ electricity_meter_mpan_import }} Fused Day Rates
+    unique_id: {{ import_base }}_fused_day_rates
+    icon: mdi:chart-line
+    availability: >-
+      {% raw %}{% set current = states('{% endraw %}event.{{ import_base }}_current_day_rates{% raw %}') %}
+      {% set next = states('{% endraw %}event.{{ import_base }}_next_day_rates{% raw %}') %}
+      {{ not (current == 'unavailable' and next == 'unavailable') }}{% endraw %}
+    state: >-
+      {% raw %}{% set current_rate = states('{% endraw %}sensor.{{ import_base }}_current_rate{% raw %}') %}
+      {% if current_rate in ['unknown', 'unavailable', ''] %}
+        unknown
+      {% else %}
+        {{ current_rate }}
+      {% endif %}{% endraw %}
+    attributes:
+      rate_unit: GBP/kWh
+      rates: >-
+        {% raw %}{% set ns = namespace(items=[]) %}
+        {% for source_day, event_entity in [
+          ('current', '{% endraw %}event.{{ import_base }}_current_day_rates{% raw %}'),
+          ('next', '{% endraw %}event.{{ import_base }}_next_day_rates{% raw %}')
+        ] %}
+          {% set rates_raw = state_attr(event_entity, 'rates') | default('[]', true) %}
+          {% set event_rates = (rates_raw | from_json) if (rates_raw is string) else rates_raw %}
+          {% set event_ns = namespace(minimum=none, prices=[]) %}
+          {% for event_rate in event_rates | list %}
+            {% if event_ns.minimum is none or event_rate.value_inc_vat < event_ns.minimum %}
+              {% set event_ns.minimum = event_rate.value_inc_vat %}
+            {% endif %}
+            {% if event_rate.value_inc_vat not in event_ns.prices %}
+              {% set event_ns.prices = event_ns.prices + [event_rate.value_inc_vat] %}
+            {% endif %}
+          {% endfor %}
+          {% for rate in event_rates | list %}
+            {% set adjusted = rate.is_intelligent_adjusted if ('is_intelligent_adjusted' in rate) else false %}
+            {% set classification = 'BONUS_DISPATCH' if (adjusted is sameas true and rate.value_inc_vat == event_ns.minimum) else
+              ('STANDARD_CHEAP' if (adjusted is sameas false and rate.value_inc_vat == event_ns.minimum and event_ns.prices | length in [2, 3]) else 'NOT_CHEAP') %}
+            {% set ns.items = ns.items + [{
+              'start': as_datetime(rate.start).isoformat(),
+              'end': as_datetime(rate.end).isoformat(),
+              'value_inc_vat': rate.value_inc_vat,
+              'is_capped': rate.is_capped,
+              'unit': 'GBP/kWh',
+              'is_intelligent_adjusted': adjusted,
+              'classification': classification,
+              'source': event_entity,
+              'source_event': event_entity,
+              'source_day': source_day,
+              'tariff': state_attr(event_entity, 'tariff_code') or state_attr(event_entity, 'tariff'),
+              'event_min_rate': state_attr(event_entity, 'min_rate'),
+              'event_unique_price_count': event_ns.prices | length,
+              'source_revision_at': as_datetime(states[event_entity].last_changed).isoformat(),
+              'retrieval_source_entity_id': '{% endraw %}{{ import_retrieval }}{% raw %}',
+              'dispatch_source_entity_id': '{% endraw %}{{ dispatch_retrieval }}{% raw %}'
+            }] %}
+          {% endfor %}
+        {% endfor %}
+        {{ ns.items | tojson }}{% endraw %}
+      rate_source_entity_id: {{ import_retrieval }}
+      rate_source_last_retrieved: >-
+        {% raw %}{{ states('{% endraw %}{{ import_retrieval }}{% raw %}') }}{% endraw %}
+      dispatch_source_entity_id: {{ dispatch_retrieval }}
+      dispatch_source_last_retrieved: >-
+        {% raw %}{{ states('{% endraw %}{{ dispatch_retrieval }}{% raw %}') }}{% endraw %}
+
+  - name: Octopus Energy Electricity {{ electricity_meter_serial_number }}/{{ electricity_meter_mpan_export }} Fused Export Day Rates
+    unique_id: {{ export_meter_base }}_fused_export_day_rates
+    icon: mdi:chart-line
+    availability: >-
+      {% raw %}{% set current = states('{% endraw %}event.{{ export_base }}_current_day_rates{% raw %}') %}
+      {% set next = states('{% endraw %}event.{{ export_base }}_next_day_rates{% raw %}') %}
+      {{ not (current == 'unavailable' and next == 'unavailable') }}{% endraw %}
+    state: >-
+      {% raw %}{% set current_rate = states('{% endraw %}sensor.{{ export_base }}_current_rate{% raw %}') %}
+      {% if current_rate in ['unknown', 'unavailable', ''] %}
+        unknown
+      {% else %}
+        {{ current_rate }}
+      {% endif %}{% endraw %}
+    attributes:
+      rate_unit: GBP/kWh
+      rates: >-
+        {% raw %}{% set ns = namespace(items=[]) %}
+        {% for source_day, event_entity in [
+          ('current', '{% endraw %}event.{{ export_base }}_current_day_rates{% raw %}'),
+          ('next', '{% endraw %}event.{{ export_base }}_next_day_rates{% raw %}')
+        ] %}
+          {% set rates_raw = state_attr(event_entity, 'rates') | default('[]', true) %}
+          {% set event_rates = (rates_raw | from_json) if (rates_raw is string) else rates_raw %}
+          {% for rate in event_rates | list %}
+            {% set ns.items = ns.items + [{
+              'start': as_datetime(rate.start).isoformat(),
+              'end': as_datetime(rate.end).isoformat(),
+              'value_inc_vat': rate.value_inc_vat,
+              'is_capped': rate.is_capped,
+              'unit': 'GBP/kWh',
+              'source': event_entity,
+              'source_event': event_entity,
+              'source_day': source_day,
+              'tariff': state_attr(event_entity, 'tariff_code') or state_attr(event_entity, 'tariff'),
+              'retrieved_at': states('{% endraw %}{{ export_retrieval }}{% raw %}'),
+              'source_revision_at': as_datetime(states[event_entity].last_changed).isoformat(),
+              'retrieval_source_entity_id': '{% endraw %}{{ export_retrieval }}{% raw %}'
+            }] %}
+          {% endfor %}
+        {% endfor %}
+        {{ ns.items | tojson }}{% endraw %}
+      rate_source_entity_id: {{ export_retrieval }}
+      rate_source_last_retrieved: >-
+        {% raw %}{{ states('{% endraw %}{{ export_retrieval }}{% raw %}') }}{% endraw %}
