@@ -15,7 +15,9 @@ from custom_components.house_battery_control.octopus_windows import (
 )
 from custom_components.house_battery_control.pre_discharge import (
     BatteryEnergyObservation,
+    ForecastObservation,
     PreDischargePlanningStatus,
+    _allocate_latest,
     plan_pre_discharge_headroom,
 )
 from custom_components.house_battery_control.reserve_planner import (
@@ -148,3 +150,56 @@ def test_mutating_energy_revision_changes_fingerprint():
     args["energy"] = BatteryEnergyObservation(Decimal("11"), NOW, "different", "revision-2")
     second = plan_pre_discharge_headroom(**args)
     assert first.input_fingerprint != second.input_fingerprint
+
+
+def test_forecast_provenance_is_fingerprinted_and_staleness_is_fail_closed():
+    args = _fixtures()
+    args["forecast_observation"] = ForecastObservation(
+        "forecast", "revision-1", NOW, NOW + timedelta(hours=1)
+    )
+    first = plan_pre_discharge_headroom(**args)
+    assert first.input_fingerprint
+    args["forecast_observation"] = ForecastObservation(
+        "forecast", "revision-2", NOW, NOW + timedelta(hours=1)
+    )
+    second = plan_pre_discharge_headroom(**args)
+    assert first.input_fingerprint != second.input_fingerprint
+    args["forecast_observation"] = ForecastObservation(
+        "forecast", "revision-2", NOW - timedelta(hours=1), NOW - timedelta(minutes=1)
+    )
+    stale = plan_pre_discharge_headroom(**args)
+    assert stale.status is PreDischargePlanningStatus.UNAVAILABLE
+    assert stale.issues[0].code == "FORECAST_STALE"
+
+
+def test_backward_overlay_never_crosses_a_zero_capacity_gap():
+    intervals = tuple(
+        ReserveInputInterval(
+            TimeInterval(NOW + timedelta(hours=i), NOW + timedelta(hours=i + 1)),
+            Decimal(0), Decimal(0), CheapClassification.NOT_CHEAP,
+        )
+        for i in range(3)
+    )
+    used, start, end, remaining = _allocate_latest(
+        intervals=intervals,
+        baseline_starts=(Decimal("5"), Decimal("5"), Decimal("5")),
+        baseline_ends=(Decimal("5"), Decimal("5"), Decimal("5")),
+        reserve_starts=(Decimal("1"), Decimal("5"), Decimal("1")),
+        reserve_ends=(Decimal("1"), Decimal("5"), Decimal("1")),
+        baseline_ac=(Decimal(0), Decimal(2), Decimal(0)),
+        target=Decimal("1"), maximum_discharge=Decimal(2), discharge_eff=Decimal(1),
+    )
+    assert used == Decimal("1")
+    assert start == NOW + timedelta(hours=2, minutes=30)
+    assert end == NOW + timedelta(hours=3)
+    assert remaining == Decimal(0)
+
+
+def test_schedule_rejects_cross_midnight_representation():
+    args = _fixtures()
+    start = NOW + timedelta(hours=4)
+    end = start + timedelta(days=1)
+    args["standard_window"] = CheapWindow(start, end, args["standard_window"].components)
+    result = plan_pre_discharge_headroom(**args)
+    assert result.status is PreDischargePlanningStatus.INVALID
+    assert result.issues[0].code == "INPUT_INVALID"
