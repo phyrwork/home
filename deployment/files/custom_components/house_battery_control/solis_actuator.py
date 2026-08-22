@@ -10,16 +10,15 @@ commissioning concern.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from enum import Enum
 import hashlib
 import json
 import re
 
-from .contracts import SlotDirection, SlotIntent, SlotOwner
+from .contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
 from .domain_constants import MAXIMUM_GRID_IMPORT_POWER_KW
 from .ha_writer import HomeAssistantWriter, WriteTransaction
 from .solis_config import (
@@ -28,9 +27,10 @@ from .solis_config import (
     SolisSlotDirectionConfig,
     SolisSlotOwner,
 )
-from .solis_state import SolisStateSnapshot
+from .solis_state import SolisStateReadResult, SolisStateSnapshot
 from .write_contracts import (
     NumberWriteRequest,
+    StatePrecondition,
     SwitchWriteRequest,
     TextWriteRequest,
     WriteOutcome,
@@ -93,7 +93,7 @@ class SlotActuationStatus(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class SlotActuationResult:
-    status: str
+    status: SlotActuationStatus
     results: tuple[WriteResult, ...] = ()
     mandatory_disable_deadline: datetime | None = None
     message: str = ""
@@ -112,6 +112,16 @@ class SlotActuationResult:
     @property
     def ordered_results(self) -> tuple[WriteResult, ...]:
         return self.results
+
+
+@dataclass(frozen=True, slots=True)
+class CancellationDiagnostic:
+    """Immutable evidence captured before propagating the original cancellation."""
+
+    original_exception: asyncio.CancelledError
+    actuation_results: tuple[WriteResult, ...]
+    cleanup_results: tuple[WriteResult, ...]
+    all_directions_proven_off: bool
 
 
 def _enum_value(value: object) -> str:
@@ -193,18 +203,6 @@ def mapping_fingerprint(config: SolisConfig) -> str:
     return hashlib.sha256(canonical_mapping(config)).hexdigest()
 
 
-def _state_text(state: object) -> str | None:
-    if isinstance(state, Mapping):
-        value = state.get("state")
-    else:
-        value = getattr(state, "state", None)
-    return value if isinstance(value, str) else None
-
-
-def _state_available_off(state: object) -> bool:
-    return _state_text(state) == "off"
-
-
 def _result_failure(entity_id: str, message: str) -> WriteResult:
     return WriteResult(entity_id, WriteOutcome.REJECTED, message)
 
@@ -235,6 +233,8 @@ def encode_schedule(start: datetime, end: datetime, inverter_timezone: tzinfo) -
 
     if start.tzinfo is None or start.utcoffset() is None or end.tzinfo is None or end.utcoffset() is None:
         raise ValueError("schedule datetimes must be timezone-aware")
+    if end <= start or end - start >= timedelta(days=1):
+        raise ValueError("schedule duration must be positive and less than 24 hours")
     local_start = start.astimezone(inverter_timezone)
     local_end = end.astimezone(inverter_timezone)
     if not _local_time_valid(local_start, inverter_timezone) or not _local_time_valid(local_end, inverter_timezone):
@@ -262,17 +262,20 @@ class SolisSlotActuator:
         writer: HomeAssistantWriter,
         *,
         control_disable_guard_entity_id: str,
+        inverter_timezone: tzinfo,
         commissioning: CommissioningRecord | None = None,
-        inverter_timezone: tzinfo = timezone.utc,
     ) -> None:
         if not control_disable_guard_entity_id.startswith("input_boolean.") and not control_disable_guard_entity_id.startswith("switch."):
             raise ValueError("control-disable guard must be a switch-like entity")
+        if not isinstance(inverter_timezone, tzinfo):
+            raise TypeError("inverter_timezone must be explicit")
         self.config = config
         self.writer = writer
         self.control_disable_guard_entity_id = control_disable_guard_entity_id
         self.commissioning = commissioning
         self.inverter_timezone = inverter_timezone
         self._construction_fingerprint = mapping_fingerprint(config)
+        self.last_cancellation_result: CancellationDiagnostic | None = None
 
     @property
     def mapping_fingerprint(self) -> str:
@@ -312,25 +315,21 @@ class SolisSlotActuator:
         return None
 
     def _preflight(
-        self, intent: SlotIntent, snapshot: SolisStateSnapshot | None, now: datetime
+        self, intent: SlotIntent, observation: SolisStateReadResult, now: datetime
     ) -> tuple[SolisSlotDirectionConfig, object, str] | str:
         if now.tzinfo is None or now.utcoffset() is None:
             return "now must be timezone-aware"
-        if snapshot is None or snapshot.observed_at is None:
+        if not isinstance(observation, SolisStateReadResult):
             return "healthy Solis snapshot is required"
-        if not isinstance(snapshot, SolisStateSnapshot):
+        if observation.health is not ControllerHealth.HEALTHY or observation.snapshot is None:
             return "healthy Solis snapshot is required"
-        if snapshot.telemetry.device_timestamp is None:
-            return "inverter device timestamp is unavailable"
-        if snapshot.telemetry.device_timestamp.tzinfo is None or snapshot.telemetry.device_timestamp.utcoffset() is None:
-            return "inverter device timestamp must be timezone-aware"
-        if abs(now - snapshot.telemetry.device_timestamp) > MAXIMUM_INVERTER_CLOCK_SKEW:
+        snapshot = observation.snapshot
+        if snapshot.persistent.inverter_time.tzinfo is None or snapshot.persistent.inverter_time.utcoffset() is None:
+            return "inverter clock must be timezone-aware"
+        if abs(now - snapshot.persistent.inverter_time) > MAXIMUM_INVERTER_CLOCK_SKEW:
             return "inverter clock exceeds allowed skew"
         if snapshot.observed_at.tzinfo is None or snapshot.observed_at.utcoffset() is None:
             return "snapshot observation time must be timezone-aware"
-        # Health is an explicit T0004 result, not inferred from partial fields.
-        if snapshot is None or not isinstance(snapshot.telemetry, object):
-            return "healthy Solis snapshot is required"
         target = {
             (SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE): (1, SolisSlotOwner.CHEAP_CHARGING),
             (SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE): (1, SolisSlotOwner.FULL_SOC_CYCLING),
@@ -356,98 +355,155 @@ class SolisSlotActuator:
             schedule = encode_schedule(intent.start, intent.end, self.inverter_timezone)
         except ValueError as exc:
             return str(exc)
-        if not intent.start <= now < intent.end:
+        effective_end = min(intent.end, intent.expiry)
+        if not intent.start <= now < effective_end:
             return "slot intent is not active"
-        if now >= intent.expiry:
-            return "slot intent has expired"
         if not self._guard_off():
             return "control-disable guard is asserted or unavailable"
         return direction_config, direction_state, schedule
 
-    def _state(self, entity_id: str) -> object:
-        return self.writer._get(entity_id)
+    def _verified_precondition(self, entity_id: str) -> StatePrecondition | None:
+        """Capture one public, revision-bearing state suitable for proof."""
 
-    def _guard_off(self) -> bool:
-        return _state_available_off(self._state(self.control_disable_guard_entity_id))
-
-    def _request_switch(self, entity_id: str, target: bool) -> SwitchWriteRequest | None:
         try:
-            return SwitchWriteRequest(self.writer.capture_precondition(entity_id), target)
+            precondition = self.writer.capture_precondition(entity_id)
         except Exception:
             return None
+        if not isinstance(precondition.context_id, str) or not precondition.context_id:
+            return None
+        return precondition
 
-    async def _disable_all_locked(self, transaction: WriteTransaction) -> tuple[list[WriteResult], bool]:
-        results: list[WriteResult] = []
+    def _guard_off(self) -> bool:
+        observed = self._verified_precondition(self.control_disable_guard_entity_id)
+        return observed is not None and observed.state == "off"
+
+    def _prove_all_off(self) -> bool:
         for direction, _physical_slot, _kind in self._directions():
-            state = self._state(direction.enable_entity_id)
-            raw = _state_text(state)
-            if raw is None or raw in {"unknown", "unavailable"}:
-                results.append(_result_failure(direction.enable_entity_id, "enable state unavailable"))
-                continue
-            request = self._request_switch(direction.enable_entity_id, False)
-            if request is None:
+            observed = self._verified_precondition(direction.enable_entity_id)
+            if observed is None or observed.state != "off":
+                return False
+        return True
+
+    def _prove_exact_target(self, target_entity_id: str) -> bool:
+        for direction, _physical_slot, _kind in self._directions():
+            observed = self._verified_precondition(direction.enable_entity_id)
+            expected = "on" if direction.enable_entity_id == target_entity_id else "off"
+            if observed is None or observed.state != expected:
+                return False
+        return True
+
+    async def _write_recorded(
+        self,
+        transaction: WriteTransaction,
+        request: SwitchWriteRequest | TextWriteRequest | NumberWriteRequest,
+        results: list[WriteResult],
+    ) -> WriteResult:
+        """Retain an ordered uncertain marker if cancellation interrupts a write."""
+
+        index = len(results)
+        results.append(
+            _result_failure(
+                request.entity_id,
+                "write outcome is uncertain because the operation was interrupted",
+            )
+        )
+        result = await transaction.async_write(request)
+        results[index] = result
+        return result
+
+    async def _disable_all_locked(
+        self, transaction: WriteTransaction, results: list[WriteResult]
+    ) -> bool:
+        for direction, _physical_slot, _kind in self._directions():
+            observed = self._verified_precondition(direction.enable_entity_id)
+            if observed is None:
                 results.append(_result_failure(direction.enable_entity_id, "unable to capture switch precondition"))
                 continue
-            if raw == "on":
-                results.append(await transaction.async_write(request))
-            elif raw != "off":
+            if observed.state == "on":
+                request = SwitchWriteRequest(observed, False)
+                await self._write_recorded(transaction, request, results)
+            elif observed.state != "off":
                 results.append(_result_failure(direction.enable_entity_id, "enable state is invalid"))
-        proven = True
-        for direction, _physical_slot, _kind in self._directions():
-            if not _state_available_off(self._state(direction.enable_entity_id)):
-                proven = False
-        return results, proven
+        return self._prove_all_off()
 
-    async def _disable_all_once(self) -> DisableAllResult:
-        results: list[WriteResult] = []
+    async def _disable_all_once(self, results: list[WriteResult] | None = None) -> DisableAllResult:
+        sink = results if results is not None else []
+        attempt_start = len(sink)
         proven = False
         try:
             async with self.writer.transaction() as transaction:
-                results, proven = await self._disable_all_locked(transaction)
+                proven = await self._disable_all_locked(transaction, sink)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            results.append(_result_failure("solis.slot", f"disable-all transaction failed: {exc}"))
+            sink.append(_result_failure("solis.slot", f"disable-all transaction failed: {exc}"))
             proven = False
-        return DisableAllResult(tuple(results), proven and all(result.success for result in results))
+        attempt_results = tuple(sink[attempt_start:])
+        return DisableAllResult(
+            attempt_results,
+            proven and all(result.success for result in attempt_results),
+        )
 
     async def async_disable_all(self) -> DisableAllResult:
         """Disable every direction, independently of health or commissioning."""
 
+        self.last_cancellation_result = None
+        partial_results: list[WriteResult] = []
         try:
-            return await self._disable_all_once()
-        except asyncio.CancelledError:
-            # Cancellation during cleanup starts a fresh transaction and waits
-            # for it before propagating cancellation to the caller.
-            cleanup = asyncio.create_task(self._disable_all_once())
-            await _await_cleanup(cleanup)
-            raise
-
-    async def _cleanup_after_cancellation(self) -> None:
-        cleanup = asyncio.create_task(self._disable_all_once())
-        await _await_cleanup(cleanup)
+            return await self._disable_all_once(partial_results)
+        except asyncio.CancelledError as original:
+            await self._record_cancelled_cleanup(original, partial_results)
+            raise original
 
     async def _cleanup_after_failure(self, results: list[WriteResult]) -> bool:
-        cleanup = await self._disable_all_once()
-        results.extend(cleanup.results)
+        cleanup = await self._disable_all_once(results)
         return cleanup.safe
+
+    async def _record_cancelled_cleanup(
+        self,
+        original: asyncio.CancelledError,
+        actuation_results: list[WriteResult],
+    ) -> None:
+        cleanup_results: list[WriteResult] = []
+        cleanup_task = asyncio.create_task(self._disable_all_once(cleanup_results))
+        cleanup = await _await_cleanup(cleanup_task)
+        self.last_cancellation_result = CancellationDiagnostic(
+            original_exception=original,
+            actuation_results=tuple(actuation_results),
+            cleanup_results=tuple(cleanup_results),
+            all_directions_proven_off=cleanup.safe,
+        )
 
     async def async_apply_intent(
         self,
         intent: SlotIntent,
-        snapshot: SolisStateSnapshot | None,
+        observation: SolisStateReadResult,
         *,
         now: datetime,
     ) -> SlotActuationResult:
         """Apply one active intent or prove the system safe after failure."""
 
+        self.last_cancellation_result = None
         results: list[WriteResult] = []
         try:
+            return await self._async_apply_intent(intent, observation, now, results)
+        except asyncio.CancelledError as original:
+            await self._record_cancelled_cleanup(original, results)
+            raise original
+
+    async def _async_apply_intent(
+        self,
+        intent: SlotIntent,
+        observation: SolisStateReadResult,
+        now: datetime,
+        results: list[WriteResult],
+    ) -> SlotActuationResult:
+        try:
             if not self._current_mapping_is_unchanged() or not self._commissioned(now):
-                cleanup = await self.async_disable_all()
+                cleanup = await self._disable_all_once(results)
                 status = SlotActuationStatus.BLOCKED_UNCOMMISSIONED_SAFE if cleanup.safe else SlotActuationStatus.BLOCKED_UNCOMMISSIONED_UNSAFE
-                return SlotActuationResult(status, cleanup.results, message="slot actuator is not commissioned for the current mapping")
-            preflight = self._preflight(intent, snapshot, now)
+                return SlotActuationResult(status, tuple(results), message="slot actuator is not commissioned for the current mapping")
+            preflight = self._preflight(intent, observation, now)
             if isinstance(preflight, str):
                 safe = await self._cleanup_after_failure(results)
                 status = SlotActuationStatus.FAILED_SAFE if safe else SlotActuationStatus.FAILED_UNSAFE
@@ -457,78 +513,74 @@ class SolisSlotActuator:
             async with self.writer.transaction() as transaction:
                 # All twelve switch preconditions are captured immediately
                 # before their individual CAS writes.
-                disable_results, proven = await self._disable_all_locked(transaction)
-                results.extend(disable_results)
+                result_count = len(results)
+                proven = await self._disable_all_locked(transaction, results)
+                disable_results = results[result_count:]
                 if not proven or not all(result.success for result in disable_results):
                     raise RuntimeError("all Solis slot directions were not proven disabled")
                 time_request = TextWriteRequest(
-                    self.writer.capture_precondition(target_config.time_entity_id),
+                    self._require_verified_precondition(target_config.time_entity_id),
                     schedule,
                     text_validator=lambda value: _TIME_TEXT.fullmatch(value) is not None and value.split("-")[0] != value.split("-")[1],
                 )
                 current_request = NumberWriteRequest(
-                    self.writer.capture_precondition(target_config.current_entity_id),
+                    self._require_verified_precondition(target_config.current_entity_id),
                     intent.current,
                     capability=target_state.current,
                 )
                 soc_request = NumberWriteRequest(
-                    self.writer.capture_precondition(target_config.target_soc_entity_id),
+                    self._require_verified_precondition(target_config.target_soc_entity_id),
                     intent.target_soc,
                     capability=target_state.target_soc,
                 )
                 for request in (time_request, current_request, soc_request):
-                    write_result = await transaction.async_write(request)
-                    results.append(write_result)
+                    write_result = await self._write_recorded(transaction, request, results)
                     if not write_result.success:
                         raise RuntimeError(f"configuration write failed: {write_result.message}")
+                if not self._prove_all_off():
+                    raise RuntimeError("slot direction changed while target configuration was written")
                 if not self._guard_off():
                     raise RuntimeError("control-disable guard asserted before slot enable")
                 enable_request = SwitchWriteRequest(
-                    self.writer.capture_precondition(target_config.enable_entity_id), True
+                    self._require_verified_precondition(target_config.enable_entity_id), True
                 )
-                write_result = await transaction.async_write(enable_request)
-                results.append(write_result)
+                write_result = await self._write_recorded(transaction, enable_request, results)
                 if not write_result.success:
                     raise RuntimeError(f"slot enable failed: {write_result.message}")
                 if not self._guard_off():
                     raise RuntimeError("control-disable guard asserted after slot enable")
-                for direction, physical_slot, kind in self._directions():
-                    enabled = _state_text(self._state(direction.enable_entity_id))
-                    expected = direction.enable_entity_id == target_config.enable_entity_id
-                    if enabled != ("on" if expected else "off"):
-                        raise RuntimeError(f"final slot enable proof failed for {physical_slot} {kind.value}")
+                if not self._prove_exact_target(target_config.enable_entity_id):
+                    raise RuntimeError("final slot enable proof failed")
             return SlotActuationResult(
                 SlotActuationStatus.APPLIED_HA_PENDING_DEVICE_RECONCILIATION,
                 tuple(results),
                 mandatory_disable_deadline=deadline,
                 message="Home Assistant readback confirmed; device reconciliation remains pending",
             )
-        except asyncio.CancelledError:
-            await self._cleanup_after_cancellation()
-            raise
         except Exception as exc:
             safe = await self._cleanup_after_failure(results)
             status = SlotActuationStatus.FAILED_SAFE if safe else SlotActuationStatus.FAILED_UNSAFE
             return SlotActuationResult(status, tuple(results), message=str(exc))
 
+    def _require_verified_precondition(self, entity_id: str) -> StatePrecondition:
+        observed = self._verified_precondition(entity_id)
+        if observed is None:
+            raise RuntimeError(f"unable to capture verified state for {entity_id}")
+        return observed
+
 
 async def _await_cleanup(task: asyncio.Task[object]) -> object:
     """Shield cleanup through repeated cancellation delivery."""
 
-    cancellation: asyncio.CancelledError | None = None
     current = asyncio.current_task()
     while not task.done():
         try:
             await asyncio.shield(task)
-        except asyncio.CancelledError as exc:
-            cancellation = exc
+        except asyncio.CancelledError:
             if current is not None:
                 current.uncancel()
             continue
-    result = await task
-    if cancellation is not None:
-        raise cancellation
-    return result
+    return await task
 
 
 # Names used by later adapters and tests.
@@ -540,6 +592,7 @@ compute_mapping_fingerprint = mapping_fingerprint
 
 __all__ = [
     "COMMISSIONING_SCHEMA_VERSION",
+    "CancellationDiagnostic",
     "CommissioningRecord",
     "DisableAllResult",
     "MAXIMUM_INVERTER_CLOCK_SKEW",

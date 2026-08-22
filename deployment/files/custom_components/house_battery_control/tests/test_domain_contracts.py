@@ -71,7 +71,8 @@ def test_slot_rejects_invalid_values() -> None:
     with pytest.raises(ValueError):
         intent(end=datetime(2026, 1, 1, 0, tzinfo=timezone.utc))
     with pytest.raises(ValueError):
-        intent(expiry=datetime(2026, 1, 1, 1, 59, tzinfo=timezone.utc))
+        intent(expiry=datetime(2026, 1, 1, 1, tzinfo=timezone.utc))
+    assert intent(expiry=datetime(2026, 1, 1, 1, 59, tzinfo=timezone.utc)).expiry < intent().end
 
 
 def test_enums_and_structural_exclusivity() -> None:

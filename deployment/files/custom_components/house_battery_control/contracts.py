@@ -175,8 +175,8 @@ class SlotIntent:
             raise ValueError("slot datetimes must be timezone-aware")
         if self.start >= self.end:
             raise ValueError("slot interval must be ordered")
-        if self.expiry < self.end:
-            raise ValueError("slot expiry must not precede slot end")
+        if self.expiry <= self.start:
+            raise ValueError("slot expiry must be later than slot start")
         if not isinstance(self.current, Decimal) or not self.current.is_finite() or self.current < 0:
             raise ValueError("slot current must not be negative")
         _validate_percent(self.target_soc, "target_soc")
