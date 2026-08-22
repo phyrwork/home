@@ -510,16 +510,28 @@ class SolisSlotActuator:
         sink = results if results is not None else []
         attempt_start = len(sink)
         proven = False
+        transaction = self.writer.transaction()
+        entered = False
         try:
-            async with self.writer.transaction() as transaction:
-                proven = await self._disable_all_locked(
-                    transaction, sink, deadline, clock
-                )
+            if deadline is None:
+                await transaction.__aenter__()
+            else:
+                remaining = _remaining_deadline(deadline, clock)
+                if remaining <= 0:
+                    raise TimeoutError("fail-safe deadline exhausted before writer transaction")
+                await asyncio.wait_for(transaction.__aenter__(), remaining)
+            entered = True
+            proven = await self._disable_all_locked(
+                transaction, sink, deadline, clock
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             sink.append(_result_failure("solis.slot", f"disable-all transaction failed: {exc}"))
             proven = False
+        finally:
+            if entered:
+                await transaction.__aexit__(None, None, None)
         attempt_results = tuple(sink[attempt_start:])
         return DisableAllResult(
             attempt_results,

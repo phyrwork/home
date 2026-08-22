@@ -218,14 +218,14 @@ async def test_fail_safe_absolute_deadline_bounds_every_persistent_primitive():
     ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] = "on"
 
     result = await actuator.async_apply_fail_safe(
-        deadline=NOW + timedelta(milliseconds=18)
+        deadline=NOW + timedelta(milliseconds=20)
     )
 
     assert result.status == PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE
     assert len(ha.calls) == 1
     assert ha.calls[0][2]["entity_id"] == persistent.storage_mode_entity_id
     assert any("deadline exhausted" in item.message for item in result.results)
-    assert clock.value >= NOW + timedelta(milliseconds=18)
+    assert clock.value >= NOW + timedelta(milliseconds=20)
 
 
 @pytest.mark.asyncio
@@ -234,6 +234,43 @@ async def test_expired_fail_safe_deadline_starts_no_primitive():
     result = await actuator.async_apply_fail_safe(deadline=NOW)
     assert result.status == PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE
     assert ha.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fail_safe_deadline_bounds_writer_transaction_acquisition():
+    actuator, ha, _initial, _token, _manual, _clock, _record = policy_fixture()
+    await actuator.writer._lock.acquire()
+    try:
+        result = await asyncio.wait_for(
+            actuator.async_apply_fail_safe(
+                deadline=NOW + timedelta(milliseconds=3)
+            ),
+            timeout=timedelta(milliseconds=100).total_seconds(),
+        )
+    finally:
+        actuator.writer._lock.release()
+    assert result.status == PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE
+    assert ha.calls == []
+    assert any("deadline exhausted" in item.message for item in result.results)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_fail_safe_with_expired_deadline_never_waits_on_writer_lock():
+    actuator, _ha, _initial, _token, _manual, _clock, _record = policy_fixture()
+    await actuator.writer._lock.acquire()
+    try:
+        task = asyncio.create_task(
+            actuator.async_apply_fail_safe(
+                deadline=NOW + timedelta(milliseconds=3)
+            )
+        )
+        await asyncio.sleep(0)
+        task.cancel("original")
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await asyncio.wait_for(task, timeout=0.1)
+        assert raised.value.args == ("original",)
+    finally:
+        actuator.writer._lock.release()
 
 
 @pytest.mark.asyncio

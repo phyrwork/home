@@ -146,6 +146,11 @@ class BatteryEnergySensor(_EnergySensor):
     _attr_unique_id = f"{DOMAIN}_energy"
 
     @property
+    def available(self) -> bool:
+        snapshot = self.coordinator.data
+        return super().available and snapshot is not None and snapshot.diagnostic_energy_kwh is not None
+
+    @property
     def native_value(self) -> float | None:
         """Return the current stored battery energy."""
         snapshot = self.coordinator.data
@@ -161,6 +166,11 @@ class ReserveTargetSensor(_EnergySensor):
     _attr_unique_id = f"{DOMAIN}_reserve_target"
 
     @property
+    def available(self) -> bool:
+        snapshot = self.coordinator.data
+        return super().available and snapshot is not None and snapshot.reserve is not None
+
+    @property
     def native_value(self) -> float | None:
         """Return the current reserve target."""
         snapshot = self.coordinator.data
@@ -174,6 +184,11 @@ class ReserveBalanceSensor(_EnergySensor):
 
     _attr_name = "House Battery Reserve Balance"
     _attr_unique_id = f"{DOMAIN}_reserve_balance"
+
+    @property
+    def available(self) -> bool:
+        snapshot = self.coordinator.data
+        return super().available and snapshot is not None and snapshot.reserve is not None and snapshot.diagnostic_energy_kwh is not None
 
     @property
     def native_value(self) -> float | None:
@@ -238,7 +253,9 @@ class HealthSensor(_SnapshotSensor):
             "fail_safe_ha_safe": None if snapshot.fail_safe_proof is None else snapshot.fail_safe_proof.ha_safe,
             "fail_safe_device_reconciliation_pending": None if snapshot.fail_safe_proof is None else snapshot.fail_safe_proof.device_reconciliation_pending,
             "fail_safe_attempt_status": None if snapshot.fail_safe_attempt is None else snapshot.fail_safe_attempt.status,
+            "fail_safe_attempt_id": None if snapshot.fail_safe_attempt is None else snapshot.fail_safe_attempt.attempt_id,
             "fail_safe_attempt_deadline": None if snapshot.fail_safe_attempt is None else snapshot.fail_safe_attempt.deadline.isoformat(),
+            "stale_fail_safe_attempt_ids": tuple(item.attempt_id for item in snapshot.stale_fail_safe_attempts),
         }
 
 

@@ -67,6 +67,7 @@ class FailSafeProof:
 class FailSafeAttemptEvidence:
     """Lifecycle evidence for the latest bounded fail-safe attempt."""
 
+    attempt_id: int
     started_at: datetime
     deadline: datetime
     completed_at: datetime | None
@@ -86,6 +87,7 @@ class Snapshot:
     fail_safe_pending: bool = False
     fail_safe_proof: FailSafeProof | None = None
     fail_safe_attempt: FailSafeAttemptEvidence | None = None
+    stale_fail_safe_attempts: tuple[FailSafeAttemptEvidence, ...] = ()
     guard_state: str | None = None
     guard_quality: str = "invalid"
     solis: SolisStateReadResult | None = None
@@ -124,6 +126,10 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         self._writer: HomeAssistantWriter | None = None
         self._last_fail_safe_proof: FailSafeProof | None = None
         self._last_fail_safe_attempt: FailSafeAttemptEvidence | None = None
+        self._stale_fail_safe_attempts: tuple[FailSafeAttemptEvidence, ...] = ()
+        self._attempt_sequence = 0
+        self._attempts_by_task: dict[asyncio.Task[object], FailSafeAttemptEvidence] = {}
+        self._proofs_by_attempt: dict[int, FailSafeProof] = {}
 
     @staticmethod
     def _now() -> datetime:
@@ -189,6 +195,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                 ),
                 fail_safe_proof=self._last_fail_safe_proof,
                 fail_safe_attempt=self._last_fail_safe_attempt,
+                stale_fail_safe_attempts=self._stale_fail_safe_attempts,
                 issues=("unexpected_coordinator_exception",)
                 + self._fail_safe_diagnostics,
                 unexpected_error=unexpected,
@@ -256,7 +263,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         control = None
         if recommendation is not None and source is not None:
             control = solis_cloud.to_control(recommendation.command, source.battery_spec)
-        return Snapshot(heartbeat_at=now, last_healthy_at=self._last_healthy_at, health=health, fail_safe_obligation=self._fail_safe_obligation, fail_safe_pending=pending, fail_safe_proof=self._last_fail_safe_proof, fail_safe_attempt=self._last_fail_safe_attempt, guard_state=guard_state, guard_quality=guard_quality, solis=solis, diagnostic_energy_kwh=energy, recommendation=recommendation, reserve=None if recommendation is None else recommendation.reserve, source_quality=quality, issues=issues + self._fail_safe_diagnostics, unexpected_error=unexpected_error, decision=recommendation, battery_spec=None if source is None else source.battery_spec, battery_state=None if source is None else source.battery_state, input_interval=first, control=control, planning_horizon_end=None if not intervals else intervals[-1].interval.end, tariff_forecast_end=None if source is None else max(item.interval.end for item in source.tariff_forecast), load_forecast_end=None if source is None else max(item.interval.end for item in source.load_forecast), solar_forecast_end=None if source is None else max(item.interval.end for item in source.solar_forecast))
+        return Snapshot(heartbeat_at=now, last_healthy_at=self._last_healthy_at, health=health, fail_safe_obligation=self._fail_safe_obligation, fail_safe_pending=pending, fail_safe_proof=self._last_fail_safe_proof, fail_safe_attempt=self._last_fail_safe_attempt, stale_fail_safe_attempts=self._stale_fail_safe_attempts, guard_state=guard_state, guard_quality=guard_quality, solis=solis, diagnostic_energy_kwh=energy, recommendation=recommendation, reserve=None if recommendation is None else recommendation.reserve, source_quality=quality, issues=issues + self._fail_safe_diagnostics, unexpected_error=unexpected_error, decision=recommendation, battery_spec=None if source is None else source.battery_spec, battery_state=None if source is None else source.battery_state, input_interval=first, control=control, planning_horizon_end=None if not intervals else intervals[-1].interval.end, tariff_forecast_end=None if source is None else max(item.interval.end for item in source.tariff_forecast), load_forecast_end=None if source is None else max(item.interval.end for item in source.load_forecast), solar_forecast_end=None if source is None else max(item.interval.end for item in source.solar_forecast))
 
     def _read_guard(self) -> tuple[str | None, str]:
         state = self.hass.states.get(self.config.control_disable_guard_entity_id)
@@ -336,7 +343,10 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                 return
         started_at = self._now()
         deadline = started_at + budget
-        self._last_fail_safe_attempt = FailSafeAttemptEvidence(
+        self._attempt_sequence += 1
+        attempt_id = self._attempt_sequence
+        evidence = FailSafeAttemptEvidence(
+            attempt_id,
             started_at,
             deadline,
             None,
@@ -344,59 +354,87 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             None,
             None,
         )
-        self._fail_safe_task = asyncio.create_task(
-            self._run_fail_safe(deadline, budget)
+        task = asyncio.create_task(
+            self._run_fail_safe(attempt_id, deadline, budget)
         )
-        self._fail_safe_task.add_done_callback(self._fail_safe_done)
+        self._last_fail_safe_attempt = evidence
+        self._fail_safe_task = task
+        self._attempts_by_task[task] = evidence
+        task.add_done_callback(self._fail_safe_done)
         if wait:
-            await self._await_task(self._fail_safe_task, budget)
+            await self._await_task(task, budget)
 
-    async def _run_fail_safe(self, deadline: datetime, budget: timedelta) -> object:
+    async def _run_fail_safe(self, attempt_id: int, deadline: datetime, budget: timedelta) -> object:
         assert self._policy is not None
         try:
             result: PolicyActuationResult = await asyncio.wait_for(self._policy.async_apply_fail_safe(deadline=deadline), budget.total_seconds())
             proof = self._fresh_fail_safe_proof(self._now())
-            self._last_fail_safe_proof = proof
-            self._fail_safe_obligation = not proof.ha_safe
+            self._proofs_by_attempt[attempt_id] = proof
             return result
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            self._fail_safe_obligation = True
+            self._proofs_by_attempt[attempt_id] = self._fresh_fail_safe_proof(
+                self._now()
+            )
             return error
 
     def _fail_safe_done(self, task: asyncio.Task[object]) -> None:
-        if self._fail_safe_task is task:
+        prior = self._attempts_by_task.pop(task, None)
+        if prior is None:
+            return
+        is_current = (
+            self._last_fail_safe_attempt is not None
+            and self._last_fail_safe_attempt.attempt_id == prior.attempt_id
+        )
+        if self._fail_safe_task is task and is_current:
             self._fail_safe_task = None
         result_value: PolicyActuationResult | None = None
         status = "failed"
+        diagnostics: tuple[str, ...] = ()
         try:
             result = task.result()
         except asyncio.CancelledError:
-            self._fail_safe_obligation = True
-            self._fail_safe_diagnostics = ("failsafe_cancelled",)
+            diagnostics = ("failsafe_cancelled",)
         except Exception as error:
-            self._fail_safe_obligation = True
-            self._fail_safe_diagnostics = (f"failsafe_exception:{error}",)
+            diagnostics = (f"failsafe_exception:{error}",)
         else:
             if isinstance(result, Exception):
-                self._fail_safe_diagnostics = (f"failsafe_exception:{result}",)
+                diagnostics = (f"failsafe_exception:{result}",)
             elif isinstance(result, PolicyActuationResult):
                 result_value = result
-                status = "ha_safe_device_reconciliation_pending" if result.safe else "unsafe"
-                self._fail_safe_diagnostics = tuple(result.issues)
-        prior = self._last_fail_safe_attempt
-        if prior is not None:
-            self._last_fail_safe_attempt = FailSafeAttemptEvidence(
+                diagnostics = tuple(result.issues)
+        proof = self._proofs_by_attempt.pop(prior.attempt_id, None)
+        if proof is None:
+            proof = self._fresh_fail_safe_proof(self._now())
+        if proof.ha_safe:
+            status = "ha_safe_device_reconciliation_pending"
+        elif result_value is not None:
+            status = "unsafe"
+        completed = FailSafeAttemptEvidence(
+                prior.attempt_id,
                 prior.started_at,
                 prior.deadline,
                 self._now(),
                 status,
                 result_value,
-                self._last_fail_safe_proof,
-            )
+                proof,
+        )
+        if is_current:
+            self._last_fail_safe_attempt = completed
+            self._last_fail_safe_proof = proof
+            self._fail_safe_obligation = not proof.ha_safe
+            self._fail_safe_diagnostics = diagnostics
+        else:
+            self._stale_fail_safe_attempts = (
+                *self._stale_fail_safe_attempts,
+                completed,
+            )[-8:]
         if not self._stopping:
-            self.hass.async_create_task(self.async_request_refresh())
+            try:
+                self.hass.async_create_task(self.async_request_refresh())
+            except Exception:
+                _LOGGER.exception("Failed to schedule fail-safe completion refresh")
 
     async def _await_task(self, task: asyncio.Task[object], budget: timedelta) -> None:
         try:
@@ -406,6 +444,9 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             self._fail_safe_diagnostics = ("failsafe_deadline_exhausted",)
         except asyncio.CancelledError:
             raise
+        finally:
+            if task.done() and task in self._attempts_by_task:
+                self._fail_safe_done(task)
 
     async def _async_source_changed(self, _event: Event[EventStateChangedData]) -> None:
         if not self._stopping:

@@ -4,7 +4,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
@@ -185,6 +185,35 @@ async def test_event_refresh_uses_coordinator_coalescing_and_stops_cleanly(hass:
     coordinator.async_request_refresh.assert_awaited_once_with()
 
 
+async def test_concurrent_data_coordinator_refreshes_are_coalesced(hass: HomeAssistant) -> None:
+    coordinator = Coordinator(hass, integration_config())
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+    active = 0
+    maximum_active = 0
+
+    async def update():
+        nonlocal calls, active, maximum_active
+        calls += 1
+        active += 1
+        maximum_active = max(maximum_active, active)
+        started.set()
+        await release.wait()
+        active -= 1
+        return coordinator_module.Snapshot(heartbeat_at=NOW)
+
+    coordinator._async_update_data = update  # type: ignore[method-assign]
+    first = asyncio.create_task(coordinator.async_request_refresh())
+    await started.wait()
+    followers = [asyncio.create_task(coordinator.async_request_refresh()) for _ in range(4)]
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, *followers)
+    assert maximum_active == 1
+    assert calls <= 2
+
+
 def test_subscriptions_exclude_all_stub_control_and_soc_helpers(hass: HomeAssistant) -> None:
     configured = integration_config()
     ids = Coordinator(hass, configured)._source_entity_ids()
@@ -273,3 +302,125 @@ async def test_shutdown_reproves_and_retries_after_existing_unsafe_attempt(hass:
     await coordinator.async_stop()
     assert coordinator._policy.async_apply_fail_safe.await_count >= 2
     assert coordinator._stopping
+
+
+async def test_pending_fail_safe_survives_guard_transitions(hass: HomeAssistant) -> None:
+    configured = integration_config()
+    coordinator = Coordinator(hass, configured)
+    release = asyncio.Event()
+
+    async def attempt(*, deadline):
+        await release.wait()
+        return PolicyActuationResult(PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE)
+
+    coordinator._policy = AsyncMock()
+    coordinator._policy.async_apply_fail_safe.side_effect = attempt
+    await coordinator._start_fail_safe(FAIL_SAFE_ATTEMPT_BUDGET)
+    task = coordinator._fail_safe_task
+    assert task is not None
+    for state in ("off", "on", "off"):
+        hass.states.async_set(configured.control_disable_guard_entity_id, state)
+        await refresh(coordinator, hass)
+        assert coordinator._fail_safe_task is task
+        assert not task.cancelled()
+    coordinator._stopping = True
+    release.set()
+    await task
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    (
+        PolicyActuationResult(PolicyActuationStatus.FAIL_SAFE_APPLIED_HA_PENDING_DEVICE_RECONCILIATION),
+        RuntimeError("cloud failure"),
+    ),
+)
+async def test_attempt_completion_uses_fresh_proof_and_requests_retry_refresh(hass: HomeAssistant, outcome: object) -> None:
+    configured = integration_config()
+    coordinator = Coordinator(hass, configured)
+    coordinator.async_request_refresh = AsyncMock()
+    coordinator._policy = AsyncMock()
+    if isinstance(outcome, Exception):
+        coordinator._policy.async_apply_fail_safe.side_effect = outcome
+    else:
+        coordinator._policy.async_apply_fail_safe.return_value = outcome
+    await coordinator._start_fail_safe(FAIL_SAFE_ATTEMPT_BUDGET)
+    task = coordinator._fail_safe_task
+    assert task is not None
+    await task
+    await asyncio.sleep(0)
+    assert coordinator._last_fail_safe_attempt is not None
+    assert coordinator._last_fail_safe_attempt.status in {"unsafe", "failed"}
+    assert coordinator._last_fail_safe_attempt.proof is not None
+    assert not coordinator._last_fail_safe_attempt.proof.ha_safe
+    assert coordinator._fail_safe_obligation
+    coordinator.async_request_refresh.assert_awaited_once_with()
+    previous_id = coordinator._last_fail_safe_attempt.attempt_id
+    release = asyncio.Event()
+
+    async def retry(*, deadline):
+        await release.wait()
+        return PolicyActuationResult(PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE)
+
+    coordinator._policy.async_apply_fail_safe.side_effect = retry
+    with (
+        patch.object(coordinator_module, "read_solis_state", return_value=healthy_solis()),
+        patch.object(coordinator_module.inputs, "async_read_input", AsyncMock(return_value=planning_source())),
+    ):
+        await coordinator._async_observe(NOW)
+    retry_task = coordinator._fail_safe_task
+    assert retry_task is not None
+    assert coordinator._last_fail_safe_attempt.attempt_id > previous_id
+    coordinator._stopping = True
+    release.set()
+    await retry_task
+
+
+async def test_done_before_callback_cannot_overwrite_new_attempt(hass: HomeAssistant) -> None:
+    coordinator = Coordinator(hass, integration_config())
+    coordinator._stopping = True
+    coordinator._policy = AsyncMock()
+    coordinator._policy.async_apply_fail_safe.return_value = PolicyActuationResult(PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE)
+    await coordinator._start_fail_safe(FAIL_SAFE_ATTEMPT_BUDGET)
+    old = coordinator._fail_safe_task
+    assert old is not None
+    old.remove_done_callback(coordinator._fail_safe_done)
+    await old
+    old_id = coordinator._last_fail_safe_attempt.attempt_id
+
+    await coordinator._start_fail_safe(FAIL_SAFE_ATTEMPT_BUDGET)
+    new = coordinator._fail_safe_task
+    assert new is not None and new is not old
+    new_id = coordinator._last_fail_safe_attempt.attempt_id
+    coordinator._fail_safe_done(old)
+
+    assert coordinator._fail_safe_task is new
+    assert coordinator._last_fail_safe_attempt.attempt_id == new_id
+    assert coordinator._last_fail_safe_attempt.status == "pending"
+    assert coordinator._stale_fail_safe_attempts[-1].attempt_id == old_id
+    await new
+
+
+async def test_shutdown_unsubscribes_cancels_to_deadline_and_schedules_no_refresh(hass: HomeAssistant) -> None:
+    configured = integration_config()
+    coordinator = Coordinator(hass, configured)
+    unsubscribe = MagicMock()
+    coordinator._unsub_sources = unsubscribe
+    coordinator.async_request_refresh = AsyncMock()
+    never = asyncio.Event()
+
+    async def blocked(*, deadline):
+        await never.wait()
+
+    coordinator._policy = AsyncMock()
+    coordinator._policy.async_apply_fail_safe.side_effect = blocked
+    await coordinator._start_fail_safe(timedelta(milliseconds=5))
+    first = coordinator._fail_safe_task
+    with patch.object(coordinator_module, "SHUTDOWN_FAIL_SAFE_BUDGET", timedelta(milliseconds=5)):
+        await coordinator.async_stop()
+    await asyncio.sleep(0)
+    unsubscribe.assert_called_once_with()
+    assert first is not None and first.done()
+    assert coordinator._fail_safe_task is None or coordinator._fail_safe_task.done()
+    coordinator.async_request_refresh.assert_not_awaited()
+    assert not coordinator._attempts_by_task

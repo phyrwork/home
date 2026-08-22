@@ -560,10 +560,27 @@ class SolisPolicyActuator:
             return tuple(results), False
         # Continue independently after every expected failure.  The safe mode,
         # peak shaving, and reserve writes are the only persistent mutations.
-        async with self.writer.transaction() as transaction:
+        transaction = self.writer.transaction()
+        entered = False
+        try:
+            if deadline is None:
+                await transaction.__aenter__()
+            else:
+                remaining = self._remaining_deadline(deadline)
+                if remaining <= 0:
+                    raise TimeoutError("fail-safe deadline exhausted before writer transaction")
+                await asyncio.wait_for(transaction.__aenter__(), remaining)
+            entered = True
             await self._safe_write(p.storage_mode_entity_id, StorageMode.SELF_USE.value, results, domain="select", transaction=transaction, deadline=deadline)
             await self._safe_write(p.grid_peak_shaving_entity_id, True, results, domain="switch", transaction=transaction, deadline=deadline)
             await self._safe_write(protection.battery_reserve_entity_id, False, results, domain="switch", transaction=transaction, deadline=deadline)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            results.append(WriteResult("solis.fail_safe", WriteOutcome.REJECTED, str(exc)))
+        finally:
+            if entered:
+                await transaction.__aexit__(None, None, None)
         safe = self._required_safe_state(self.writer, self.config)
         return tuple(results), safe
 

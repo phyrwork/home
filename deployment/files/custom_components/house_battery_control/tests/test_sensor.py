@@ -180,5 +180,15 @@ def test_partial_sensor_availability_is_source_specific(hass: HomeAssistant) -> 
     assert HeartbeatSensor(coordinator).available
     assert HealthSensor(coordinator).available
     assert BatteryEnergySensor(coordinator).native_value == 12.0
+    assert BatteryEnergySensor(coordinator).available
     assert ReserveTargetSensor(coordinator).native_value is None
+    assert not ReserveTargetSensor(coordinator).available
     assert ReserveBalanceSensor(coordinator).native_value is None
+    assert not ReserveBalanceSensor(coordinator).available
+
+    coordinator.async_set_updated_data(
+        replace(snapshot(), diagnostic_energy_kwh=None)
+    )
+    assert not BatteryEnergySensor(coordinator).available
+    assert ReserveTargetSensor(coordinator).available
+    assert not ReserveBalanceSensor(coordinator).available
