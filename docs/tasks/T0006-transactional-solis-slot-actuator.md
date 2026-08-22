@@ -1,6 +1,6 @@
 # T0006 — Implement the transactional Solis slot actuator
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 
