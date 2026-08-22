@@ -115,6 +115,8 @@ class HomeAssistantWriter:
         adapter: HomeAssistantAccess | None = None,
         timezone: tzinfo | None = None,
     ) -> None:
+        if adapter is None and hasattr(hass, "states") and hasattr(hass, "services"):
+            raise ValueError("real Home Assistant instances require HomeAssistantWriter.for_home_assistant()")
         self.hass = adapter if adapter is not None else hass
         # Datetime targets are already schedule-normalized by the caller.  If
         # configured, this timezone is validation only; the writer never
@@ -122,6 +124,11 @@ class HomeAssistantWriter:
         self.timezone = timezone
         self._lock = asyncio.Lock()
         self._owner: asyncio.Task[object] | None = None
+
+    @classmethod
+    def for_home_assistant(cls, hass: object, *, timezone: tzinfo | None = None) -> "HomeAssistantWriter":
+        """Construct a production writer with the real HA event adapter."""
+        return cls(hass, adapter=HomeAssistantEventAdapter(hass), timezone=timezone)
 
     def transaction(self) -> "WriteTransaction":
         return WriteTransaction(self)
@@ -409,9 +416,14 @@ class WriteTransaction:
         self.results: list[WriteResult] = []
         self.complete = True
         self._entered = False
+        self._closed = False
         self._task: asyncio.Task[object] | None = None
 
     async def __aenter__(self) -> "WriteTransaction":
+        if self._entered:
+            raise RuntimeError("transaction is already active and cannot be re-entered")
+        if self._closed:
+            raise RuntimeError("transaction is closed and cannot be re-entered")
         if self.writer._owner is asyncio.current_task():
             raise RuntimeError("nested transactions are not supported")
         await self.writer._lock.acquire()
@@ -430,6 +442,9 @@ class WriteTransaction:
             self.complete = False
         self.writer._owner = None
         self.writer._lock.release()
+        self._entered = False
+        self._closed = True
+        self._task = None
         return False
 
     async def async_write(self, request: WriteRequest) -> WriteResult:
@@ -458,7 +473,6 @@ class WriteTransaction:
         return self.result()
 
     def result(self) -> TransactionResult:
-        self._assert_owner()
         failures = [result for result in self.results if not result.success]
         successes = [result for result in self.results if result.success]
         if not failures:

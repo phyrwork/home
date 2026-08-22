@@ -3,7 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -358,11 +358,28 @@ async def test_transaction_owner_nested_and_cross_task_access_are_rejected() -> 
             async with writer.transaction():
                 pass
         async def cross_task_call() -> None:
-            transaction.result()
+            await transaction.async_write(SwitchWriteRequest(precondition(ha, "switch.a"), True))
 
         cross_task = asyncio.create_task(cross_task_call())
         with pytest.raises(RuntimeError, match="owning"):
             await cross_task
+
+
+@pytest.mark.asyncio
+async def test_transaction_closes_after_exit_and_rejects_reentry() -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    writer = HomeAssistantWriter(ha)
+    transaction = writer.transaction()
+    async with transaction:
+        snapshot = transaction.result()
+        assert snapshot.complete
+    assert transaction.result() == snapshot
+    with pytest.raises(RuntimeError, match="owning"):
+        await transaction.async_write(SwitchWriteRequest(precondition(ha, "switch.a"), True))
+    with pytest.raises(RuntimeError, match="closed"):
+        async with transaction:
+            pass
 
 
 @pytest.mark.asyncio
@@ -424,6 +441,7 @@ async def test_transaction_cancellation_preserves_outcomes_and_marks_incomplete(
     assert len(transaction.results) == 1
     assert transaction.complete is False
     assert transaction.results[0].outcome is WriteOutcome.NO_CHANGE
+    assert transaction.result().complete is False
     assert not writer._lock.locked()
 
 
@@ -507,3 +525,31 @@ def test_real_home_assistant_event_adapter_delegates_state_listener(monkeypatch)
     assert captured["entities"] == ["switch.a"]
     assert captured["callback"] is callback
     remove()
+
+
+@pytest.mark.asyncio
+async def test_production_factory_wires_real_delayed_readback_adapter(monkeypatch) -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+
+    class StateStore:
+        def get(self, entity_id):
+            return ha.get_state(entity_id)
+
+    class ServiceStore:
+        async def async_call(self, domain, service, data, *, blocking=True):
+            await ha.async_call(domain, service, data, blocking=blocking)
+
+    real_hass = SimpleNamespace(states=StateStore(), services=ServiceStore())
+    monkeypatch.setattr(
+        "homeassistant.helpers.event.async_track_state_change_event",
+        lambda _hass, entities, callback: ha.async_listen_state_change(entities[0], callback),
+    )
+    ha.on_call = lambda _d, _s, _data: ha.set_state(
+        "switch.a", "on", updated=NOW + timedelta(seconds=1), context_id="factory"
+    )
+    writer = HomeAssistantWriter.for_home_assistant(real_hass, timezone=timezone.utc)
+    result = await writer.async_write(SwitchWriteRequest(precondition(ha, "switch.a"), True))
+    assert result.outcome is WriteOutcome.APPLIED_HA_READBACK
+    with pytest.raises(ValueError, match="for_home_assistant"):
+        HomeAssistantWriter(real_hass)

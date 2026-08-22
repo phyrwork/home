@@ -68,6 +68,8 @@ class WriteRequest:
             raise ValueError("number requests require the observed capability")
         if self.domain != "number" and self.capability is not None:
             raise ValueError("capability is only valid for number requests")
+        if self.domain != "text" and self.text_validator is not None:
+            raise ValueError("text_validator is only valid for text requests")
 
     @property
     def entity_id(self) -> str:
@@ -112,6 +114,8 @@ class TextWriteRequest(WriteRequest):
         super().__post_init__()
         if not isinstance(self.target, str):
             raise TypeError("text target must be a string")
+        if self.text_validator is not None and not callable(self.text_validator):
+            raise TypeError("text_validator must be callable")
 
 
 @dataclass(frozen=True, slots=True)
