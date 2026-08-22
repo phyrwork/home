@@ -314,7 +314,6 @@ class SolisSlotActuator:
         *,
         control_disable_guard_entity_id: str,
         inverter_timezone: tzinfo,
-        commissioning: CommissioningRecord | None = None,
         orchestration_lock: ReentrantAsyncLock | None = None,
     ) -> None:
         if not control_disable_guard_entity_id.startswith("input_boolean.") and not control_disable_guard_entity_id.startswith("switch."):
@@ -324,36 +323,9 @@ class SolisSlotActuator:
         self.config = config
         self.writer = writer
         self.control_disable_guard_entity_id = control_disable_guard_entity_id
-        self.commissioning = commissioning
         self.inverter_timezone = inverter_timezone
-        self._construction_fingerprint = mapping_fingerprint(config)
         self.last_cancellation_result: CancellationDiagnostic | None = None
         self.orchestration_lock = orchestration_lock or ReentrantAsyncLock()
-
-    @property
-    def mapping_fingerprint(self) -> str:
-        return mapping_fingerprint(self.config)
-
-    def _current_mapping_is_unchanged(self) -> bool:
-        try:
-            return self.mapping_fingerprint == self._construction_fingerprint
-        except Exception:
-            return False
-
-    def _commissioned(self, now: datetime) -> bool:
-        record = self.commissioning
-        if not isinstance(record, CommissioningRecord):
-            return False
-        try:
-            return (
-                record.schema_version == COMMISSIONING_SCHEMA_VERSION
-                and record.commissioned_at <= now
-                and record.mapping_fingerprint == self.mapping_fingerprint
-                and record.ha_readback_validated
-                and record.device_reconciliation_validated
-            )
-        except Exception:
-            return False
 
     def _directions(self) -> tuple[tuple[SolisSlotDirectionConfig, int, SlotDirection], ...]:
         result: list[tuple[SolisSlotDirectionConfig, int, SlotDirection]] = []
@@ -595,10 +567,6 @@ class SolisSlotActuator:
         results: list[WriteResult],
     ) -> SlotActuationResult:
         try:
-            if not self._current_mapping_is_unchanged() or not self._commissioned(now):
-                cleanup = await self._disable_all_once(results)
-                status = SlotActuationStatus.BLOCKED_UNCOMMISSIONED_SAFE if cleanup.safe else SlotActuationStatus.BLOCKED_UNCOMMISSIONED_UNSAFE
-                return SlotActuationResult(status, tuple(results), message="slot actuator is not commissioned for the current mapping")
             preflight = self._preflight(intent, observation, now)
             if isinstance(preflight, str):
                 safe = await self._cleanup_after_failure(results)

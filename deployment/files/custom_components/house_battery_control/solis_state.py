@@ -57,6 +57,7 @@ class SolisTelemetry:
 
     state_of_charge_percent: Decimal
     battery_power_kw: Decimal
+    battery_voltage_v: Decimal
     device_timestamp: datetime | None
     home_assistant_last_updated: datetime | None
     soc_last_updated: datetime | None = None
@@ -78,7 +79,6 @@ class SolisPersistentState:
     storage_mode: str
     storage_mode_options: tuple[str, ...]
     allow_grid_charging: bool
-    allow_export: bool
     grid_peak_shaving: bool
     inverter_on_off: bool
     inverter_time: datetime

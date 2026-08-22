@@ -6,7 +6,7 @@ which keeps this boundary usable during offline commissioning and testing.
 """
 
 from collections.abc import Mapping
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from decimal import Decimal, InvalidOperation
 import re
 from typing import Protocol
@@ -133,27 +133,33 @@ class SolisStateReader:
         power_id = config.telemetry.battery_power_entity_id
         sign = config.telemetry.battery_power_sign
         power: Decimal | None = None
-        if power_id is None or sign is None:
-            self._critical(
-                "battery_power_unresolved",
-                None,
-                "battery-power entity and sign convention are unresolved",
-            )
-        else:
-            power_state = self._state(power_id)
-            raw_power = self._number_from_state(power_state, power_id, "battery_power_missing")
-            if raw_power is not None:
-                unit = self._attribute(power_state, "unit_of_measurement")
-                if not isinstance(unit, str) or not unit.strip():
-                    self._critical("battery_power_unit_missing", power_id, "battery-power unit is missing")
-                elif unit.strip().lower() == "kw":
-                    power = raw_power
-                elif unit.strip().lower() == "w":
-                    power = raw_power / Decimal("1000")
-                else:
-                    self._critical("battery_power_unit_unknown", power_id, f"unsupported battery-power unit: {unit}")
-                if power is not None and sign.value == "positive_means_discharging":
-                    power = -power
+        power_state = self._state(power_id)
+        raw_power = self._number_from_state(power_state, power_id, "battery_power_missing")
+        if raw_power is not None:
+            unit = self._attribute(power_state, "unit_of_measurement")
+            if not isinstance(unit, str) or not unit.strip():
+                self._critical("battery_power_unit_missing", power_id, "battery-power unit is missing")
+            elif unit.strip().lower() == "kw":
+                power = raw_power
+            elif unit.strip().lower() == "w":
+                power = raw_power / Decimal("1000")
+            else:
+                self._critical("battery_power_unit_unknown", power_id, f"unsupported battery-power unit: {unit}")
+            if power is not None and sign.value == "positive_means_discharging":
+                power = -power
+
+        voltage_id = config.telemetry.battery_voltage_entity_id
+        voltage_state = self._state(voltage_id)
+        voltage = self._number_from_state(voltage_state, voltage_id, "battery_voltage_missing")
+        voltage_unit = self._attribute(voltage_state, "unit_of_measurement")
+        if voltage is not None and (
+            not isinstance(voltage_unit, str) or voltage_unit.strip().lower() != "v"
+        ):
+            self._critical("battery_voltage_unit_invalid", voltage_id, "battery voltage unit must be V")
+            voltage = None
+        if voltage is not None and voltage <= 0:
+            self._critical("battery_voltage_invalid", voltage_id, "battery voltage must be positive")
+            voltage = None
 
         soc_last_updated = self._observation_timestamp(soc_state, soc_id, "SOC")
         power_last_updated = (
@@ -163,48 +169,28 @@ class SolisStateReader:
         )
         device_timestamp: datetime | None = None
         timestamp_id = config.telemetry.device_timestamp_entity_id
-        if timestamp_id is None:
-            self._critical("device_timestamp_unresolved", None, "device timestamp authority is unresolved")
+        timestamp_state = self._state(timestamp_id)
+        raw_timestamp = self._state_value(timestamp_state)
+        device_timestamp = self._parse_datetime(raw_timestamp)
+        if device_timestamp is None:
+            self._critical(
+                "device_timestamp_invalid",
+                timestamp_id,
+                "device timestamp is missing, invalid or naive",
+            )
         else:
-            timestamp_state = self._state(timestamp_id)
-            raw_timestamp = self._state_value(timestamp_state)
-            device_timestamp = self._parse_datetime(raw_timestamp)
-            if device_timestamp is None:
-                self._critical(
-                    "device_timestamp_invalid",
-                    timestamp_id,
-                    "device timestamp is missing, invalid or naive",
-                )
-            else:
-                age = self.now - device_timestamp
-                if age < -MAXIMUM_FUTURE_CLOCK_SKEW:
-                    self._critical(
-                        "device_timestamp_future",
-                        timestamp_id,
-                        "device timestamp is too far in the future",
-                    )
-                elif age > MAXIMUM_TELEMETRY_AGE:
-                    self._critical("device_timestamp_stale", timestamp_id, "device timestamp is stale")
-                for observation_id, label, observation_time in (
-                    (soc_id, "SOC", soc_last_updated),
-                    (power_id, "battery power", power_last_updated),
-                ):
-                    if (
-                        observation_time is not None
-                        and abs(device_timestamp - observation_time)
-                        > MAXIMUM_TELEMETRY_AGE
-                    ):
-                        self._critical(
-                            "device_timestamp_disagrees",
-                            observation_id,
-                            f"device timestamp disagrees implausibly with {label} observation time",
-                        )
+            age = self.now - device_timestamp
+            if age < -MAXIMUM_FUTURE_CLOCK_SKEW:
+                self._critical("device_timestamp_future", timestamp_id, "device timestamp is too far in the future")
+            elif age > MAXIMUM_TELEMETRY_AGE:
+                self._critical("device_timestamp_stale", timestamp_id, "device timestamp is stale")
 
-        if soc is None or power is None or device_timestamp is None:
+        if soc is None or power is None or voltage is None or device_timestamp is None:
             return None
         return SolisTelemetry(
             state_of_charge_percent=soc,
             battery_power_kw=power,
+            battery_voltage_v=voltage,
             device_timestamp=device_timestamp,
             home_assistant_last_updated=soc_last_updated,
             soc_last_updated=soc_last_updated,
@@ -244,7 +230,6 @@ class SolisStateReader:
         switch_values: dict[str, bool | None] = {}
         for name, entity_id in (
             ("allow_grid_charging", persistent.allow_grid_charging_entity_id),
-            ("allow_export", persistent.allow_export_entity_id),
             ("grid_peak_shaving", persistent.grid_peak_shaving_entity_id),
             ("inverter_on_off", persistent.inverter_on_off_entity_id),
         ):
@@ -284,7 +269,6 @@ class SolisStateReader:
             storage_mode=storage_mode,
             storage_mode_options=options,
             allow_grid_charging=switch_values["allow_grid_charging"],  # type: ignore[arg-type]
-            allow_export=switch_values["allow_export"],  # type: ignore[arg-type]
             grid_peak_shaving=switch_values["grid_peak_shaving"],  # type: ignore[arg-type]
             inverter_on_off=switch_values["inverter_on_off"],  # type: ignore[arg-type]
             inverter_time=inverter_time,
@@ -602,6 +586,19 @@ class SolisStateReader:
 
     @staticmethod
     def _parse_datetime(value: object) -> datetime | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float, Decimal)) or (
+            isinstance(value, str)
+            and re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value.strip())
+        ):
+            try:
+                seconds = Decimal(str(value))
+                if not seconds.is_finite():
+                    return None
+                return datetime.fromtimestamp(float(seconds), timezone.utc)
+            except (InvalidOperation, OverflowError, OSError, ValueError):
+                return None
         if isinstance(value, datetime):
             result = value
         elif isinstance(value, str):

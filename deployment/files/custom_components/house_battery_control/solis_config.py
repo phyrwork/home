@@ -43,12 +43,13 @@ class MaximumGridImportPolicy(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class SolisTelemetryConfig:
-    """Authoritative Solis telemetry and explicitly unresolved facts."""
+    """Authoritative Solis telemetry used by the controller."""
 
     state_of_charge_entity_id: str
-    battery_power_entity_id: str | None
-    battery_power_sign: BatteryPowerSign | None
-    device_timestamp_entity_id: str | None
+    battery_power_entity_id: str
+    battery_power_sign: BatteryPowerSign
+    battery_voltage_entity_id: str
+    device_timestamp_entity_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +58,6 @@ class SolisPersistentControlConfig:
 
     storage_mode_entity_id: str
     allow_grid_charging_entity_id: str
-    allow_export_entity_id: str
     grid_peak_shaving_entity_id: str
     inverter_on_off_entity_id: str
     inverter_time_entity_id: str
@@ -133,16 +133,6 @@ _EXPECTED_SLOT_OWNERS = {
     (6, "charge"): SolisSlotOwner.RESERVED,
     (6, "discharge"): SolisSlotOwner.RESERVED,
 }
-_LEGACY_STUB_IDS = frozenset(
-    {
-        "input_number.house_battery_state_of_charge",
-        "input_number.house_battery_power_limit",
-        "input_select.house_battery_operating_mode",
-        "input_number.house_battery_state_of_charge_target",
-    }
-)
-
-
 def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
     """Parse and strictly validate a YAML-shaped ``solis`` mapping."""
 
@@ -167,6 +157,7 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
             "state_of_charge_entity_id",
             "battery_power_entity_id",
             "battery_power_sign",
+            "battery_voltage_entity_id",
             "device_timestamp_entity_id",
         },
         "solis.telemetry",
@@ -177,7 +168,7 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
             "solis.telemetry.state_of_charge_entity_id",
             "sensor",
         ),
-        battery_power_entity_id=_optional_entity(
+        battery_power_entity_id=_entity(
             telemetry_source["battery_power_entity_id"],
             "solis.telemetry.battery_power_entity_id",
             "sensor",
@@ -186,27 +177,23 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
             telemetry_source["battery_power_sign"],
             "solis.telemetry.battery_power_sign",
         ),
-        device_timestamp_entity_id=_optional_entity(
+        battery_voltage_entity_id=_entity(
+            telemetry_source["battery_voltage_entity_id"],
+            "solis.telemetry.battery_voltage_entity_id",
+            "sensor",
+        ),
+        device_timestamp_entity_id=_entity(
             telemetry_source["device_timestamp_entity_id"],
             "solis.telemetry.device_timestamp_entity_id",
             "sensor",
         ),
     )
-    if (telemetry.battery_power_entity_id is None) != (
-        telemetry.battery_power_sign is None
-    ):
-        raise ValueError(
-            "solis.telemetry.battery_power_entity_id and "
-            "battery_power_sign must both be null or both be configured"
-        )
-
     persistent_source = _mapping(root["persistent"], "solis.persistent")
     _require_keys(
         persistent_source,
         {
             "storage_mode_entity_id",
             "allow_grid_charging_entity_id",
-            "allow_export_entity_id",
             "grid_peak_shaving_entity_id",
             "inverter_on_off_entity_id",
             "inverter_time_entity_id",
@@ -222,11 +209,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         allow_grid_charging_entity_id=_entity(
             persistent_source["allow_grid_charging_entity_id"],
             "solis.persistent.allow_grid_charging_entity_id",
-            "switch",
-        ),
-        allow_export_entity_id=_entity(
-            persistent_source["allow_export_entity_id"],
-            "solis.persistent.allow_export_entity_id",
             "switch",
         ),
         grid_peak_shaving_entity_id=_entity(
@@ -448,11 +430,9 @@ def _owner(value: ConfigValue, name: str) -> SolisSlotOwner:
         raise ValueError(f"{name} has an unknown Solis slot owner: {value}") from None
 
 
-def _power_sign(value: ConfigValue, name: str) -> BatteryPowerSign | None:
-    if value is None:
-        return None
+def _power_sign(value: ConfigValue, name: str) -> BatteryPowerSign:
     if not isinstance(value, str):
-        raise ValueError(f"{name} must be null or a defined power sign")
+        raise ValueError(f"{name} must be a defined power sign")
     try:
         return BatteryPowerSign(value)
     except ValueError:
@@ -468,18 +448,6 @@ def _validate_global_entity_uniqueness(config: SolisConfig) -> None:
     for slot in config.slots:
         ids.extend(_values(slot.charge))
         ids.extend(_values(slot.discharge))
-    legacy = set(_LEGACY_STUB_IDS.intersection(ids))
-    legacy.update(
-        entity_id
-        for entity_id in ids
-        if entity_id.startswith("input_number.house_battery_")
-        or entity_id.startswith("input_select.house_battery_")
-    )
-    if legacy:
-        raise ValueError(
-            "legacy stub entity IDs are not allowed in solis mapping: "
-            + ", ".join(sorted(legacy))
-        )
     seen: set[str] = set()
     duplicates: set[str] = set()
     for entity_id in ids:
@@ -505,22 +473,10 @@ def _values(value: object) -> list[str]:
 def _entity(value: ConfigValue, name: str, domain: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a {domain} entity ID")
-    if (
-        value in _LEGACY_STUB_IDS
-        or value.startswith("input_number.house_battery_")
-        or value.startswith("input_select.house_battery_")
-    ):
-        raise ValueError(f"{name} must not reference a legacy stub entity ID")
     match = _ENTITY_PATTERN.fullmatch(value)
     if match is None or match.group("domain") != domain:
         raise ValueError(f"{name} must be a {domain} entity ID")
     return value
-
-
-def _optional_entity(value: ConfigValue, name: str, domain: str) -> str | None:
-    if value is None:
-        return None
-    return _entity(value, name, domain)
 
 
 def _mapping(value: ConfigValue, name: str) -> Mapping[str, ConfigValue]:

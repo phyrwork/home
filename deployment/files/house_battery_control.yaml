@@ -1,53 +1,36 @@
 # One-time SolisCloud commissioning: EMS is disabled for this plant so cloud
 # dispatch cannot overwrite Home Assistant inverter controls.
+dynamic_control_enabled: false
+
 battery:
   capacity_kwh: 32.1536
-  minimum_state_of_charge_percent: 10
+  minimum_soc_percent: 10
   charge_efficiency: 0.95
   discharge_efficiency: 0.95
-  power_limit_entity_id: input_number.house_battery_power_limit
+  reserve_margin_kwh: 2
 
 tariff:
-  import_price_entity_id: sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates
-  export_price_entity_id: sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate
+  import_rates_entity_id: sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates
+  export_rates_entity_id: sensor.octopus_energy_electricity_21l4421345_2700009249389_fused_export_day_rates
 
 solar:
   config_entry_id: 79c4415a9ea776404127c1b61ba240cf
 
-policy:
-  reserve_margin_entity_id: input_number.house_battery_reserve_margin
-  export_hysteresis_entity_id: input_number.house_battery_export_hysteresis
-
 control_disable_guard_entity_id: input_boolean.house_battery_control_disable
 
-# T0011 commissioning is deliberately disabled.  The workflow only emits a
-# copy of this shape for human review; it never persists an enabled authority.
-candidate_commissioning:
-  services_enabled: false
-  persistent_candidate_authorization: null
-  candidate_mapping_fingerprint: null
-  candidate_policy_fingerprint: null
-  candidate_validated_at: null
-  manual_grid_verification: null
-  capability_resolutions: []
-  commissioned_power_envelope: null
-
-# The live Solis map is authoritative for battery telemetry and the later
-# guarded controller cutover.  The shared power-limit helper above remains an
-# observation-only diagnostic input until T0013 replaces that capability input.
+# Live entity capabilities are re-read on every evaluation. Charge/discharge
+# power is derived from battery voltage and the owned slot-current maxima.
 solis:
   telemetry:
     state_of_charge_entity_id: sensor.garage_inverter_telemetry_garage_inverter_remaining_battery_capacity
-    # These are unresolved live facts; T0004 must block healthy actuation until
-    # they have been identified and validated.
-    battery_power_entity_id: null
-    battery_power_sign: null
-    device_timestamp_entity_id: null
+    battery_power_entity_id: sensor.garage_inverter_telemetry_garage_inverter_battery_power
+    battery_power_sign: positive_means_charging
+    battery_voltage_entity_id: sensor.garage_inverter_telemetry_garage_inverter_battery_voltage
+    device_timestamp_entity_id: sensor.garage_inverter_telemetry_garage_inverter_timestamp_measurements_received
 
   persistent:
     storage_mode_entity_id: select.garage_inverter_control_storage_mode
     allow_grid_charging_entity_id: switch.garage_inverter_control_allow_grid_charging
-    allow_export_entity_id: switch.garage_inverter_control_allow_export
     grid_peak_shaving_entity_id: switch.garage_inverter_control_grid_peak_shaving
     inverter_on_off_entity_id: switch.garage_inverter_control_inverter_on_off
     inverter_time_entity_id: datetime.garage_inverter_control_inverter_time

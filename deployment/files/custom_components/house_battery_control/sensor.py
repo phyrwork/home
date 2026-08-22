@@ -1,20 +1,14 @@
-"""Diagnostic sensor for House Battery Control."""
+"""Small diagnostic surface for house-battery control."""
 
 from collections.abc import Mapping
-from decimal import Decimal
 from typing import Any
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorEntity,
-    SensorStateClass,
-)
-from homeassistant.const import UnitOfEnergy
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import controller
 from .const import DOMAIN
 from .coordinator import Coordinator
 
@@ -25,251 +19,90 @@ async def async_setup_platform(
     async_add_entities: AddEntitiesCallback,
     discovery_info: Mapping[str, Any] | None = None,
 ) -> None:
-    """Set up the control diagnostic sensor."""
-    coordinator = hass.data[DOMAIN]
-    if not isinstance(coordinator, Coordinator):
-        return
-    async_add_entities(
-        (
-            ControlSensor(coordinator),
-            HeartbeatSensor(coordinator),
-            HealthSensor(coordinator),
-            BatteryEnergySensor(coordinator),
-            ReserveTargetSensor(coordinator),
-            ReserveBalanceSensor(coordinator),
-        )
-    )
+    coordinator = hass.data.get(DOMAIN)
+    if isinstance(coordinator, Coordinator):
+        async_add_entities((HeartbeatSensor(coordinator), HealthSensor(coordinator), ActionSensor(coordinator), ReserveSensor(coordinator)))
 
 
 class _SnapshotSensor(CoordinatorEntity[Coordinator], SensorEntity):
-    """Base an entity's availability on the latest controller snapshot."""
-
     @property
     def available(self) -> bool:
-        """Observation snapshots remain available while degraded or fail-safe."""
         return super().available and self.coordinator.data is not None
 
 
-class ControlSensor(_SnapshotSensor):
-    """Expose the current control decision and its calculation context."""
-
-    _attr_name = "House Battery Control"
-    _attr_unique_id = DOMAIN
-    _attr_icon = "mdi:home-battery"
-
-    @property
-    def native_value(self) -> str | None:
-        """Return the applied operating mode."""
-        if self.coordinator.data is None:
-            return None
-        control = self.coordinator.data.control
-        return None if control is None else f"observation_only:{control.operating_mode.value}"
-
-    @property
-    def extra_state_attributes(self) -> dict[str, object] | None:
-        """Return scalar context explaining the current decision."""
-        snapshot = self.coordinator.data
-        if snapshot is None:
-            return None
-
-        spec = snapshot.battery_spec
-        state = snapshot.battery_state
-        source = snapshot.input_interval
-        reserve = None if snapshot.decision is None else snapshot.decision.reserve
-        control = snapshot.control
-        if spec is None or state is None or source is None or reserve is None or control is None:
-            return {
-                "observation_only": True,
-                "health": snapshot.health.value,
-                "fail_safe_obligation": snapshot.fail_safe_obligation,
-                "fail_safe_pending": snapshot.fail_safe_pending,
-                "guard_state": snapshot.guard_state,
-                "guard_quality": snapshot.guard_quality,
-                "source_quality": snapshot.source_quality,
-                "issues": snapshot.issues,
-            }
-        return {
-            "observation_only": True,
-            "health": snapshot.health.value,
-            "fail_safe_obligation": snapshot.fail_safe_obligation,
-            "fail_safe_pending": snapshot.fail_safe_pending,
-            "guard_state": snapshot.guard_state,
-            "guard_quality": snapshot.guard_quality,
-            "source_quality": snapshot.source_quality,
-            "issues": snapshot.issues,
-            "battery_energy_kwh": float(state.energy_kwh),
-            "battery_state_of_charge_percent": float(
-                state.energy_kwh * 100 / spec.capacity_kwh
-            ),
-            "load_kwh": float(source.load_kwh),
-            "solar_kwh": float(source.solar_kwh),
-            "net_load_kwh": float(source.load_kwh - source.solar_kwh),
-            "import_price_per_kwh": float(
-                source.tariff.import_price_per_kwh
-            ),
-            "export_price_per_kwh": float(
-                source.tariff.export_price_per_kwh
-            ),
-            "import_price_is_off_peak": (
-                source.tariff.import_price_is_off_peak
-            ),
-            "reserve_start_energy_kwh": float(reserve.start_energy_kwh),
-            "reserve_end_energy_kwh": float(reserve.end_energy_kwh),
-            "command_target_energy_kwh": _command_target(
-                snapshot.decision.command
-            ),
-            "target_state_of_charge_percent": _optional_float(
-                control.target_state_of_charge_percent
-            ),
-            "power_w": _optional_float(control.power_w),
-            "expires_at": reserve.interval.end.isoformat(),
-            "planning_horizon_end": snapshot.planning_horizon_end.isoformat(),
-            "tariff_forecast_end": snapshot.tariff_forecast_end.isoformat(),
-            "load_forecast_end": snapshot.load_forecast_end.isoformat(),
-            "solar_forecast_end": snapshot.solar_forecast_end.isoformat(),
-        }
-
-
-class _EnergySensor(_SnapshotSensor):
-    """Expose a controller energy value in kilowatt-hours."""
-
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_suggested_display_precision = 2
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-
-class BatteryEnergySensor(_EnergySensor):
-    """Expose the integration's normalized stored battery energy."""
-
-    _attr_name = "House Battery Energy"
-    _attr_unique_id = f"{DOMAIN}_energy"
-
-    @property
-    def available(self) -> bool:
-        snapshot = self.coordinator.data
-        return super().available and snapshot is not None and snapshot.diagnostic_energy_kwh is not None
-
-    @property
-    def native_value(self) -> float | None:
-        """Return the current stored battery energy."""
-        snapshot = self.coordinator.data
-        if snapshot is None or snapshot.diagnostic_energy_kwh is None:
-            return None
-        return float(snapshot.diagnostic_energy_kwh)
-
-
-class ReserveTargetSensor(_EnergySensor):
-    """Expose the battery energy currently required by the planner."""
-
-    _attr_name = "House Battery Reserve Target"
-    _attr_unique_id = f"{DOMAIN}_reserve_target"
-
-    @property
-    def available(self) -> bool:
-        snapshot = self.coordinator.data
-        return super().available and snapshot is not None and snapshot.reserve is not None
-
-    @property
-    def native_value(self) -> float | None:
-        """Return the current reserve target."""
-        snapshot = self.coordinator.data
-        if snapshot is None or snapshot.reserve is None:
-            return None
-        return float(snapshot.reserve.start_energy_kwh)
-
-
-class ReserveBalanceSensor(_EnergySensor):
-    """Expose stored battery energy relative to the reserve target."""
-
-    _attr_name = "House Battery Reserve Balance"
-    _attr_unique_id = f"{DOMAIN}_reserve_balance"
-
-    @property
-    def available(self) -> bool:
-        snapshot = self.coordinator.data
-        return super().available and snapshot is not None and snapshot.reserve is not None and snapshot.diagnostic_energy_kwh is not None
-
-    @property
-    def native_value(self) -> float | None:
-        """Return positive surplus or negative reserve shortfall energy."""
-        snapshot = self.coordinator.data
-        if snapshot is None or snapshot.reserve is None or snapshot.diagnostic_energy_kwh is None:
-            return None
-        return float(
-            snapshot.diagnostic_energy_kwh - snapshot.reserve.start_energy_kwh
-        )
-
-
 class HeartbeatSensor(_SnapshotSensor):
-    """Expose the last completed coordinator cycle even when degraded."""
-
     _attr_name = "House Battery Control Heartbeat"
     _attr_unique_id = f"{DOMAIN}_heartbeat"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     @property
     def native_value(self):
-        snapshot = self.coordinator.data
-        return None if snapshot is None else snapshot.heartbeat_at
+        return None if self.coordinator.data is None else self.coordinator.data.heartbeat_at
 
     @property
     def extra_state_attributes(self):
-        snapshot = self.coordinator.data
-        if snapshot is None:
+        data = self.coordinator.data
+        if data is None:
             return None
         return {
-            "last_healthy_at": None if snapshot.last_healthy_at is None else snapshot.last_healthy_at.isoformat(),
-            "health": snapshot.health.value,
-            "fail_safe_obligation": snapshot.fail_safe_obligation,
-            "fail_safe_pending": snapshot.fail_safe_pending,
+            "last_healthy_at": None if data.last_healthy_at is None else data.last_healthy_at.isoformat(),
+            "last_error": data.last_error,
         }
 
 
 class HealthSensor(_SnapshotSensor):
-    """Expose complete/degraded/fail-safe controller health."""
-
     _attr_name = "House Battery Control Health"
     _attr_unique_id = f"{DOMAIN}_health"
     _attr_icon = "mdi:heart-pulse"
 
     @property
     def native_value(self):
-        snapshot = self.coordinator.data
-        return None if snapshot is None else snapshot.health.value
+        return None if self.coordinator.data is None else self.coordinator.data.health.value
+
+
+class ActionSensor(_SnapshotSensor):
+    _attr_name = "House Battery Control Action"
+    _attr_unique_id = f"{DOMAIN}_action"
+    _attr_icon = "mdi:home-battery"
+
+    @property
+    def native_value(self):
+        return None if self.coordinator.data is None else self.coordinator.data.action.value
 
     @property
     def extra_state_attributes(self):
-        snapshot = self.coordinator.data
-        if snapshot is None:
+        data = self.coordinator.data
+        if data is None:
             return None
         return {
-            "guard_state": snapshot.guard_state,
-            "guard_quality": snapshot.guard_quality,
-            "source_quality": snapshot.source_quality,
-            "issues": snapshot.issues,
-            "unexpected_error": snapshot.unexpected_error,
-            "fail_safe_proof_complete": None if snapshot.fail_safe_proof is None else snapshot.fail_safe_proof.complete,
-            "fail_safe_ha_safe": None if snapshot.fail_safe_proof is None else snapshot.fail_safe_proof.ha_safe,
-            "fail_safe_device_reconciliation_pending": None if snapshot.fail_safe_proof is None else snapshot.fail_safe_proof.device_reconciliation_pending,
-            "fail_safe_attempt_status": None if snapshot.fail_safe_attempt is None else snapshot.fail_safe_attempt.status,
-            "fail_safe_attempt_id": None if snapshot.fail_safe_attempt is None else snapshot.fail_safe_attempt.attempt_id,
-            "fail_safe_attempt_deadline": None if snapshot.fail_safe_attempt is None else snapshot.fail_safe_attempt.deadline.isoformat(),
-            "stale_fail_safe_attempt_ids": tuple(item.attempt_id for item in snapshot.stale_fail_safe_attempts),
+            "reason": data.reason,
+            "cycle_state": data.cycle_state.value,
+            "state_of_charge_percent": _float(data.state_of_charge_percent),
+            "battery_power_kw": _float(data.battery_power_kw),
+            "current_cheap_window": data.current_cheap_window,
+            "next_cheap_window": data.next_cheap_window,
+            "actuation": data.actuation_message,
+            "last_error": data.last_error,
         }
 
 
-def _command_target(command: controller.Command) -> float | None:
-    match command:
-        case controller.GridCharge(target_energy_kwh=target):
-            return float(target)
-        case controller.ForceExport(target_energy_kwh=target):
-            return float(target)
-        case controller.SelfConsumption(minimum_energy_kwh=minimum):
-            return float(minimum)
-        case controller.Hold():
-            return None
+class ReserveSensor(_SnapshotSensor):
+    _attr_name = "House Battery Control Reserve"
+    _attr_unique_id = f"{DOMAIN}_reserve"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_icon = "mdi:battery-heart"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.reserve_soc_percent is not None
+
+    @property
+    def native_value(self):
+        return _float(self.coordinator.data.reserve_soc_percent) if self.coordinator.data is not None else None
 
 
-def _optional_float(value: Decimal | None) -> float | None:
+def _float(value: object) -> float | None:
     return None if value is None else float(value)
+
+
+__all__ = ["ActionSensor", "HealthSensor", "HeartbeatSensor", "ReserveSensor", "async_setup_platform"]
