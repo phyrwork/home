@@ -128,6 +128,10 @@ def test_automation_has_startup_stale_health_guard_and_shutdown_triggers() -> No
     assert "heartbeat" in condition
     assert "healthy" in condition
     assert "180" in condition
+    # A healthy disabled controller emits a heartbeat every minute; that
+    # must not satisfy the failure branches on the periodic trigger.
+    assert "trigger.id == 'controller_health_changed'" in condition
+    assert "trigger.id == 'control_disable_changed'" in condition
     assert shutdown["trigger"][0]["event"] == "shutdown"
     assert shutdown["action"][0]["service"] == "input_boolean.turn_on"
     assert shutdown["action"][1]["service"] == "script.turn_on"

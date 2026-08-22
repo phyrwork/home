@@ -19,6 +19,7 @@ from .contracts import ControllerHealth
 from .ha_writer import HomeAssistantWriter
 from .runtime_inputs import RuntimeInputs, async_read_runtime_inputs
 from .solis_policy import PolicyActuationResult, SolisPolicyActuator
+from .solis_reader import read_solis_state
 from .strategy import CycleState, StrategyAction, select_strategy
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,6 +52,14 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         self._cycle_state = CycleState.IDLE
         self._last_healthy_at: datetime | None = None
         self._unsub_sources: CALLBACK_TYPE | None = None
+        self._started = False
+        self._stopping = False
+        self._stop_task: asyncio.Task[None] | None = None
+        # A disabled controller still establishes the safe inverter baseline
+        # once at startup.  Remembering that result is important: the normal
+        # heartbeat must not re-issue cloud writes every minute while the MVP
+        # is intentionally disabled.
+        self._safe_state_applied = False
         writer = HomeAssistantWriter.for_home_assistant(hass)
         zone = dt_util.get_time_zone(hass.config.time_zone)
         if zone is None:
@@ -70,6 +79,9 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             return datetime.now(timezone.utc)
 
     async def async_start(self) -> None:
+        if self._stopping or self._started:
+            return
+        self._started = True
         if self._unsub_sources is None:
             self._unsub_sources = async_track_state_change_event(
                 self.hass,
@@ -79,17 +91,63 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         await self.async_refresh()
 
     async def async_stop(self) -> None:
+        if self._stop_task is None:
+            self._stopping = True
+            self._stop_task = asyncio.create_task(self._async_stop_once())
+        await asyncio.shield(self._stop_task)
+
+    async def _async_stop_once(self) -> None:
         if self._unsub_sources is not None:
             self._unsub_sources()
             self._unsub_sources = None
-        await self.policy_actuator.async_apply_fail_safe()
+        # Shutdown is an explicit safety boundary.  Do not use the cached
+        # disabled result here: the independent watchdog may have observed a
+        # state change since the last evaluation.
+        result = await self.policy_actuator.async_apply_fail_safe()
+        self._safe_state_applied = result.safe
         await self.async_shutdown()
 
     async def _async_update_data(self) -> Snapshot:
         now = self._now()
+        if self._stopping:
+            return self.data or Snapshot(
+                heartbeat_at=now,
+                health=ControllerHealth.FAIL_SAFE,
+                action=StrategyAction.FAIL_SAFE,
+                reason="controller is stopping",
+                cycle_state=CycleState.IDLE,
+            )
         guard = self.hass.states.get(self.config.control_disable_guard_entity_id)
         guard_off = guard is not None and guard.state == "off"
         if not self.config.dynamic_control_enabled:
+            # Keep observing the native controls after the one-time startup
+            # safe write.  An unavailable/stale/invalid Solis observation is a
+            # real fault even when dynamic scheduling is disabled.
+            if self._safe_state_applied:
+                if guard is None or guard.state in {"unknown", "unavailable"}:
+                    return await self._fail_safe_snapshot(
+                        now,
+                        "control-disable guard is unavailable",
+                    )
+                observation = read_solis_state(self.config.solis, self.hass.states, now)
+                if observation.health is not ControllerHealth.HEALTHY:
+                    return await self._fail_safe_snapshot(
+                        now,
+                        "Solis observation is unavailable or stale",
+                        error=_issues_text(observation),
+                    )
+                telemetry = observation.telemetry
+                self._last_healthy_at = now
+                return Snapshot(
+                    heartbeat_at=now,
+                    health=ControllerHealth.HEALTHY,
+                    action=StrategyAction.STOP,
+                    reason="dynamic control is disabled",
+                    cycle_state=CycleState.IDLE,
+                    state_of_charge_percent=None if telemetry is None else telemetry.state_of_charge_percent,
+                    battery_power_kw=None if telemetry is None else telemetry.battery_power_kw,
+                    last_healthy_at=self._last_healthy_at,
+                )
             return await self._fail_safe_snapshot(now, "dynamic control is disabled")
         if not guard_off:
             return await self._fail_safe_snapshot(now, "control-disable guard is asserted or unavailable")
@@ -122,6 +180,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                     last_error=actuation.message,
                     actuation=actuation,
                 )
+            self._safe_state_applied = False
             self._cycle_state = decision.next_cycle_state
             self._last_healthy_at = now
             return self._snapshot(
@@ -152,7 +211,11 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         error: str | None = None,
     ) -> Snapshot:
         self._cycle_state = CycleState.IDLE
-        actuation = await self.policy_actuator.async_apply_fail_safe()
+        if self._safe_state_applied:
+            actuation = PolicyActuationResult(True, True, "fail-safe already applied")
+        else:
+            actuation = await self.policy_actuator.async_apply_fail_safe()
+            self._safe_state_applied = actuation.safe
         if not actuation.success and error is None:
             error = actuation.message
         return self._snapshot(
@@ -194,6 +257,8 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         )
 
     async def _async_source_changed(self, _event: Event[EventStateChangedData]) -> None:
+        if self._stopping:
+            return
         await self.async_request_refresh()
 
     def _source_entity_ids(self) -> tuple[str, ...]:
@@ -218,3 +283,9 @@ def _window_text(window: object) -> str | None:
 
 
 __all__ = ["Coordinator", "HEARTBEAT_INTERVAL", "Snapshot"]
+
+
+def _issues_text(observation: object) -> str | None:
+    issues = getattr(observation, "issues", ())
+    messages = [getattr(issue, "message", str(issue)) for issue in issues]
+    return "; ".join(messages) or None
