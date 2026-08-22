@@ -1,9 +1,9 @@
 {% set import_base = ("octopus_energy_electricity_" ~ electricity_meter_serial_number ~ "_" ~ electricity_meter_mpan_import) | lower %}
 {% set export_meter_base = ("octopus_energy_electricity_" ~ electricity_meter_serial_number ~ "_" ~ electricity_meter_mpan_export) | lower %}
 {% set export_base = export_meter_base ~ "_export" %}
-{% set import_retrieval = "sensor." ~ import_base ~ "_rates_data_last_retrieved" %}
-{% set export_retrieval = "sensor." ~ export_meter_base ~ "_rates_data_last_retrieved" %}
-{% set dispatch_retrieval = ("sensor.octopus_energy_" ~ ev_charger_device_id ~ "_intelligent_dispatches_data_last_retrieved") | lower %}
+{% set import_source = "sensor." ~ import_base ~ "_fused_day_rates" %}
+{% set export_source = "sensor." ~ export_meter_base ~ "_fused_export_day_rates" %}
+{% set dispatch_source = ("binary_sensor.octopus_energy_" ~ ev_charger_device_id ~ "_intelligent_dispatching") | lower %}
 sensor:
   - name: Octopus Energy Electricity {{ electricity_meter_serial_number }}/{{ electricity_meter_mpan_import }} Fused Day Rates
     unique_id: {{ import_base }}_fused_day_rates
@@ -59,18 +59,28 @@ sensor:
               'event_min_rate': state_attr(event_entity, 'min_rate'),
               'event_unique_price_count': event_ns.prices | length,
               'source_revision_at': as_datetime(states[event_entity].last_changed).isoformat(),
-              'retrieval_source_entity_id': '{% endraw %}{{ import_retrieval }}{% raw %}',
-              'dispatch_source_entity_id': '{% endraw %}{{ dispatch_retrieval }}{% raw %}'
+              'retrieval_source_entity_id': '{% endraw %}{{ import_source }}{% raw %}',
+              'dispatch_source_entity_id': '{% endraw %}{{ dispatch_source }}{% raw %}'
             }] %}
           {% endfor %}
         {% endfor %}
         {{ ns.items | tojson }}{% endraw %}
-      rate_source_entity_id: {{ import_retrieval }}
+      rate_source_entity_id: {{ import_source }}
       rate_source_last_retrieved: >-
-        {% raw %}{{ states('{% endraw %}{{ import_retrieval }}{% raw %}') }}{% endraw %}
-      dispatch_source_entity_id: {{ dispatch_retrieval }}
+        {% raw %}{% set retrieval = namespace(value=none) %}
+        {% for event_entity in [
+          'event.{% endraw %}{{ import_base }}{% raw %}_current_day_rates',
+          'event.{% endraw %}{{ import_base }}{% raw %}_next_day_rates'
+        ] %}
+          {% set reported = states[event_entity].last_reported %}
+          {% if reported is not none and (retrieval.value is none or reported > retrieval.value) %}
+            {% set retrieval.value = reported %}
+          {% endif %}
+        {% endfor %}
+        {{ retrieval.value.isoformat() if retrieval.value is not none else 'unknown' }}{% endraw %}
+      dispatch_source_entity_id: {{ dispatch_source }}
       dispatch_source_last_retrieved: >-
-        {% raw %}{{ states('{% endraw %}{{ dispatch_retrieval }}{% raw %}') }}{% endraw %}
+        {% raw %}{{ states['{% endraw %}{{ dispatch_source }}{% raw %}'].last_reported.isoformat() if states['{% endraw %}{{ dispatch_source }}{% raw %}'].last_reported is not none else 'unknown' }}{% endraw %}
 
   - name: Octopus Energy Electricity {{ electricity_meter_serial_number }}/{{ electricity_meter_mpan_export }} Fused Export Day Rates
     unique_id: {{ export_meter_base }}_fused_export_day_rates
@@ -90,6 +100,16 @@ sensor:
       rate_unit: GBP/kWh
       rates: >-
         {% raw %}{% set ns = namespace(items=[]) %}
+        {% set retrieval = namespace(value=none) %}
+        {% for event_entity in [
+          'event.{% endraw %}{{ export_base }}{% raw %}_current_day_rates',
+          'event.{% endraw %}{{ export_base }}{% raw %}_next_day_rates'
+        ] %}
+          {% set reported = states[event_entity].last_reported %}
+          {% if reported is not none and (retrieval.value is none or reported > retrieval.value) %}
+            {% set retrieval.value = reported %}
+          {% endif %}
+        {% endfor %}
         {% for source_day, event_entity in [
           ('current', '{% endraw %}event.{{ export_base }}_current_day_rates{% raw %}'),
           ('next', '{% endraw %}event.{{ export_base }}_next_day_rates{% raw %}')
@@ -109,13 +129,23 @@ sensor:
               'source_event': event_entity,
               'source_day': source_day,
               'tariff': state_attr(event_entity, 'tariff_code') or state_attr(event_entity, 'tariff'),
-              'retrieved_at': states('{% endraw %}{{ export_retrieval }}{% raw %}'),
+              'retrieved_at': retrieval.value.isoformat() if retrieval.value is not none else 'unknown',
               'source_revision_at': as_datetime(states[event_entity].last_changed).isoformat(),
-              'retrieval_source_entity_id': '{% endraw %}{{ export_retrieval }}{% raw %}'
+              'retrieval_source_entity_id': '{% endraw %}{{ export_source }}{% raw %}'
             }] %}
           {% endfor %}
         {% endfor %}
         {{ ns.items | tojson }}{% endraw %}
-      rate_source_entity_id: {{ export_retrieval }}
+      rate_source_entity_id: {{ export_source }}
       rate_source_last_retrieved: >-
-        {% raw %}{{ states('{% endraw %}{{ export_retrieval }}{% raw %}') }}{% endraw %}
+        {% raw %}{% set retrieval = namespace(value=none) %}
+        {% for event_entity in [
+          'event.{% endraw %}{{ export_base }}{% raw %}_current_day_rates',
+          'event.{% endraw %}{{ export_base }}{% raw %}_next_day_rates'
+        ] %}
+          {% set reported = states[event_entity].last_reported %}
+          {% if reported is not none and (retrieval.value is none or reported > retrieval.value) %}
+            {% set retrieval.value = reported %}
+          {% endif %}
+        {% endfor %}
+        {{ retrieval.value.isoformat() if retrieval.value is not none else 'unknown' }}{% endraw %}

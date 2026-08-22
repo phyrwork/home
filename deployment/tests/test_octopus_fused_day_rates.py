@@ -24,18 +24,17 @@ IMPORT_EVENT = "event.octopus_energy_electricity_testserial_111_current_day_rate
 IMPORT_NEXT_EVENT = "event.octopus_energy_electricity_testserial_111_next_day_rates"
 EXPORT_EVENT = "event.octopus_energy_electricity_testserial_222_export_current_day_rates"
 EXPORT_NEXT_EVENT = "event.octopus_energy_electricity_testserial_222_export_next_day_rates"
-IMPORT_RETRIEVAL = "sensor.octopus_energy_electricity_testserial_111_rates_data_last_retrieved"
-EXPORT_RETRIEVAL = "sensor.octopus_energy_electricity_testserial_222_rates_data_last_retrieved"
-DISPATCH_RETRIEVAL = (
-    "sensor.octopus_energy_exact-device_intelligent_dispatches_data_last_retrieved"
-)
+IMPORT_SOURCE = "sensor.octopus_energy_electricity_testserial_111_fused_day_rates"
+EXPORT_SOURCE = "sensor.octopus_energy_electricity_testserial_222_fused_export_day_rates"
+DISPATCH_SOURCE = "binary_sensor.octopus_energy_exact-device_intelligent_dispatching"
 NOW = datetime(2026, 7, 4, 12, tzinfo=timezone.utc)
 
 
 class _EntityState:
-    def __init__(self, value="2026-07-04T12:00:00+00:00"):
+    def __init__(self, value="2026-07-04T12:00:00+00:00", *, last_reported=NOW):
         self.state = value
         self.last_changed = NOW
+        self.last_reported = last_reported
 
 
 class _States:
@@ -89,11 +88,36 @@ def _render_rate_attribute(sensor, attributes, values):
 def test_outer_render_binds_only_exact_configured_sources() -> None:
     rendered, config = _outer_render()
     import_sensor, export_sensor = config["sensor"]
-    assert import_sensor["attributes"]["rate_source_entity_id"] == IMPORT_RETRIEVAL
-    assert import_sensor["attributes"]["dispatch_source_entity_id"] == DISPATCH_RETRIEVAL
-    assert export_sensor["attributes"]["rate_source_entity_id"] == EXPORT_RETRIEVAL
+    assert import_sensor["attributes"]["rate_source_entity_id"] == IMPORT_SOURCE
+    assert import_sensor["attributes"]["dispatch_source_entity_id"] == DISPATCH_SOURCE
+    assert export_sensor["attributes"]["rate_source_entity_id"] == EXPORT_SOURCE
     assert "selectattr" not in rendered
-    assert "intelligent_dispatches_data_last_retrieved$" not in rendered
+    for obsolete in (
+        "_rates_data_last_retrieved",
+        "_intelligent_dispatches_data_last_retrieved",
+    ):
+        assert obsolete not in rendered
+
+
+def test_outer_render_uses_latest_event_and_dispatch_last_reported() -> None:
+    _rendered, config = _outer_render()
+    later = NOW.replace(hour=13)
+    values = {
+        IMPORT_EVENT: _EntityState(last_reported=NOW),
+        IMPORT_NEXT_EVENT: _EntityState(last_reported=later),
+        DISPATCH_SOURCE: _EntityState(last_reported=later),
+    }
+    environment = Environment()
+    states = _States(values)
+    import_sensor = config["sensor"][0]
+    rate_retrieved = environment.from_string(
+        import_sensor["attributes"]["rate_source_last_retrieved"]
+    ).render(states=states).strip()
+    dispatch_retrieved = environment.from_string(
+        import_sensor["attributes"]["dispatch_source_last_retrieved"]
+    ).render(states=states).strip()
+    assert rate_retrieved == later.isoformat()
+    assert dispatch_retrieved == later.isoformat()
 
 
 def test_outer_render_serializes_explicit_pep495_fold_fields() -> None:
@@ -124,18 +148,23 @@ def test_template_is_rendered_by_ansible_and_protected_from_static_sync() -> Non
     assert not (DEPLOYMENT_ROOT / "files/templates/octopus_fused_day_rates.yaml").exists()
 
 
-def test_deployment_preflight_requires_all_rate_sources_and_retrieval_diagnostics() -> None:
+def test_deployment_preflight_requires_exact_rate_event_and_control_entities() -> None:
     config = (DEPLOYMENT_ROOT / "config.yaml").read_text()
     required = (
         "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates",
         "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_next_day_rates",
         "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_export_current_day_rates",
         "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_export_next_day_rates",
-        "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_rates_data_last_retrieved",
-        "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_rates_data_last_retrieved",
-        "sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatches_data_last_retrieved",
+        "number.octopus_energy_{{ ev_charger_device_id }}_intelligent_charge_target",
+        "binary_sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatching",
+        "switch.octopus_energy_{{ ev_charger_device_id }}_intelligent_smart_charge",
     )
     assert all(entity_id in config for entity_id in required)
+    for obsolete in (
+        "_rates_data_last_retrieved",
+        "_intelligent_dispatches_data_last_retrieved",
+    ):
+        assert obsolete not in config
     assert 'if entity.get("disabled_by") is None' in config
 
 
@@ -155,14 +184,12 @@ def test_import_render_preserves_missing_minimum_and_parser_rejects_it() -> None
     values = {
         IMPORT_EVENT: _EntityState(),
         IMPORT_NEXT_EVENT: _EntityState(),
-        IMPORT_RETRIEVAL: _EntityState(),
-        DISPATCH_RETRIEVAL: _EntityState(),
     }
     records = _render_rate_attribute(config["sensor"][0], attributes, values)
     assert records[0]["event_min_rate"] is None
     assert records[0]["is_intelligent_adjusted"] is False
-    assert records[0]["retrieval_source_entity_id"] == IMPORT_RETRIEVAL
-    assert records[0]["dispatch_source_entity_id"] == DISPATCH_RETRIEVAL
+    assert records[0]["retrieval_source_entity_id"] == IMPORT_SOURCE
+    assert records[0]["dispatch_source_entity_id"] == DISPATCH_SOURCE
     with pytest.raises(ValueError):
         parse_fused_import_rates(records)
 
@@ -206,10 +233,11 @@ def test_export_render_includes_revision_and_exact_retrieval_provenance() -> Non
     }
     values = {
         EXPORT_EVENT: _EntityState(),
-        EXPORT_NEXT_EVENT: _EntityState(),
-        EXPORT_RETRIEVAL: _EntityState(NOW.isoformat()),
+        EXPORT_NEXT_EVENT: _EntityState(last_reported=NOW.replace(hour=13)),
     }
     records = _render_rate_attribute(config["sensor"][1], attributes, values)
     assert records[0]["source_revision_at"] == NOW.isoformat()
-    assert records[0]["retrieval_source_entity_id"] == EXPORT_RETRIEVAL
-    assert parse_fused_export_rates(records)[0].retrieved_at == NOW
+    assert records[0]["source"] == EXPORT_EVENT
+    assert records[0]["source_event"] == EXPORT_EVENT
+    assert records[0]["retrieval_source_entity_id"] == EXPORT_SOURCE
+    assert parse_fused_export_rates(records)[0].retrieved_at == NOW.replace(hour=13)
