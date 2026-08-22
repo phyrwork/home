@@ -145,6 +145,24 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             self._unsub_sources = async_track_state_change_event(self.hass, self._source_entity_ids(), self._async_source_changed)
         await self.async_refresh()
 
+    async def async_get_policy_actuator(self) -> SolisPolicyActuator | None:
+        """Return the one shared T0007 policy actuator for commissioning."""
+        if self._policy is None and self.config.solis is not None:
+            self._writer = self._writer or HomeAssistantWriter.for_home_assistant(self.hass)
+            self._policy = SolisPolicyActuator(
+                self.config.solis,
+                self._writer,
+                control_disable_guard_entity_id=self.config.control_disable_guard_entity_id,
+                inverter_timezone=dt_util.get_time_zone(self.hass.config.time_zone),
+                persistent_authorization=self.config.candidate_commissioning.persistent_candidate_authorization,
+                observation_refresh=lambda now: read_solis_state(self.config.solis, self.hass.states, now),
+            )
+        return self._policy
+
+    @property
+    def policy_actuator(self) -> SolisPolicyActuator | None:
+        return self._policy
+
     async def async_stop(self) -> None:
         self._stopping = True
         if self._unsub_sources is not None:

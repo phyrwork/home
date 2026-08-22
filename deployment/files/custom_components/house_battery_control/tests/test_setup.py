@@ -1,4 +1,5 @@
 from decimal import Decimal
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.const import (
@@ -119,6 +120,91 @@ async def test_stops_coordinator_on_home_assistant_stop(
     await hass.async_block_till_done()
 
     instance.async_stop.assert_awaited_once_with()
+
+
+async def test_delayed_workflow_owner_finalizes_stop_once(
+    hass: HomeAssistant,
+) -> None:
+    instance = coordinator()
+    with patch(
+        "custom_components.house_battery_control.Coordinator",
+        return_value=instance,
+    ):
+        assert await async_setup(hass, {DOMAIN: config()})
+
+    workflow = hass.data[f"{DOMAIN}.commissioning"]
+    release = asyncio.Event()
+
+    async def owner() -> None:
+        await release.wait()
+
+    owner_task = asyncio.create_task(owner())
+
+    async def delayed_stop() -> None:
+        workflow._cleanup_task = owner_task
+
+    workflow.async_stop = delayed_stop
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    instance.async_stop.assert_not_awaited()
+    assert hass.data[f"{DOMAIN}.commissioning"] is workflow
+
+    release.set()
+    await hass.async_block_till_done()
+    await asyncio.sleep(0)
+    await hass.async_block_till_done()
+    instance.async_stop.assert_awaited_once_with()
+    assert DOMAIN not in hass.data
+    assert f"{DOMAIN}.commissioning" not in hass.data
+
+
+async def test_finalizer_failure_is_retryable(
+    hass: HomeAssistant,
+) -> None:
+    instance = coordinator()
+    with patch(
+        "custom_components.house_battery_control.Coordinator",
+        return_value=instance,
+    ):
+        assert await async_setup(hass, {DOMAIN: config()})
+
+    instance.async_stop.side_effect = RuntimeError("stop failed")
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    assert hass.data[f"{DOMAIN}.stop_finalizer"]["result"]["ok"] is False
+    assert hass.data[f"{DOMAIN}.commissioning"] is not None
+
+    instance.async_stop.side_effect = None
+    retry = hass.data[f"{DOMAIN}.stop_finalizer"]["await_result"]
+    assert await retry()
+    assert instance.async_stop.await_count == 2
+    assert DOMAIN not in hass.data
+
+
+async def test_reload_awaits_same_delayed_finalizer_without_double_stop(
+    hass: HomeAssistant,
+) -> None:
+    instance = coordinator()
+    with patch(
+        "custom_components.house_battery_control.Coordinator",
+        return_value=instance,
+    ):
+        assert await async_setup(hass, {DOMAIN: config()})
+
+    release = asyncio.Event()
+
+    async def delayed_coordinator_stop() -> None:
+        await release.wait()
+
+    instance.async_stop.side_effect = delayed_coordinator_stop
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await asyncio.sleep(0)
+    reload_task = asyncio.create_task(async_setup(hass, {DOMAIN: config()}))
+    await asyncio.sleep(0)
+    assert not reload_task.done()
+    release.set()
+    assert await reload_task
+    assert instance.async_stop.await_count == 1
 
 
 async def test_setup_without_typed_configuration_is_no_op(

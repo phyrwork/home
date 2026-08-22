@@ -325,6 +325,7 @@ class EphemeralAuthorizationStore:
     def __init__(self) -> None:
         self._issued: dict[str, EphemeralCandidateAuthorization] = {}
         self._consumed: set[str] = set()
+        self._prepared: set[str] = set()
 
     def issue(self, *, now: datetime, mapping: str, policy: str, ttl: timedelta = MAXIMUM_EPHEMERAL_AUTHORIZATION_AGE) -> EphemeralCandidateAuthorization:
         _aware(now, "now")
@@ -347,11 +348,34 @@ class EphemeralAuthorizationStore:
         """Consume any registered nonce before validating its current binding."""
 
         nonce = getattr(token, "nonce", None)
-        if not isinstance(nonce, str) or nonce not in self._issued or nonce in self._consumed:
+        if not isinstance(nonce, str) or nonce not in self._issued:
+            return False
+        if nonce in self._prepared:
+            self._prepared.remove(nonce)
+            return token == self._issued[nonce]
+        if nonce in self._consumed:
             return False
         exact = token == self._issued[nonce]
         self._consumed.add(nonce)
         return exact
+
+    def prepare_before_await(self, token: object) -> bool:
+        """Atomically consume a nonce before entering an awaitable actuator.
+
+        T0011 uses this boundary to make cancellation and concurrent calls
+        single-use.  T0007's first synchronous step settles the prepared
+        marker, so an external caller cannot replay a consumed token.
+        """
+
+        nonce = getattr(token, "nonce", None)
+        if not isinstance(nonce, str) or nonce not in self._issued or nonce in self._consumed:
+            return False
+        if token != self._issued[nonce]:
+            self._consumed.add(nonce)
+            return False
+        self._consumed.add(nonce)
+        self._prepared.add(nonce)
+        return True
 
 
 @dataclass(frozen=True, slots=True)

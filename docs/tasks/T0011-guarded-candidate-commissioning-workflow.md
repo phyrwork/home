@@ -1,6 +1,6 @@
 # T0011 — Build the guarded candidate commissioning workflow
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 

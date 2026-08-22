@@ -3,10 +3,17 @@
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import TypeAlias, cast
 
 from . import battery, solis_config
+from .reserve_planner import CommissionedPowerEnvelope
+from .solis_policy import (
+    CapabilityResolutionRecord,
+    ManualGridImportVerification,
+    PersistentCandidateAuthorization,
+)
 
 ConfigValue: TypeAlias = object
 
@@ -79,6 +86,24 @@ class PolicyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateCommissioningConfig:
+    """Typed, default-disabled T0011 authority container.
+
+    Runtime commissioning sessions are intentionally not represented here;
+    this is only the future IaC shape emitted for human review.
+    """
+
+    services_enabled: bool = False
+    persistent_candidate_authorization: PersistentCandidateAuthorization | None = None
+    candidate_mapping_fingerprint: str | None = None
+    candidate_policy_fingerprint: str | None = None
+    candidate_validated_at: datetime | None = None
+    manual_grid_verification: ManualGridImportVerification | None = None
+    capability_resolutions: tuple[CapabilityResolutionRecord, ...] = ()
+    commissioned_power_envelope: CommissionedPowerEnvelope | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     """Defines all external configuration for House Battery Control."""
 
@@ -100,6 +125,9 @@ class Config:
     control_disable_guard_entity_id: str = "input_boolean.house_battery_control_disable"
     """Fail-closed helper; only an exact ``off`` opens observation/commissioning."""
 
+    candidate_commissioning: CandidateCommissioningConfig = CandidateCommissioningConfig()
+    """Human-reviewed authority; disabled and empty until explicitly activated."""
+
 
 def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
     """Map validated YAML-shaped data to typed internal configuration."""
@@ -107,7 +135,7 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
         source,
         {"battery", "tariff", "solar", "policy"},
         "config",
-        optional={"solis", "control_disable_guard_entity_id"},
+        optional={"solis", "control_disable_guard_entity_id", "candidate_commissioning"},
     )
 
     battery_source = _mapping(source["battery"], "battery")
@@ -201,6 +229,8 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
     if not guard.startswith(("input_boolean.", "switch.")):
         raise ValueError("control_disable_guard_entity_id must be a switch-like entity")
 
+    candidate = _candidate_commissioning(source.get("candidate_commissioning"))
+
     return Config(
         battery=battery_config,
         tariff=tariff_config,
@@ -208,7 +238,83 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
         policy=policy_config,
         solis=live_solis_config,
         control_disable_guard_entity_id=guard,
+        candidate_commissioning=candidate,
     )
+
+
+def _candidate_commissioning(value: ConfigValue) -> CandidateCommissioningConfig:
+    """Parse the exact T0021 candidate authority shape when supplied."""
+
+    if value is None:
+        return CandidateCommissioningConfig()
+    source = _mapping(value, "candidate_commissioning")
+    expected = {
+        "services_enabled", "persistent_candidate_authorization", "candidate_mapping_fingerprint",
+        "candidate_policy_fingerprint", "candidate_validated_at", "manual_grid_verification",
+        "capability_resolutions", "commissioned_power_envelope",
+    }
+    _require_keys(source, expected, "candidate_commissioning")
+    enabled = source["services_enabled"]
+    if not isinstance(enabled, bool):
+        raise ValueError("candidate_commissioning.services_enabled must be bool")
+
+    persistent = source["persistent_candidate_authorization"]
+    persistent_record = None
+    if persistent is not None:
+        p = _mapping(persistent, "persistent_candidate_authorization")
+        _require_keys(p, {"issued_at", "mapping_fingerprint", "policy_fingerprint", "ha_readback_validated", "device_reconciliation_validated", "schema_version"}, "persistent_candidate_authorization")
+        persistent_record = PersistentCandidateAuthorization(
+            _parse_datetime(p["issued_at"], "issued_at"),
+            _fingerprint_text(p["mapping_fingerprint"], "mapping_fingerprint"),
+            _fingerprint_text(p["policy_fingerprint"], "policy_fingerprint"),
+            _bool(p["ha_readback_validated"], "ha_readback_validated"),
+            _bool(p["device_reconciliation_validated"], "device_reconciliation_validated"),
+            _int(p["schema_version"], "schema_version"),
+        )
+
+    mapping = _optional_fingerprint(source["candidate_mapping_fingerprint"], "candidate_mapping_fingerprint")
+    policy = _optional_fingerprint(source["candidate_policy_fingerprint"], "candidate_policy_fingerprint")
+    validated_at = None if source["candidate_validated_at"] is None else _parse_datetime(source["candidate_validated_at"], "candidate_validated_at")
+
+    manual = source["manual_grid_verification"]
+    manual_record = None
+    if manual is not None:
+        m = _mapping(manual, "manual_grid_verification")
+        _require_keys(m, {"maximum_grid_import_power_kw", "verified_at", "mapping_fingerprint", "policy_fingerprint", "setting_contains_expected_value"}, "manual_grid_verification")
+        manual_record = ManualGridImportVerification(
+            _decimal(m["maximum_grid_import_power_kw"], "maximum_grid_import_power_kw"),
+            _parse_datetime(m["verified_at"], "verified_at"),
+            _fingerprint_text(m["mapping_fingerprint"], "mapping_fingerprint"),
+            _fingerprint_text(m["policy_fingerprint"], "policy_fingerprint"),
+            _bool(m["setting_contains_expected_value"], "setting_contains_expected_value"),
+        )
+
+    resolutions_value = source["capability_resolutions"]
+    if not isinstance(resolutions_value, list):
+        raise ValueError("capability_resolutions must be a list")
+    resolutions: list[CapabilityResolutionRecord] = []
+    for index, item in enumerate(resolutions_value):
+        c = _mapping(item, f"capability_resolutions[{index}]")
+        _require_keys(c, {"entity_id", "observed_unit", "verified_target", "verified_at", "mapping_fingerprint", "policy_fingerprint", "evidence_classification", "documented_unlimited_target"}, f"capability_resolutions[{index}]")
+        from .contracts import DocumentedUnlimitedValue
+        target = DocumentedUnlimitedValue() if c["verified_target"] == "documented_unlimited" else _decimal(c["verified_target"], "verified_target")
+        resolutions.append(CapabilityResolutionRecord(
+            _string(c["entity_id"], "entity_id"), _string(c["observed_unit"], "observed_unit"), target,
+            _parse_datetime(c["verified_at"], "verified_at"), _fingerprint_text(c["mapping_fingerprint"], "mapping_fingerprint"),
+            _fingerprint_text(c["policy_fingerprint"], "policy_fingerprint"), _string(c["evidence_classification"], "evidence_classification"),
+            None if c["documented_unlimited_target"] is None else _decimal(c["documented_unlimited_target"], "documented_unlimited_target"),
+        ))
+
+    envelope = source["commissioned_power_envelope"]
+    envelope_record = None
+    if envelope is not None:
+        e = _mapping(envelope, "commissioned_power_envelope")
+        _require_keys(e, {"maximum_charge_power_kw", "maximum_discharge_power_kw", "maximum_grid_import_power_kw", "schema_version", "inverter_identity", "mapping_fingerprint", "candidate_policy_fingerprint", "manual_grid_fingerprint", "capability_fingerprint", "evidence_source", "validated_at"}, "commissioned_power_envelope")
+        envelope_record = CommissionedPowerEnvelope(
+            _decimal(e["maximum_charge_power_kw"], "maximum_charge_power_kw"), _decimal(e["maximum_discharge_power_kw"], "maximum_discharge_power_kw"), _decimal(e["maximum_grid_import_power_kw"], "maximum_grid_import_power_kw"),
+            _string(e["schema_version"], "schema_version"), _string(e["inverter_identity"], "inverter_identity"), _fingerprint_text(e["mapping_fingerprint"], "mapping_fingerprint"), _fingerprint_text(e["candidate_policy_fingerprint"], "candidate_policy_fingerprint"), _fingerprint_text(e["manual_grid_fingerprint"], "manual_grid_fingerprint"), _fingerprint_text(e["capability_fingerprint"], "capability_fingerprint"), _string(e["evidence_source"], "evidence_source"), _parse_datetime(e["validated_at"], "validated_at"),
+        )
+    return CandidateCommissioningConfig(enabled, persistent_record, mapping, policy, validated_at, manual_record, tuple(resolutions), envelope_record)
 
 
 def _require_keys(
@@ -235,13 +341,57 @@ def _mapping(value: ConfigValue, name: str) -> Mapping[str, ConfigValue]:
     return cast(Mapping[str, ConfigValue], value)
 
 
+def _parse_datetime(value: ConfigValue, name: str) -> datetime:
+    if isinstance(value, datetime):
+        result = value
+    elif isinstance(value, str):
+        try:
+            result = datetime.fromisoformat(value)
+        except ValueError:
+            raise ValueError(f"{name} must be an ISO-8601 datetime") from None
+    else:
+        raise ValueError(f"{name} must be an ISO-8601 datetime")
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware")
+    return result
+
+
+def _bool(value: ConfigValue, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be bool")
+    return value
+
+
+def _int(value: ConfigValue, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    return value
+
+
+def _fingerprint_text(value: ConfigValue, name: str) -> str:
+    if not isinstance(value, str) or len(value) != 64:
+        raise ValueError(f"{name} must be a SHA-256 fingerprint")
+    try:
+        int(value, 16)
+    except ValueError:
+        raise ValueError(f"{name} must be a SHA-256 fingerprint") from None
+    return value
+
+
+def _optional_fingerprint(value: ConfigValue, name: str) -> str | None:
+    return None if value is None else _fingerprint_text(value, name)
+
+
 def _decimal(value: ConfigValue, name: str) -> Decimal:
     if isinstance(value, bool):
         raise ValueError(f"{name} must be a decimal number")
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
     except (InvalidOperation, ValueError):
         raise ValueError(f"{name} must be a decimal number") from None
+    if not result.is_finite():
+        raise ValueError(f"{name} must be finite")
+    return result
 
 
 def _positive_decimal(value: ConfigValue, name: str) -> Decimal:

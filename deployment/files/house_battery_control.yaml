@@ -18,6 +18,18 @@ policy:
 
 control_disable_guard_entity_id: input_boolean.house_battery_control_disable
 
+# T0011 commissioning is deliberately disabled.  The workflow only emits a
+# copy of this shape for human review; it never persists an enabled authority.
+candidate_commissioning:
+  services_enabled: false
+  persistent_candidate_authorization: null
+  candidate_mapping_fingerprint: null
+  candidate_policy_fingerprint: null
+  candidate_validated_at: null
+  manual_grid_verification: null
+  capability_resolutions: []
+  commissioned_power_envelope: null
+
 # The live Solis map is authoritative for battery telemetry and the later
 # guarded controller cutover.  The shared power-limit helper above remains an
 # observation-only diagnostic input until T0013 replaces that capability input.
