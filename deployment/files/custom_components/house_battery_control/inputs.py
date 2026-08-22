@@ -13,6 +13,7 @@ from . import load, planner
 from .config import Config
 from .dependencies import forecast_solar, octopus_energy, solis_cloud
 from .dependencies.octopus_energy import Rate
+from .solis_state import SolisStateReadResult
 
 
 async def async_read_input(
@@ -20,6 +21,7 @@ async def async_read_input(
     config: Config,
     *,
     now: datetime,
+    solis_result: SolisStateReadResult | None = None,
 ) -> planner.Input:
     """Read and map all Home Assistant sources required by the planner."""
     if now.tzinfo is None or now.utcoffset() is None:
@@ -27,14 +29,17 @@ async def async_read_input(
 
     power_limit_kw = read_decimal(hass, config.battery.power_limit_entity_id)
     battery_spec = config.battery.to_spec(power_limit_kw)
+    if solis_result is not None:
+        if solis_result.telemetry is None or not solis_result.telemetry.state_of_charge_percent.is_finite():
+            raise ValueError("real Solis SOC is unavailable")
+        soc = solis_result.telemetry.state_of_charge_percent
+    else:
+        # Kept only for the pre-Solis compatibility boundary.  The live
+        # coordinator always supplies a Solis result and never reads the
+        # retired stub SOC helper.
+        soc = read_decimal(hass, config.battery.state_of_charge_entity_id)
     battery_state = solis_cloud.to_battery_state(
-        {
-            "state_of_charge_percent": read_decimal(
-                hass,
-                config.battery.state_of_charge_entity_id,
-            )
-        },
-        battery_spec,
+        {"state_of_charge_percent": soc}, battery_spec
     )
 
     import_price_state = _state(hass, config.tariff.import_price_entity_id)

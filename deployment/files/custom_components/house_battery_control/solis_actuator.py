@@ -450,9 +450,13 @@ class SolisSlotActuator:
         return result
 
     async def _disable_all_locked(
-        self, transaction: WriteTransaction, results: list[WriteResult]
+        self, transaction: WriteTransaction, results: list[WriteResult],
+        deadline: datetime | None = None,
     ) -> bool:
         for direction, _physical_slot, _kind in self._directions():
+            if deadline is not None and datetime.now(timezone.utc) >= deadline:
+                results.append(_result_failure(direction.enable_entity_id, "fail-safe deadline exhausted"))
+                return False
             observed = self._verified_precondition(direction.enable_entity_id)
             if observed is None:
                 results.append(_result_failure(direction.enable_entity_id, "unable to capture switch precondition"))
@@ -464,13 +468,13 @@ class SolisSlotActuator:
                 results.append(_result_failure(direction.enable_entity_id, "enable state is invalid"))
         return self._prove_all_off()
 
-    async def _disable_all_once(self, results: list[WriteResult] | None = None) -> DisableAllResult:
+    async def _disable_all_once(self, results: list[WriteResult] | None = None, deadline: datetime | None = None) -> DisableAllResult:
         sink = results if results is not None else []
         attempt_start = len(sink)
         proven = False
         try:
             async with self.writer.transaction() as transaction:
-                proven = await self._disable_all_locked(transaction, sink)
+                proven = await self._disable_all_locked(transaction, sink, deadline)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -524,13 +524,13 @@ class SolisPolicyActuator:
         except Exception:
             return False
 
-    async def _apply_fail_safe_internal(self) -> tuple[tuple[WriteResult, ...], bool]:
+    async def _apply_fail_safe_internal(self, deadline: datetime | None = None) -> tuple[tuple[WriteResult, ...], bool]:
         results: list[WriteResult] = []
         try:
             # The policy entry point already owns the shared orchestration
             # lock.  Use T0006's bounded internal primitive so a shielded
             # cleanup task cannot deadlock behind its cancelling parent.
-            disable: DisableAllResult = await self.slot_actuator._disable_all_once()
+            disable: DisableAllResult = await self.slot_actuator._disable_all_once(deadline=deadline)
             results.extend(disable.results)
         except asyncio.CancelledError:
             raise
@@ -538,6 +538,9 @@ class SolisPolicyActuator:
             results.append(WriteResult("solis.slots", WriteOutcome.REJECTED, str(exc)))
         p = self.config.persistent
         protection = self.config.protection
+        if deadline is not None and self._clock_now() >= deadline:
+            results.append(WriteResult("solis.fail_safe", WriteOutcome.REJECTED, "fail-safe deadline exhausted"))
+            return tuple(results), False
         # Continue independently after every expected failure.  The safe mode,
         # peak shaving, and reserve writes are the only persistent mutations.
         async with self.writer.transaction() as transaction:
@@ -559,31 +562,31 @@ class SolisPolicyActuator:
         async with self.orchestration_lock:
             return await self.slot_actuator.async_apply_intent(*args, **kwargs)  # type: ignore[arg-type]
 
-    async def async_apply_fail_safe(self) -> PolicyActuationResult:
+    async def async_apply_fail_safe(self, *, deadline: datetime | None = None) -> PolicyActuationResult:
         acquired = False
         try:
             await self.orchestration_lock.acquire()
             acquired = True
             try:
-                results, safe = await self._apply_fail_safe_internal()
+                results, safe = await self._apply_fail_safe_internal(deadline)
                 status = PolicyActuationStatus.FAIL_SAFE_APPLIED_HA_PENDING_DEVICE_RECONCILIATION if safe else PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE
                 return PolicyActuationResult(status, fallback_results=results)
             except asyncio.CancelledError as original:
-                task = asyncio.create_task(self._apply_fail_safe_internal())
+                task = asyncio.create_task(self._apply_fail_safe_internal(deadline))
                 await self._await_cleanup(task, original_exception=original, candidate_results=())
                 raise original
         except asyncio.CancelledError as original:
             if not acquired:
-                task = asyncio.create_task(self._apply_fail_safe_with_lock())
+                task = asyncio.create_task(self._apply_fail_safe_with_lock(deadline))
                 await self._await_cleanup(task, original_exception=original, candidate_results=())
             raise original
         finally:
             if acquired:
                 self.orchestration_lock.release()
 
-    async def _apply_fail_safe_with_lock(self) -> tuple[tuple[WriteResult, ...], bool]:
+    async def _apply_fail_safe_with_lock(self, deadline: datetime | None = None) -> tuple[tuple[WriteResult, ...], bool]:
         async with self.orchestration_lock:
-            return await self._apply_fail_safe_internal()
+            return await self._apply_fail_safe_internal(deadline)
 
     def _authorization_valid(self, authorization: object, now: datetime) -> bool:
         mapping = self.mapping_fingerprint

@@ -32,6 +32,8 @@ async def async_setup_platform(
     async_add_entities(
         (
             ControlSensor(coordinator),
+            HeartbeatSensor(coordinator),
+            HealthSensor(coordinator),
             BatteryEnergySensor(coordinator),
             ReserveTargetSensor(coordinator),
             ReserveBalanceSensor(coordinator),
@@ -44,7 +46,7 @@ class _SnapshotSensor(CoordinatorEntity[Coordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
-        """Return whether a successful decision is available."""
+        """Observation snapshots remain available while degraded or fail-safe."""
         return super().available and self.coordinator.data is not None
 
 
@@ -60,7 +62,8 @@ class ControlSensor(_SnapshotSensor):
         """Return the applied operating mode."""
         if self.coordinator.data is None:
             return None
-        return self.coordinator.data.control.operating_mode.value
+        control = self.coordinator.data.control
+        return None if control is None else f"observation_only:{control.operating_mode.value}"
 
     @property
     def extra_state_attributes(self) -> dict[str, object] | None:
@@ -72,9 +75,28 @@ class ControlSensor(_SnapshotSensor):
         spec = snapshot.battery_spec
         state = snapshot.battery_state
         source = snapshot.input_interval
-        reserve = snapshot.decision.reserve
+        reserve = None if snapshot.decision is None else snapshot.decision.reserve
         control = snapshot.control
+        if spec is None or state is None or source is None or reserve is None or control is None:
+            return {
+                "observation_only": True,
+                "health": snapshot.health.value,
+                "fail_safe_obligation": snapshot.fail_safe_obligation,
+                "fail_safe_pending": snapshot.fail_safe_pending,
+                "guard_state": snapshot.guard_state,
+                "guard_quality": snapshot.guard_quality,
+                "source_quality": snapshot.source_quality,
+                "issues": snapshot.issues,
+            }
         return {
+            "observation_only": True,
+            "health": snapshot.health.value,
+            "fail_safe_obligation": snapshot.fail_safe_obligation,
+            "fail_safe_pending": snapshot.fail_safe_pending,
+            "guard_state": snapshot.guard_state,
+            "guard_quality": snapshot.guard_quality,
+            "source_quality": snapshot.source_quality,
+            "issues": snapshot.issues,
             "battery_energy_kwh": float(state.energy_kwh),
             "battery_state_of_charge_percent": float(
                 state.energy_kwh * 100 / spec.capacity_kwh
@@ -127,9 +149,12 @@ class BatteryEnergySensor(_EnergySensor):
     def native_value(self) -> float | None:
         """Return the current stored battery energy."""
         snapshot = self.coordinator.data
-        if snapshot is None:
+        if snapshot is None or (snapshot.diagnostic_energy_kwh is None and snapshot.battery_state is None):
             return None
-        return float(snapshot.battery_state.energy_kwh)
+        energy = snapshot.diagnostic_energy_kwh
+        if energy is None:
+            energy = snapshot.battery_state.energy_kwh
+        return float(energy)
 
 
 class ReserveTargetSensor(_EnergySensor):
@@ -142,9 +167,12 @@ class ReserveTargetSensor(_EnergySensor):
     def native_value(self) -> float | None:
         """Return the current reserve target."""
         snapshot = self.coordinator.data
-        if snapshot is None:
+        if snapshot is None or (snapshot.reserve is None and snapshot.decision is None):
             return None
-        return float(snapshot.decision.reserve.start_energy_kwh)
+        reserve = snapshot.reserve
+        if reserve is None:
+            reserve = snapshot.decision.reserve
+        return float(reserve.start_energy_kwh)
 
 
 class ReserveBalanceSensor(_EnergySensor):
@@ -157,12 +185,66 @@ class ReserveBalanceSensor(_EnergySensor):
     def native_value(self) -> float | None:
         """Return positive surplus or negative reserve shortfall energy."""
         snapshot = self.coordinator.data
+        if snapshot is None or (snapshot.reserve is None and snapshot.decision is None) or (snapshot.diagnostic_energy_kwh is None and snapshot.battery_state is None):
+            return None
+        reserve = snapshot.reserve or snapshot.decision.reserve
+        energy = snapshot.diagnostic_energy_kwh
+        if energy is None:
+            energy = snapshot.battery_state.energy_kwh
+        return float(
+            energy - reserve.start_energy_kwh
+        )
+
+
+class HeartbeatSensor(_SnapshotSensor):
+    """Expose the last completed coordinator cycle even when degraded."""
+
+    _attr_name = "House Battery Control Heartbeat"
+    _attr_unique_id = f"{DOMAIN}_heartbeat"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    @property
+    def native_value(self):
+        snapshot = self.coordinator.data
+        return None if snapshot is None else snapshot.heartbeat_at
+
+    @property
+    def extra_state_attributes(self):
+        snapshot = self.coordinator.data
         if snapshot is None:
             return None
-        return float(
-            snapshot.battery_state.energy_kwh
-            - snapshot.decision.reserve.start_energy_kwh
-        )
+        return {
+            "last_healthy_at": None if snapshot.last_healthy_at is None else snapshot.last_healthy_at.isoformat(),
+            "health": snapshot.health.value,
+            "fail_safe_obligation": snapshot.fail_safe_obligation,
+            "fail_safe_pending": snapshot.fail_safe_pending,
+        }
+
+
+class HealthSensor(_SnapshotSensor):
+    """Expose complete/degraded/fail-safe controller health."""
+
+    _attr_name = "House Battery Control Health"
+    _attr_unique_id = f"{DOMAIN}_health"
+    _attr_icon = "mdi:heart-pulse"
+
+    @property
+    def native_value(self):
+        snapshot = self.coordinator.data
+        return None if snapshot is None else snapshot.health.value
+
+    @property
+    def extra_state_attributes(self):
+        snapshot = self.coordinator.data
+        if snapshot is None:
+            return None
+        return {
+            "guard_state": snapshot.guard_state,
+            "guard_quality": snapshot.guard_quality,
+            "source_quality": snapshot.source_quality,
+            "issues": snapshot.issues,
+            "unexpected_error": snapshot.unexpected_error,
+        }
 
 
 def _command_target(command: controller.Command) -> float | None:

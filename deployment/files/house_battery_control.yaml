@@ -21,6 +21,8 @@ inverter:
   operating_mode_entity_id: input_select.house_battery_operating_mode
   state_of_charge_target_entity_id: input_number.house_battery_state_of_charge_target
 
+control_disable_guard_entity_id: input_boolean.house_battery_control_disable
+
 # The live Solis map is additive.  The legacy battery and inverter entries
 # above remain the active runtime boundary until the later controller cutover.
 solis:

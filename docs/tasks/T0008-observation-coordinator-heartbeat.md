@@ -1,6 +1,6 @@
 # T0008 — Cut over to observation coordinator and heartbeat
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 

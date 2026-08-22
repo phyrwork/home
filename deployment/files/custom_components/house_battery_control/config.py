@@ -114,6 +114,9 @@ class Config:
     solis: solis_config.SolisConfig | None = None
     """Optional live Solis entity mapping; omitted until the later cutover."""
 
+    control_disable_guard_entity_id: str = "input_boolean.house_battery_control_disable"
+    """Fail-closed helper; only an exact ``off`` opens observation/commissioning."""
+
 
 def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
     """Map validated YAML-shaped data to typed internal configuration."""
@@ -121,7 +124,7 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
         source,
         {"battery", "tariff", "solar", "policy", "inverter"},
         "config",
-        optional={"solis"},
+        optional={"solis", "control_disable_guard_entity_id"},
     )
 
     battery_source = _mapping(source["battery"], "battery")
@@ -227,6 +230,16 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
     if "solis" in source:
         live_solis_config = solis_config.from_mapping(source["solis"])
 
+    guard = _entity_id(
+        source.get(
+            "control_disable_guard_entity_id",
+            "input_boolean.house_battery_control_disable",
+        ),
+        "control_disable_guard_entity_id",
+    )
+    if not guard.startswith(("input_boolean.", "switch.")):
+        raise ValueError("control_disable_guard_entity_id must be a switch-like entity")
+
     return Config(
         battery=battery_config,
         tariff=tariff_config,
@@ -234,6 +247,7 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
         policy=policy_config,
         inverter=inverter_config,
         solis=live_solis_config,
+        control_disable_guard_entity_id=guard,
     )
 
 
