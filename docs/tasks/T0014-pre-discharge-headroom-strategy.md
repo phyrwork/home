@@ -1,6 +1,6 @@
 # T0014 — Plan pre-discharge headroom before standard cheap windows
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 
