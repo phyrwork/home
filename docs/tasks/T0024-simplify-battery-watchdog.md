@@ -1,6 +1,6 @@
 # T0024 — Simplify the independent battery watchdog
 
-Status: Council approved
+Status: Implemented
 
 ## Objective
 
@@ -29,4 +29,3 @@ Self-Use when the controller is unavailable or stale.
 - The focused tests pass.
 - The resulting YAML is materially smaller and contains no commissioning
   lifecycle machinery.
-
