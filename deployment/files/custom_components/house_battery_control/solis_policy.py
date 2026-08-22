@@ -642,6 +642,12 @@ class SolisPolicyActuator:
     ) -> PolicyActuationResult:
         if self._validate_now(now) is None:
             return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("now must be timezone-aware",))
+        if isinstance(authorization, EphemeralCandidateAuthorization):
+            # There is deliberately no await before this atomic in-memory
+            # consume.  Cancellation while waiting for orchestration therefore
+            # cannot leave a bootstrap nonce reusable.
+            if not self.ephemeral_authorizations.consume_attempt(authorization):
+                return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("ephemeral authorization is unknown, forged, or already consumed",))
         acquired = False
         try:
             await self.orchestration_lock.acquire()
@@ -677,17 +683,19 @@ class SolisPolicyActuator:
         stage_now = self._clock_now()
         if isinstance(authorization, PersistentCandidateAuthorization) and authorization is not self.persistent_authorization:
             return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("persistent authorization is not the configured record",))
-        if isinstance(authorization, EphemeralCandidateAuthorization):
-            # Consume first, even when the current map/policy no longer matches.
-            if not self.ephemeral_authorizations.consume_attempt(authorization):
-                return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("ephemeral authorization is unknown or already consumed",))
+        # Fingerprints and lifetimes are revalidated after orchestration-lock
+        # acquisition, even though an ephemeral nonce was already consumed.
         if not self._authorization_valid(authorization, stage_now):
             return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("candidate authorization is invalid",))
         try:
             policy = build_candidate_policy(reserve_target)
         except (TypeError, ValueError) as exc:
             return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=(f"invalid reserve target: {exc}",))
-        if not manual_grid_import_verification.valid(now=stage_now, mapping=self.mapping_fingerprint, policy=self.policy_fingerprint):
+        try:
+            valid_manual_grid = isinstance(manual_grid_import_verification, ManualGridImportVerification) and manual_grid_import_verification.valid(now=stage_now, mapping=self.mapping_fingerprint, policy=self.policy_fingerprint)
+        except Exception:
+            valid_manual_grid = False
+        if not valid_manual_grid:
             return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("manual grid-import verification is invalid",))
         if not self._guard_off() or not isinstance(observation, SolisStateReadResult) or not self._observation_fresh(observation, stage_now):
             return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("healthy observation and exact guard-off are required",))

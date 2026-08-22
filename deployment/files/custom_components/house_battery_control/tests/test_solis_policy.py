@@ -414,6 +414,18 @@ async def test_repeated_cancellation_while_waiting_for_shared_lock_preserves_ori
     assert diagnostic is not None
     assert diagnostic.original_exception is raised.value
     assert diagnostic.safe_proven
+    reused = await actuator.async_apply_candidate(initial, now=NOW, reserve_target=20, authorization=token, manual_grid_import_verification=manual)
+    assert reused.status == PolicyActuationStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manual_evidence", (None, object(), "malformed"))
+async def test_malformed_manual_grid_evidence_is_structured_blocked_without_mutation(manual_evidence):
+    actuator, ha, initial, token, _manual, _clock, _record = policy_fixture()
+    result = await actuator.async_apply_candidate(initial, now=NOW, reserve_target=20, authorization=token, manual_grid_import_verification=manual_evidence)
+    assert result.status == PolicyActuationStatus.BLOCKED
+    assert "manual grid-import verification" in result.issues[0]
+    assert ha.calls == []
 
 
 @pytest.mark.asyncio
@@ -440,3 +452,37 @@ async def test_explicit_fail_safe_cancellation_is_shielded_and_diagnostic():
         await task
     assert actuator.last_cancellation_diagnostic.original_exception is raised.value
     assert actuator.last_cancellation_diagnostic.safe_proven
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_running_candidate_fallback_preserves_original_and_concludes_cleanup():
+    actuator, ha, initial, token, manual, _clock, _record = policy_fixture()
+    force_id = actuator.config.protection.battery_force_charge_soc_entity_id
+    mode_id = actuator.config.persistent.storage_mode_entity_id
+    ha.states[mode_id]["state"] = "Feed-In Priority"
+    fallback_started = asyncio.Event()
+    release = asyncio.Event()
+    candidate_failed = False
+
+    async def fail_then_block_fallback(_domain, _service, data):
+        nonlocal candidate_failed
+        if data["entity_id"] == force_id and not candidate_failed:
+            candidate_failed = True
+            raise RuntimeError("start fallback")
+        if data["entity_id"] == mode_id and not fallback_started.is_set():
+            fallback_started.set()
+            await release.wait()
+
+    ha.on_call = fail_then_block_fallback
+    task = asyncio.create_task(actuator.async_apply_candidate(initial, now=NOW, reserve_target=20, authorization=token, manual_grid_import_verification=manual))
+    await fallback_started.wait()
+    task.cancel("original")
+    release.set()
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await task
+    diagnostic = actuator.last_cancellation_diagnostic
+    assert diagnostic is not None
+    assert diagnostic.original_exception is raised.value
+    assert diagnostic.safe_proven
+    assert ha.states[mode_id]["state"] == "Self-Use"
+    assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
