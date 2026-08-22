@@ -1,10 +1,9 @@
 """Fail-closed transactional actuator for the mapped Solis schedule slots.
 
 This module is deliberately kept at the Home Assistant boundary.  It accepts
-the immutable configuration and a verified writer, but it does not import
-Home Assistant or make a device/cloud request.  A Home Assistant write is
-treated as an acknowledgement only; device reconciliation is a separate
-commissioning concern.
+the configured entity map and a verified writer, but it does not import Home
+Assistant or make a device/cloud request.  Every successful write is verified
+against Home Assistant state before the next step is attempted.
 """
 
 from __future__ import annotations
@@ -15,19 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from enum import Enum
-import hashlib
-import json
 import re
 
 from .contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
-from .domain_constants import MAXIMUM_GRID_IMPORT_POWER_KW
 from .ha_writer import HomeAssistantWriter, WriteTransaction
-from .solis_config import (
-    BatteryPowerSign,
-    SolisConfig,
-    SolisSlotDirectionConfig,
-    SolisSlotOwner,
-)
+from .solis_config import SolisConfig, SolisSlotDirectionConfig, SolisSlotOwner
 from .solis_state import SolisStateReadResult, SolisStateSnapshot
 from .write_contracts import (
     NumberWriteRequest,
@@ -54,8 +45,6 @@ def _remaining_deadline(
 
 
 MAXIMUM_INVERTER_CLOCK_SKEW = timedelta(minutes=1)
-COMMISSIONING_SCHEMA_VERSION = 1
-MAPPING_FINGERPRINT_SCHEMA_VERSION = 1
 
 _TIME_TEXT = re.compile(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
 
@@ -95,29 +84,6 @@ class ReentrantAsyncLock:
 
 
 @dataclass(frozen=True, slots=True)
-class CommissioningRecord:
-    """The persisted proof that this exact entity map was commissioned."""
-
-    commissioned_at: datetime
-    mapping_fingerprint: str
-    ha_readback_validated: bool
-    device_reconciliation_validated: bool
-    schema_version: int = COMMISSIONING_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        if self.commissioned_at.tzinfo is None or self.commissioned_at.utcoffset() is None:
-            raise ValueError("commissioned_at must be timezone-aware")
-        if not isinstance(self.mapping_fingerprint, str) or not self.mapping_fingerprint:
-            raise ValueError("mapping_fingerprint must not be empty")
-        if not isinstance(self.ha_readback_validated, bool):
-            raise TypeError("ha_readback_validated must be bool")
-        if not isinstance(self.device_reconciliation_validated, bool):
-            raise TypeError("device_reconciliation_validated must be bool")
-        if not isinstance(self.schema_version, int) or isinstance(self.schema_version, bool):
-            raise TypeError("schema_version must be an integer")
-
-
-@dataclass(frozen=True, slots=True)
 class DisableAllResult:
     """Ordered cleanup evidence; ``safe`` means every switch was proven off."""
 
@@ -130,11 +96,9 @@ class DisableAllResult:
 
 
 class SlotActuationStatus(str, Enum):
-    """String statuses intentionally kept free of HA-specific enums."""
+    """Outcome of one slot operation."""
 
-    BLOCKED_UNCOMMISSIONED_SAFE = "BLOCKED_UNCOMMISSIONED_SAFE"
-    BLOCKED_UNCOMMISSIONED_UNSAFE = "BLOCKED_UNCOMMISSIONED_UNSAFE"
-    APPLIED_HA_PENDING_DEVICE_RECONCILIATION = "APPLIED_HA_PENDING_DEVICE_RECONCILIATION"
+    APPLIED = "APPLIED"
     FAILED_SAFE = "FAILED_SAFE"
     FAILED_UNSAFE = "FAILED_UNSAFE"
 
@@ -151,14 +115,7 @@ class SlotActuationResult:
 
     @property
     def safe(self) -> bool:
-        return self.status in {
-            SlotActuationStatus.BLOCKED_UNCOMMISSIONED_SAFE,
-            SlotActuationStatus.FAILED_SAFE,
-        }
-
-    @property
-    def pending_device_reconciliation(self) -> bool:
-        return self.status == SlotActuationStatus.APPLIED_HA_PENDING_DEVICE_RECONCILIATION
+        return self.status is SlotActuationStatus.FAILED_SAFE
 
     @property
     def ordered_results(self) -> tuple[WriteResult, ...]:
@@ -173,85 +130,6 @@ class CancellationDiagnostic:
     actuation_results: tuple[WriteResult, ...]
     cleanup_results: tuple[WriteResult, ...]
     all_directions_proven_off: bool
-
-
-def _enum_value(value: object) -> str:
-    return value.value if hasattr(value, "value") else str(value)
-
-
-def _direction_payload(direction: SolisSlotDirectionConfig) -> dict[str, object]:
-    return {
-        "enable_entity_id": direction.enable_entity_id,
-        "time_entity_id": direction.time_entity_id,
-        "current_entity_id": direction.current_entity_id,
-        "target_soc_entity_id": direction.target_soc_entity_id,
-        "owner": _enum_value(direction.owner),
-    }
-
-
-def canonical_mapping(config: SolisConfig) -> bytes:
-    """Return the canonical bytes covered by the commissioning fingerprint."""
-
-    slots: list[dict[str, object]] = []
-    for slot in sorted(config.slots, key=lambda item: item.physical_slot):
-        slots.append(
-            {
-                "physical_slot": slot.physical_slot,
-                "charge": _direction_payload(slot.charge),
-                "discharge": _direction_payload(slot.discharge),
-            }
-        )
-    data: dict[str, object] = {
-        "fingerprint_schema_version": MAPPING_FINGERPRINT_SCHEMA_VERSION,
-        "telemetry": {
-            "state_of_charge_entity_id": config.telemetry.state_of_charge_entity_id,
-            "battery_power_entity_id": config.telemetry.battery_power_entity_id,
-            "battery_power_sign": (
-                config.telemetry.battery_power_sign.value
-                if isinstance(config.telemetry.battery_power_sign, BatteryPowerSign)
-                else None
-            ),
-            "device_timestamp_entity_id": config.telemetry.device_timestamp_entity_id,
-        },
-        "persistent": {
-            "storage_mode_entity_id": config.persistent.storage_mode_entity_id,
-            "allow_grid_charging_entity_id": config.persistent.allow_grid_charging_entity_id,
-            "allow_export_entity_id": config.persistent.allow_export_entity_id,
-            "grid_peak_shaving_entity_id": config.persistent.grid_peak_shaving_entity_id,
-            "inverter_on_off_entity_id": config.persistent.inverter_on_off_entity_id,
-            "inverter_time_entity_id": config.persistent.inverter_time_entity_id,
-        },
-        "protection": {
-            "battery_over_discharge_soc_entity_id": config.protection.battery_over_discharge_soc_entity_id,
-            "battery_force_charge_soc_entity_id": config.protection.battery_force_charge_soc_entity_id,
-            "battery_recovery_soc_entity_id": config.protection.battery_recovery_soc_entity_id,
-            "battery_max_charge_soc_entity_id": config.protection.battery_max_charge_soc_entity_id,
-            "battery_reserve_entity_id": config.protection.battery_reserve_entity_id,
-            "battery_reserve_soc_entity_id": config.protection.battery_reserve_soc_entity_id,
-        },
-        "capability": {
-            "battery_max_charge_current_entity_id": config.capability.battery_max_charge_current_entity_id,
-            "battery_max_discharge_current_entity_id": config.capability.battery_max_discharge_current_entity_id,
-            "max_output_power_entity_id": config.capability.max_output_power_entity_id,
-            "max_export_power_entity_id": config.capability.max_export_power_entity_id,
-        },
-        "maximum_grid_import_policy": {
-            "mode": _enum_value(config.maximum_grid_import_policy),
-            "maximum_grid_import_power_kw": _canonical_decimal(MAXIMUM_GRID_IMPORT_POWER_KW),
-        },
-        "slots": slots,
-    }
-    return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _canonical_decimal(value: Decimal) -> str:
-    if not value.is_finite():
-        raise ValueError("fingerprint policy Decimal must be finite")
-    return format(value, "f")
-
-
-def mapping_fingerprint(config: SolisConfig) -> str:
-    return hashlib.sha256(canonical_mapping(config)).hexdigest()
 
 
 def _result_failure(entity_id: str, message: str) -> WriteResult:
@@ -368,7 +246,7 @@ class SolisSlotActuator:
                 direction_config = candidate
                 break
         if direction_config is None or direction_config.owner is not target[1]:
-            return "slot owner and direction do not match the commissioned map"
+            return "slot owner and direction do not match the configured map"
         direction_state = self._snapshot_direction(snapshot, intent.physical_slot, intent.direction)
         if direction_state is None:
             return "target slot observation is missing"
@@ -462,13 +340,22 @@ class SolisSlotActuator:
                 continue
             if observed.state == "on":
                 request = SwitchWriteRequest(observed, False)
-                await self._write_recorded(
-                    transaction,
-                    request,
-                    results,
-                    deadline=deadline,
-                    clock=clock,
-                )
+                try:
+                    await self._write_recorded(
+                        transaction,
+                        request,
+                        results,
+                        deadline=deadline,
+                        clock=clock,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Continue through every direction.  A failed switch must
+                    # not prevent the remaining slots from being made safe.
+                    # _write_recorded has already left an uncertain result in
+                    # the ordered evidence list.
+                    continue
             elif observed.state != "off":
                 results.append(_result_failure(direction.enable_entity_id, "enable state is invalid"))
         return self._prove_all_off()
@@ -616,10 +503,10 @@ class SolisSlotActuator:
                 if not self._prove_exact_target(target_config.enable_entity_id):
                     raise RuntimeError("final slot enable proof failed")
             return SlotActuationResult(
-                SlotActuationStatus.APPLIED_HA_PENDING_DEVICE_RECONCILIATION,
+                SlotActuationStatus.APPLIED,
                 tuple(results),
                 mandatory_disable_deadline=deadline,
-                message="Home Assistant readback confirmed; device reconciliation remains pending",
+                message="slot enabled and Home Assistant readback verified",
             )
         except Exception as exc:
             safe = await self._cleanup_after_failure(results)
@@ -647,28 +534,13 @@ async def _await_cleanup(task: asyncio.Task[object]) -> object:
     return await task
 
 
-# Names used by later adapters and tests.
-SolisSlotActuation = SolisSlotActuator
-MappingCommissioningRecord = CommissioningRecord
-canonical_mapping_bytes = canonical_mapping
-compute_mapping_fingerprint = mapping_fingerprint
-
-
 __all__ = [
-    "COMMISSIONING_SCHEMA_VERSION",
     "CancellationDiagnostic",
-    "CommissioningRecord",
     "DisableAllResult",
     "MAXIMUM_INVERTER_CLOCK_SKEW",
-    "MAPPING_FINGERPRINT_SCHEMA_VERSION",
     "ReentrantAsyncLock",
     "SlotActuationResult",
     "SlotActuationStatus",
     "SolisSlotActuator",
-    "SolisSlotActuation",
-    "canonical_mapping",
-    "canonical_mapping_bytes",
-    "compute_mapping_fingerprint",
     "encode_schedule",
-    "mapping_fingerprint",
 ]

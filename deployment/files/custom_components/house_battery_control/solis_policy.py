@@ -10,7 +10,13 @@ from decimal import Decimal, ROUND_CEILING
 from .contracts import ControllerHealth, SlotIntent, StorageMode
 from .domain_constants import MINIMUM_SOC_PERCENT
 from .ha_writer import HomeAssistantWriter
-from .solis_actuator import DisableAllResult, ReentrantAsyncLock, SlotActuationResult, SolisSlotActuator
+from .solis_actuator import (
+    DisableAllResult,
+    ReentrantAsyncLock,
+    SlotActuationResult,
+    SlotActuationStatus,
+    SolisSlotActuator,
+)
 from .solis_config import SolisConfig
 from .solis_state import SolisStateReadResult
 from .write_contracts import NumberWriteRequest, SelectWriteRequest, SwitchWriteRequest, WriteResult
@@ -125,7 +131,7 @@ class SolisPolicyActuator:
                     return PolicyActuationResult(True, False, "healthy baseline active; all slots off", tuple(results))
                 slot_result = await self.slots.async_apply_intent(intent, observation, now=now)
                 results.extend(slot_result.results)
-                if not slot_result.pending_device_reconciliation:
+                if slot_result.status is not SlotActuationStatus.APPLIED:
                     raise RuntimeError(slot_result.message or "slot actuation failed")
                 return PolicyActuationResult(True, False, "healthy baseline and slot applied", tuple(results), slot_result)
             except asyncio.CancelledError:
@@ -140,9 +146,7 @@ class SolisPolicyActuator:
 
     def _guard_off(self) -> bool:
         try:
-            state = self.writer.hass.get_state(self.control_disable_guard_entity_id)
-            value = getattr(state, "state", None) if state is not None else None
-            return value == "off"
+            return self.writer.capture_precondition(self.control_disable_guard_entity_id).state == "off"
         except Exception:
             return False
 
