@@ -1,6 +1,6 @@
 # T0003 — Define the live Solis entity configuration
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 

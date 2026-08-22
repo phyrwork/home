@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import TypeAlias, cast
 
-from . import battery
+from . import battery, solis_config
 
 ConfigValue: TypeAlias = object
 
@@ -111,10 +111,18 @@ class Config:
     inverter: InverterConfig
     """Inverter control-boundary configuration."""
 
+    solis: solis_config.SolisConfig | None = None
+    """Optional live Solis entity mapping; omitted until the later cutover."""
+
 
 def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
     """Map validated YAML-shaped data to typed internal configuration."""
-    _require_keys(source, {"battery", "tariff", "solar", "policy", "inverter"}, "config")
+    _require_keys(
+        source,
+        {"battery", "tariff", "solar", "policy", "inverter"},
+        "config",
+        optional={"solis"},
+    )
 
     battery_source = _mapping(source["battery"], "battery")
     _require_keys(
@@ -215,12 +223,17 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
         ),
     )
 
+    live_solis_config = None
+    if "solis" in source:
+        live_solis_config = solis_config.from_mapping(source["solis"])
+
     return Config(
         battery=battery_config,
         tariff=tariff_config,
         solar=solar_config,
         policy=policy_config,
         inverter=inverter_config,
+        solis=live_solis_config,
     )
 
 
@@ -228,10 +241,12 @@ def _require_keys(
     source: Mapping[str, ConfigValue],
     expected: set[str],
     name: str,
+    *,
+    optional: set[str] | None = None,
 ) -> None:
     actual = set(source)
     missing = expected - actual
-    unknown = actual - expected
+    unknown = actual - expected - (optional or set())
     if missing:
         raise ValueError(f"{name} is missing: {', '.join(sorted(missing))}")
     if unknown:
