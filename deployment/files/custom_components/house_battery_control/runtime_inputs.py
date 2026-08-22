@@ -105,7 +105,7 @@ async def async_read_runtime_inputs(
     reserve_soc = _soc_ceiling(reserve.reserve_energy_kwh, config.battery.capacity_kwh)
     reserve_soc = max(Decimal(MINIMUM_SOC_PERCENT), reserve_soc)
     telemetry = snapshot.telemetry
-    current_energy = config.battery.capacity_kwh * telemetry.state_of_charge_percent / Decimal(100)
+    current_energy = config.battery.capacity_kwh * telemetry.state_of_charge_percent / Decimal(FULL_SOC_PERCENT)
     charge_state = snapshot.slots[0].charge
     cycle_state_observed = snapshot.slots[0].discharge
     pre_state = snapshot.slots[1].discharge
@@ -237,8 +237,21 @@ def _runtime_powers(snapshot: SolisStateSnapshot) -> tuple[Decimal, Decimal]:
     voltage = snapshot.telemetry.battery_voltage_v
     charge_current = snapshot.slots[0].charge.current.maximum
     discharge_current = min(snapshot.slots[0].discharge.current.maximum, snapshot.slots[1].discharge.current.maximum)
+    if snapshot.capabilities.maximum_charge_current is not None:
+        charge_current = min(charge_current, snapshot.capabilities.maximum_charge_current.maximum)
+    if snapshot.capabilities.maximum_discharge_current is not None:
+        discharge_current = min(discharge_current, snapshot.capabilities.maximum_discharge_current.maximum)
     charge = voltage * charge_current / Decimal(1000)
     discharge = voltage * discharge_current / Decimal(1000)
+    output_limit = snapshot.capabilities.maximum_output_power
+    if output_limit.unit.strip().lower() in {"w", "watt", "watts"}:
+        maximum_output_kw = output_limit.maximum / Decimal(1000)
+    elif output_limit.unit.strip().lower() in {"kw", "kilowatt", "kilowatts"}:
+        maximum_output_kw = output_limit.maximum
+    else:
+        raise ValueError("maximum output power unit is unsupported")
+    charge = min(charge, maximum_output_kw)
+    discharge = min(discharge, maximum_output_kw)
     if not Decimal("0.5") <= charge <= Decimal("10") or not Decimal("0.5") <= discharge <= Decimal("10"):
         raise ValueError("derived runtime charge/discharge power is implausible")
     return charge, discharge
@@ -334,7 +347,7 @@ def _expected_energy_at_window(
 
 
 def _soc_ceiling(energy: Decimal, capacity: Decimal) -> Decimal:
-    return (energy * Decimal(100) / capacity).to_integral_value(rounding=ROUND_CEILING)
+    return (energy * Decimal(FULL_SOC_PERCENT) / capacity).to_integral_value(rounding=ROUND_CEILING)
 
 
 def _minute_floor(value: datetime) -> datetime:

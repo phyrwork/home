@@ -4,109 +4,49 @@ from pathlib import Path
 import pytest
 import yaml
 
-from custom_components.house_battery_control import CONFIG_SCHEMA
-from custom_components.house_battery_control import config
+from custom_components.house_battery_control import CONFIG_SCHEMA, config
 from custom_components.house_battery_control.const import DOMAIN
 
 
-def source() -> dict[str, object]:
-    return {
-        "battery": {
-            "capacity_kwh": 32.1536,
-            "minimum_state_of_charge_percent": 10,
-            "charge_efficiency": 0.95,
-            "discharge_efficiency": 0.95,
-            "power_limit_entity_id": "input_number.house_battery_power_limit",
-        },
-        "tariff": {
-            "import_price_entity_id": "sensor.import_price",
-            "export_price_entity_id": "sensor.export_price",
-        },
-        "solar": {
-            "config_entry_id": "forecast-solar-entry",
-        },
-        "policy": {
-            "reserve_margin_entity_id": "input_number.reserve_margin",
-            "export_hysteresis_entity_id": "input_number.export_hysteresis",
-        },
-    }
+def deployed() -> dict[str, object]:
+    path = Path(__file__).parents[3] / "house_battery_control.yaml"
+    value = yaml.safe_load(path.read_text())
+    assert isinstance(value, dict)
+    return value
 
 
-def test_maps_yaml_values_without_float_artifacts() -> None:
-    result = config.from_mapping(source())
+def test_deployed_mapping_is_strict_and_decimal() -> None:
+    parsed = config.from_mapping(deployed())
 
-    assert result.battery.capacity_kwh == Decimal("32.1536")
-    assert result.battery.minimum_state_of_charge_percent == Decimal("10")
-    assert result.battery.charge_efficiency == Decimal("0.95")
-
-
-def test_deployed_yaml_maps_to_typed_config() -> None:
-    config_path = Path(__file__).parents[3] / "house_battery_control.yaml"
-    deployed = yaml.safe_load(config_path.read_text())
-
-    result = config.from_mapping(deployed)
-
-    assert result.battery.capacity_kwh == Decimal("32.1536")
-    assert result.solar.config_entry_id == "79c4415a9ea776404127c1b61ba240cf"
+    assert parsed.battery.capacity_kwh == Decimal("32.1536")
+    assert parsed.battery.minimum_soc_percent == Decimal("10")
+    assert parsed.battery.minimum_energy_kwh == Decimal("3.21536")
+    assert parsed.dynamic_control_enabled is False
+    assert parsed.solis.telemetry.battery_power_entity_id.endswith("battery_power")
 
 
 def test_home_assistant_schema_returns_typed_config() -> None:
-    validated = CONFIG_SCHEMA({DOMAIN: source()})
-
+    validated = CONFIG_SCHEMA({DOMAIN: deployed()})
     assert isinstance(validated[DOMAIN], config.Config)
 
 
-def test_builds_spec_with_derived_floor_and_live_power_limit() -> None:
-    result = config.from_mapping(source())
-
-    spec = result.battery.to_spec(Decimal("6"))
-
-    assert spec.capacity_kwh == Decimal("32.1536")
-    assert spec.minimum_energy_kwh == Decimal("3.21536")
-    assert spec.maximum_charge_power_kw == Decimal("6")
-    assert spec.maximum_discharge_power_kw == Decimal("6")
-
-
 @pytest.mark.parametrize(
-    ("section", "key", "value"),
-    (
-        ("battery", "capacity_kwh", 0),
-        ("battery", "minimum_state_of_charge_percent", 100),
-        ("battery", "charge_efficiency", 1.01),
-        ("battery", "power_limit_entity_id", "not_an_entity"),
-    ),
+    ("path", "value"),
+    (("battery.capacity_kwh", 0), ("battery.minimum_soc_percent", 20), ("dynamic_control_enabled", "yes")),
 )
-def test_rejects_invalid_values(section: str, key: str, value: object) -> None:
-    invalid = source()
-    nested = invalid[section]
-    assert isinstance(nested, dict)
-    nested[key] = value
-
-    with pytest.raises(ValueError):
-        config.from_mapping(invalid)
-
-
-def test_rejects_unknown_keys() -> None:
-    invalid = source()
-    invalid["surprise"] = True
-
-    with pytest.raises(ValueError, match="unknown keys: surprise"):
-        config.from_mapping(invalid)
-
-
-@pytest.mark.parametrize(
-    "stale",
-    (
-        {"battery": {"state_of_charge_entity_id": "input_number.retired_soc"}},
-        {"inverter": {}},
-    ),
-)
-def test_rejects_removed_legacy_configuration(stale: dict[str, object]) -> None:
-    invalid = source()
-    if "battery" in stale:
-        invalid["battery"] = {**invalid["battery"], **stale["battery"]}  # type: ignore[arg-type]
+def test_invalid_safety_or_control_values_are_rejected(path: str, value: object) -> None:
+    source = deployed()
+    if "." in path:
+        section, key = path.split(".", 1)
+        source[section][key] = value  # type: ignore[index]
     else:
-        invalid["inverter"] = stale["inverter"]
+        source[path] = value
+    with pytest.raises(ValueError):
+        config.from_mapping(source)
 
+
+def test_unknown_top_level_keys_are_rejected() -> None:
+    source = deployed()
+    source["legacy_stub"] = True
     with pytest.raises(ValueError, match="unknown keys"):
-        config.from_mapping(invalid)
+        config.from_mapping(source)

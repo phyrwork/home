@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from .domain_constants import MINIMUM_SOC_PERCENT
+from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
 from .solis_config import SolisConfig, from_mapping as solis_from_mapping
 
 
@@ -22,7 +22,7 @@ class BatteryConfig:
 
     @property
     def minimum_energy_kwh(self) -> Decimal:
-        return self.capacity_kwh * self.minimum_soc_percent / Decimal(100)
+        return self.capacity_kwh * self.minimum_soc_percent / Decimal(FULL_SOC_PERCENT)
 
 
 @dataclass(frozen=True, slots=True)

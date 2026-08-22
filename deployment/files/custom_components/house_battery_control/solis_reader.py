@@ -17,6 +17,7 @@ from .contracts import (
     RuntimeCapabilities,
     SlotDirection,
 )
+from .domain_constants import FULL_SOC_PERCENT
 from .solis_config import SolisConfig, SolisSlotDirectionConfig, SolisSlotOwner
 from .solis_state import (
     MAXIMUM_FUTURE_CLOCK_SKEW,
@@ -126,7 +127,7 @@ class SolisStateReader:
         soc_id = config.telemetry.state_of_charge_entity_id
         soc_state = self._state(soc_id)
         soc = self._number_from_state(soc_state, soc_id, "soc_missing")
-        if soc is not None and not Decimal(0) <= soc <= Decimal(100):
+        if soc is not None and not Decimal(0) <= soc <= Decimal(FULL_SOC_PERCENT):
             self._critical("soc_out_of_range", soc_id, "SOC must be between 0 and 100 percent")
             soc = None
 
@@ -454,7 +455,7 @@ class SolisStateReader:
                 ("minimum", minimum),
                 ("maximum", maximum),
             ):
-                if not Decimal(0) <= value <= Decimal(100):
+                if not Decimal(0) <= value <= Decimal(FULL_SOC_PERCENT):
                     self._critical(
                         "capability_soc_out_of_range",
                         entity_id,

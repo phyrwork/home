@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_CEILING
 from enum import Enum
 
+from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
 from .octopus_windows import CheapWindow
 
 
@@ -96,10 +97,10 @@ def plan_pre_discharge(
     if start >= end:
         return PreDischargePlanResult(PreDischargePlanningStatus.INFEASIBLE, reason="not enough time remains to create useful headroom")
 
-    raw_soc = target_energy * Decimal(100) / capacity_kwh
+    raw_soc = target_energy * Decimal(FULL_SOC_PERCENT) / capacity_kwh
     stepped_soc = (raw_soc / target_soc_step).to_integral_value(rounding=ROUND_CEILING) * target_soc_step
-    target_soc = max(minimum_target_soc, stepped_soc)
-    if target_soc >= Decimal(100):
+    target_soc = max(Decimal(MINIMUM_SOC_PERCENT), minimum_target_soc, stepped_soc)
+    if target_soc >= Decimal(FULL_SOC_PERCENT):
         return PreDischargePlanResult(PreDischargePlanningStatus.NO_HEADROOM_NEEDED, reason="rounded target SOC leaves no headroom")
     return PreDischargePlanResult(
         PreDischargePlanningStatus.PLANNED,

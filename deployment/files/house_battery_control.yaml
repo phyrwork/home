@@ -1,5 +1,5 @@
-# One-time SolisCloud commissioning: EMS is disabled for this plant so cloud
-# dispatch cannot overwrite Home Assistant inverter controls.
+# One-time SolisCloud commissioning is complete: EMS is disabled for this plant
+# so cloud dispatch cannot overwrite Home Assistant inverter controls.
 dynamic_control_enabled: false
 
 battery:
@@ -47,6 +47,7 @@ solis:
     battery_max_charge_current_entity_id: number.garage_inverter_control_battery_max_charge_current
     battery_max_discharge_current_entity_id: number.garage_inverter_control_battery_max_discharge_current
     max_output_power_entity_id: number.garage_inverter_control_max_output_power
+    # Solis reports zero here as the unlimited-export sentinel; preserve it.
     max_export_power_entity_id: number.garage_inverter_control_max_export_power
 
   # Solis Cloud Control v2.21.0 exposes no entity for this setting.  It must
