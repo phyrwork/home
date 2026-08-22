@@ -1,6 +1,6 @@
 # T0002 — Define house battery control domain contracts
 
-Status: Approved
+Status: Implemented
 
 Parent: T0001 — Solis battery arbitrage control
 
@@ -21,7 +21,7 @@ Define the fixed policy and safety values once:
 FULL_SOC_PERCENT = 100
 MINIMUM_SOC_PERCENT = 10
 FORCE_CHARGE_SOC_PERCENT = 7
-MAXIMUM_GRID_IMPORT_POWER_KW = 0.1
+MAXIMUM_GRID_IMPORT_POWER_KW = Decimal("0.1")
 OFF_PEAK_CYCLE_DISCHARGE_DURATION = timedelta(minutes=10)
 BATTERY_CYCLE_COST_PER_KWH = Decimal("0.0165")
 ```
