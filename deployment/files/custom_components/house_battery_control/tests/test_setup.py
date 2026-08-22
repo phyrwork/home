@@ -20,7 +20,6 @@ def config() -> integration_config.Config:
             minimum_state_of_charge_percent=Decimal("10"),
             charge_efficiency=Decimal("0.95"),
             discharge_efficiency=Decimal("0.95"),
-            state_of_charge_entity_id="input_number.soc",
             power_limit_entity_id="input_number.power_limit",
         ),
         tariff=integration_config.TariffConfig(
@@ -33,10 +32,6 @@ def config() -> integration_config.Config:
         policy=integration_config.PolicyConfig(
             reserve_margin_entity_id="input_number.reserve_margin",
             export_hysteresis_entity_id="input_number.export_hysteresis",
-        ),
-        inverter=integration_config.InverterConfig(
-            operating_mode_entity_id="input_select.operating_mode",
-            state_of_charge_target_entity_id="input_number.soc_target",
         ),
     )
 

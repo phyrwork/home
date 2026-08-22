@@ -24,8 +24,8 @@ from custom_components.house_battery_control.interval import TimeInterval
 from custom_components.house_battery_control.solis_policy import PolicyActuationResult, PolicyActuationStatus
 from custom_components.house_battery_control.solis_actuator import SolisSlotActuator
 from custom_components.house_battery_control.solis_policy import SolisPolicyActuator
-from custom_components.house_battery_control.dependencies import stub_inverter
 from custom_components.house_battery_control.solis_state import SolisStateReadResult, SolisTelemetry
+from custom_components.house_battery_control.solis_config import _LEGACY_STUB_IDS
 
 NOW = datetime(2026, 7, 4, 10, tzinfo=UTC)
 END = NOW + timedelta(hours=1)
@@ -33,6 +33,16 @@ END = NOW + timedelta(hours=1)
 
 def integration_config() -> config.Config:
     source = yaml.safe_load((Path(__file__).parents[3] / "house_battery_control.yaml").read_text())
+    return config.from_mapping(source)
+
+
+def live_integration_config() -> config.Config:
+    source = yaml.safe_load((Path(__file__).parents[3] / "house_battery_control.yaml").read_text())
+    source["solis"]["telemetry"].update(
+        battery_power_entity_id="sensor.garage_battery_power",
+        battery_power_sign="positive_means_charging",
+        device_timestamp_entity_id="sensor.garage_device_time",
+    )
     return config.from_mapping(source)
 
 
@@ -66,6 +76,106 @@ def set_safe_proof(hass: HomeAssistant, configured: config.Config) -> None:
 def set_planner_helpers(hass: HomeAssistant, configured: config.Config) -> None:
     hass.states.async_set(configured.policy.reserve_margin_entity_id, "2")
     hass.states.async_set(configured.policy.export_hysteresis_entity_id, "1")
+
+
+def set_live_solis_states(hass: HomeAssistant, configured: config.Config) -> None:
+    assert configured.solis is not None
+    timestamp = NOW.timestamp()
+    telemetry = configured.solis.telemetry
+    hass.states.async_set(
+        telemetry.state_of_charge_entity_id,
+        "73",
+        {"unit_of_measurement": "%"},
+        timestamp=timestamp,
+    )
+    hass.states.async_set(
+        telemetry.battery_power_entity_id,
+        "0",
+        {"unit_of_measurement": "kW"},
+        timestamp=timestamp,
+    )
+    hass.states.async_set(
+        telemetry.device_timestamp_entity_id,
+        NOW.isoformat(),
+        timestamp=timestamp,
+    )
+
+    persistent = configured.solis.persistent
+    hass.states.async_set(
+        persistent.storage_mode_entity_id,
+        "Self-Use",
+        {"options": ["Self-Use", "Feed-In Priority", "Off-Grid"]},
+        timestamp=timestamp,
+    )
+    for entity_id in (
+        persistent.allow_grid_charging_entity_id,
+        persistent.allow_export_entity_id,
+        persistent.grid_peak_shaving_entity_id,
+        persistent.inverter_on_off_entity_id,
+    ):
+        hass.states.async_set(entity_id, "on", timestamp=timestamp)
+    hass.states.async_set(
+        persistent.inverter_time_entity_id,
+        NOW.isoformat(),
+        timestamp=timestamp,
+    )
+
+    protection = configured.solis.protection
+    capability_attributes = {
+        "min": "0",
+        "max": "100",
+        "step": "1",
+        "unit_of_measurement": "%",
+    }
+    for entity_id in (
+        protection.battery_over_discharge_soc_entity_id,
+        protection.battery_force_charge_soc_entity_id,
+        protection.battery_recovery_soc_entity_id,
+        protection.battery_max_charge_soc_entity_id,
+        protection.battery_reserve_soc_entity_id,
+    ):
+        hass.states.async_set(
+            entity_id,
+            "10",
+            capability_attributes,
+            timestamp=timestamp,
+        )
+    hass.states.async_set(protection.battery_reserve_entity_id, "off", timestamp=timestamp)
+
+    capability = configured.solis.capability
+    for entity_id, maximum, unit in (
+        (capability.battery_max_charge_current_entity_id, "200", "A"),
+        (capability.battery_max_discharge_current_entity_id, "200", "A"),
+        (capability.max_output_power_entity_id, "6000", "W"),
+        (capability.max_export_power_entity_id, "6000", "W"),
+    ):
+        hass.states.async_set(
+            entity_id,
+            "100" if unit == "A" else "5000",
+            {"min": "0", "max": maximum, "step": "1", "unit_of_measurement": unit},
+            timestamp=timestamp,
+        )
+
+    for slot in configured.solis.slots:
+        for direction in (slot.charge, slot.discharge):
+            hass.states.async_set(direction.enable_entity_id, "off", timestamp=timestamp)
+            hass.states.async_set(
+                direction.time_entity_id,
+                "00:00-00:00",
+                timestamp=timestamp,
+            )
+            hass.states.async_set(
+                direction.current_entity_id,
+                "1",
+                {"min": "0", "max": "10", "step": "1", "unit_of_measurement": "A"},
+                timestamp=timestamp,
+            )
+            hass.states.async_set(
+                direction.target_soc_entity_id,
+                "50",
+                {"min": "0", "max": "100", "step": "1", "unit_of_measurement": "%"},
+                timestamp=timestamp,
+            )
 
 
 async def refresh(coordinator: Coordinator, hass: HomeAssistant) -> None:
@@ -118,6 +228,74 @@ async def test_healthy_guard_off_window_is_observation_only(hass: HomeAssistant)
     assert snapshot.recommendation is not None
     assert OBSERVATION_ONLY_LEGACY_POWER_LIMIT in snapshot.source_quality
     assert snapshot.planning_horizon_end == END
+
+
+async def test_real_solis_soc_and_power_helper_feed_observation_only_planner(
+    hass: HomeAssistant,
+) -> None:
+    configured = live_integration_config()
+    set_live_solis_states(hass, configured)
+    set_planner_helpers(hass, configured)
+    hass.states.async_set(configured.control_disable_guard_entity_id, "off", timestamp=NOW.timestamp())
+    hass.states.async_set(configured.battery.power_limit_entity_id, "4.2", timestamp=NOW.timestamp())
+    hass.states.async_set(
+        configured.tariff.export_price_entity_id,
+        "0.15",
+        timestamp=NOW.timestamp(),
+    )
+    hass.states.async_set(
+        configured.tariff.import_price_entity_id,
+        "0.30",
+        {
+            "rates": [
+                {
+                    "start": NOW.isoformat(),
+                    "end": (NOW + timedelta(hours=1)).isoformat(),
+                    "value_inc_vat": 0.30,
+                },
+                {
+                    "start": (NOW + timedelta(hours=1)).isoformat(),
+                    "end": (NOW + timedelta(hours=2)).isoformat(),
+                    "value_inc_vat": 0.07,
+                },
+            ]
+        },
+        timestamp=NOW.timestamp(),
+    )
+    coordinator = Coordinator(hass, configured)
+    with (
+        patch.object(
+            coordinator_module.inputs,
+            "_async_get_solar_forecast",
+            return_value={
+                "wh_hours": {
+                    NOW.isoformat(): 0,
+                    (NOW + timedelta(hours=1)).isoformat(): 0,
+                    (NOW + timedelta(hours=2)).isoformat(): 0,
+                }
+            },
+        ),
+        patch.object(SolisPolicyActuator, "async_apply_candidate", AsyncMock()) as candidate_apply,
+        patch.object(SolisSlotActuator, "async_apply_intent", AsyncMock()) as slot_apply,
+        patch.object(coordinator_module.dt_util, "now", return_value=NOW),
+    ):
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    snapshot = coordinator.data
+    assert snapshot is not None
+    assert snapshot.health is ControllerHealth.HEALTHY
+    assert snapshot.recommendation is not None
+    assert snapshot.battery_state is not None
+    assert snapshot.battery_state.energy_kwh == Decimal("23.472128")
+    assert snapshot.battery_spec is not None
+    assert snapshot.battery_spec.maximum_charge_power_kw == Decimal("4.2")
+    assert snapshot.diagnostic_energy_kwh == Decimal("23.472128")
+    assert OBSERVATION_ONLY_LEGACY_POWER_LIMIT in snapshot.source_quality
+    assert snapshot.control is not None
+    assert snapshot.control.operating_mode.value in {"grid_charge", "force_export", "self_consumption", "hold"}
+    candidate_apply.assert_not_awaited()
+    slot_apply.assert_not_awaited()
 
 
 @pytest.mark.parametrize("guard", ("on", "unknown", "unavailable"))
@@ -217,9 +395,9 @@ async def test_concurrent_data_coordinator_refreshes_are_coalesced(hass: HomeAss
 def test_subscriptions_exclude_all_stub_control_and_soc_helpers(hass: HomeAssistant) -> None:
     configured = integration_config()
     ids = Coordinator(hass, configured)._source_entity_ids()
-    assert configured.battery.state_of_charge_entity_id not in ids
-    assert configured.inverter.operating_mode_entity_id not in ids
-    assert configured.inverter.state_of_charge_target_entity_id not in ids
+    assert not (set(_LEGACY_STUB_IDS) - {configured.battery.power_limit_entity_id}) & set(ids)
+    assert configured.solis is not None
+    assert configured.solis.telemetry.state_of_charge_entity_id in ids
     assert configured.battery.power_limit_entity_id in ids
     assert configured.control_disable_guard_entity_id in ids
 
@@ -248,7 +426,6 @@ async def test_observation_never_calls_stub_candidate_or_slot_actuation(hass: Ho
     hass.states.async_set(configured.control_disable_guard_entity_id, "off")
     coordinator = Coordinator(hass, configured)
     with (
-        patch.object(stub_inverter, "async_apply", AsyncMock()) as stub_apply,
         patch.object(SolisPolicyActuator, "async_apply_candidate", AsyncMock()) as candidate_apply,
         patch.object(SolisSlotActuator, "async_apply_intent", AsyncMock()) as slot_apply,
         patch.object(coordinator_module.dt_util, "now", return_value=NOW),
@@ -256,7 +433,6 @@ async def test_observation_never_calls_stub_candidate_or_slot_actuation(hass: Ho
         patch.object(coordinator_module.inputs, "async_read_input", AsyncMock(return_value=planning_source())),
     ):
         await coordinator.async_refresh()
-    stub_apply.assert_not_awaited()
     candidate_apply.assert_not_awaited()
     slot_apply.assert_not_awaited()
 

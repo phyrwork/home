@@ -1,6 +1,6 @@
 # T0010 — Remove obsolete battery SOC and actuator stubs
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 

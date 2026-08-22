@@ -3,7 +3,6 @@ battery:
   minimum_state_of_charge_percent: 10
   charge_efficiency: 0.95
   discharge_efficiency: 0.95
-  state_of_charge_entity_id: input_number.house_battery_state_of_charge
   power_limit_entity_id: input_number.house_battery_power_limit
 
 tariff:
@@ -17,14 +16,11 @@ policy:
   reserve_margin_entity_id: input_number.house_battery_reserve_margin
   export_hysteresis_entity_id: input_number.house_battery_export_hysteresis
 
-inverter:
-  operating_mode_entity_id: input_select.house_battery_operating_mode
-  state_of_charge_target_entity_id: input_number.house_battery_state_of_charge_target
-
 control_disable_guard_entity_id: input_boolean.house_battery_control_disable
 
-# The live Solis map is additive.  The legacy battery and inverter entries
-# above remain the active runtime boundary until the later controller cutover.
+# The live Solis map is authoritative for battery telemetry and the later
+# guarded controller cutover.  The shared power-limit helper above remains an
+# observation-only diagnostic input until T0013 replaces that capability input.
 solis:
   telemetry:
     state_of_charge_entity_id: sensor.garage_inverter_telemetry_garage_inverter_remaining_battery_capacity

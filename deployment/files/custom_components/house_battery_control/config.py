@@ -27,9 +27,6 @@ class BatteryConfig:
     discharge_efficiency: Decimal
     """Fraction of stored energy delivered as AC energy."""
 
-    state_of_charge_entity_id: str
-    """Entity providing the current battery state of charge."""
-
     power_limit_entity_id: str
     """Entity providing the shared charge and discharge power limit."""
 
@@ -82,17 +79,6 @@ class PolicyConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class InverterConfig:
-    """Identifies the temporary inverter control boundary."""
-
-    operating_mode_entity_id: str
-    """Entity providing the confirmed inverter operating mode."""
-
-    state_of_charge_target_entity_id: str
-    """Entity providing the confirmed inverter state-of-charge target."""
-
-
-@dataclass(frozen=True, slots=True)
 class Config:
     """Defines all external configuration for House Battery Control."""
 
@@ -108,9 +94,6 @@ class Config:
     policy: PolicyConfig
     """Adjustable control-policy configuration."""
 
-    inverter: InverterConfig
-    """Inverter control-boundary configuration."""
-
     solis: solis_config.SolisConfig | None = None
     """Optional live Solis entity mapping; omitted until the later cutover."""
 
@@ -122,7 +105,7 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
     """Map validated YAML-shaped data to typed internal configuration."""
     _require_keys(
         source,
-        {"battery", "tariff", "solar", "policy", "inverter"},
+        {"battery", "tariff", "solar", "policy"},
         "config",
         optional={"solis", "control_disable_guard_entity_id"},
     )
@@ -135,7 +118,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
             "minimum_state_of_charge_percent",
             "charge_efficiency",
             "discharge_efficiency",
-            "state_of_charge_entity_id",
             "power_limit_entity_id",
         },
         "battery",
@@ -158,10 +140,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
         discharge_efficiency=_efficiency(
             battery_source["discharge_efficiency"],
             "discharge_efficiency",
-        ),
-        state_of_charge_entity_id=_entity_id(
-            battery_source["state_of_charge_entity_id"],
-            "state_of_charge_entity_id",
         ),
         power_limit_entity_id=_entity_id(
             battery_source["power_limit_entity_id"],
@@ -209,23 +187,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
         ),
     )
 
-    inverter_source = _mapping(source["inverter"], "inverter")
-    _require_keys(
-        inverter_source,
-        {"operating_mode_entity_id", "state_of_charge_target_entity_id"},
-        "inverter",
-    )
-    inverter_config = InverterConfig(
-        operating_mode_entity_id=_entity_id(
-            inverter_source["operating_mode_entity_id"],
-            "operating_mode_entity_id",
-        ),
-        state_of_charge_target_entity_id=_entity_id(
-            inverter_source["state_of_charge_target_entity_id"],
-            "state_of_charge_target_entity_id",
-        ),
-    )
-
     live_solis_config = None
     if "solis" in source:
         live_solis_config = solis_config.from_mapping(source["solis"])
@@ -245,7 +206,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> Config:
         tariff=tariff_config,
         solar=solar_config,
         policy=policy_config,
-        inverter=inverter_config,
         solis=live_solis_config,
         control_disable_guard_entity_id=guard,
     )

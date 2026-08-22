@@ -29,15 +29,11 @@ async def async_read_input(
 
     power_limit_kw = read_decimal(hass, config.battery.power_limit_entity_id)
     battery_spec = config.battery.to_spec(power_limit_kw)
-    if solis_result is not None:
-        if solis_result.telemetry is None or not solis_result.telemetry.state_of_charge_percent.is_finite():
-            raise ValueError("real Solis SOC is unavailable")
-        soc = solis_result.telemetry.state_of_charge_percent
-    else:
-        # Kept only for the pre-Solis compatibility boundary.  The live
-        # coordinator always supplies a Solis result and never reads the
-        # retired stub SOC helper.
-        soc = read_decimal(hass, config.battery.state_of_charge_entity_id)
+    if solis_result is None or solis_result.telemetry is None:
+        raise ValueError("real Solis SOC is unavailable")
+    soc = solis_result.telemetry.state_of_charge_percent
+    if not soc.is_finite():
+        raise ValueError("real Solis SOC is unavailable")
     battery_state = solis_cloud.to_battery_state(
         {"state_of_charge_percent": soc}, battery_spec
     )

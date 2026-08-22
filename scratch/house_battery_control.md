@@ -8,10 +8,11 @@ Implement a fully typed Home Assistant custom integration, `house_battery_contro
 for a 32 kWh Fogstar battery and 6 kW Solis inverter expected to be installed on
 2026-07-15.
 
-The physical control path is assumed to be SolisCloud monitoring plus the
-SolisCloud Device Control API through an S2-WL-ST logger. Device Control API
-access is a hard dependency. Stub Home Assistant entities will stand in for the
-uninstalled equipment.
+The physical control path is SolisCloud monitoring plus the SolisCloud Device
+Control API through an S2-WL-ST logger. Device Control API access is a hard
+dependency for the future guarded actuation cutover. The current integration
+uses live Solis telemetry and remains observation-only until commissioning;
+there is no stub entity boundary.
 
 ## Architecture
 
@@ -26,10 +27,11 @@ uninstalled equipment.
    including deliberate arbitrage export.
 4. The real-time controller selects a typed internal command.
 5. The SolisCloud adapter maps the internal command to inverter controls.
-6. A Home Assistant coordinator recalculates and immediately applies each
-   decision through the configured inverter dependency.
-7. Home Assistant exposes one read-only control sensor for diagnostics. Stub
-   helper entities represent applied inverter state until the equipment exists.
+6. A Home Assistant coordinator recalculates each decision and exposes it as an
+   observation; the later guarded cutover will apply decisions through the
+   verified Solis policy and slot boundaries.
+7. Home Assistant exposes read-only diagnostic sensors. The shared power-limit
+   helper remains an observation-only planner input until T0013 replaces it.
 
 ## Established conventions
 
@@ -181,17 +183,18 @@ in configuration, so tariff price changes require no manual update.
 - [x] Implement the coordinator calculation, source triggers, expiry scheduling,
       failure retry, and fail-safe lifecycle.
 - [x] Wire coordinator startup and shutdown into integration setup.
-- [x] Define stub battery/inverter entities in IaC.
-- [x] Install stub battery/inverter entities.
+- [x] Define and install the initial helper boundary in IaC (retired after the
+      live Solis observation cutover).
 - [x] Pin the Solis telemetry and control integrations in IaC.
 - [x] Install the Solis telemetry and control integrations.
 - [ ] Configure the Solis telemetry and control integrations.
 - [x] Expose control, reserve, calculation context, forecast coverage, and
-      coordinator health through one diagnostic sensor; stub helpers expose the
-      successfully applied control.
-- [x] Implement idempotent stub inverter command application.
+      coordinator health through read-only diagnostic sensors.
+- [x] Implement the initial idempotent helper command boundary (retired after
+      the live Solis observation cutover).
 - [ ] Implement idempotent SolisCloud command application.
-- [ ] Replace stub Solis telemetry/control after installation.
+- [x] Replace helper SOC observation with live Solis telemetry; defer guarded
+      Solis actuation until the commissioning workflow is complete.
 - [ ] Add conservative behavior for missing/stale forecasts and API failures.
 - [x] Add deployment wiring and verify on the live HA instance.
 
@@ -207,25 +210,23 @@ in configuration, so tariff price changes require no manual update.
 - Fetch Forecast.Solar during each calculation. Hourly load and half-hourly
   tariff boundaries ensure it is normally refreshed at least hourly without a
   general polling loop.
-- On failure, apply the fail-safe and retry after one minute.
+- On failure, retain the fail-safe obligation, make a bounded fail-safe attempt,
+  and retry observation after one minute.
 - On orderly Home Assistant shutdown, cancel listeners and timers, then make a
   best-effort fail-safe application.
 - Defer the first calculation until Home Assistant has started so source
-  integrations and helpers are available.
-- The coordinator is authoritative. Stub inverter entities are read-only to the
-  user and are not update triggers.
-- Apply controls immediately and idempotently. Set target state of charge
-  before changing operating mode. Round target state of charge upward to a
-  whole percentage so boundary conversion never violates the calculated
-  reserve.
-- The temporary actuator lives in `dependencies.stub_inverter`; it consumes
-  normalized `dependencies.solis_cloud.Control` values and writes the stub
-  `input_number` and `input_select`.
-- Expose one `sensor.house_battery_control`. Its state is the selected operating
-  mode. Scalar attributes record battery energy/SOC, current load and solar,
-  net load, tariff prices/classification, reserve start/end, command target,
-  applied SOC target and power, expiry, planning horizon, and each forecast's
-  coverage end. Do not expose complete forecast arrays.
+  integrations and live Solis entities are available.
+- The coordinator is authoritative for observation and diagnostics. Retired
+  helper IDs are neither configured nor update triggers.
+- Current command and target values are observation-only: no mode or target
+  writes occur. The future guarded actuation path must set and verify Solis
+  policy/slot state transactionally, with all target rounding and reserve
+  proofs established before a write.
+- Expose diagnostic sensors including `sensor.house_battery_control`. Its state
+  is explicitly observation-only. Scalar attributes record battery energy/SOC,
+  current load and solar, net load, tariff prices/classification, reserve
+  start/end, recommended command target and power, expiry, planning horizon,
+  and each forecast's coverage end. Do not expose complete forecast arrays.
 
 ## Load forecast decision
 

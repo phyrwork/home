@@ -16,7 +16,6 @@ def source() -> dict[str, object]:
             "minimum_state_of_charge_percent": 10,
             "charge_efficiency": 0.95,
             "discharge_efficiency": 0.95,
-            "state_of_charge_entity_id": "input_number.house_battery_state_of_charge",
             "power_limit_entity_id": "input_number.house_battery_power_limit",
         },
         "tariff": {
@@ -29,10 +28,6 @@ def source() -> dict[str, object]:
         "policy": {
             "reserve_margin_entity_id": "input_number.reserve_margin",
             "export_hysteresis_entity_id": "input_number.export_hysteresis",
-        },
-        "inverter": {
-            "operating_mode_entity_id": "input_select.operating_mode",
-            "state_of_charge_target_entity_id": "input_number.state_of_charge_target",
         },
     }
 
@@ -78,7 +73,7 @@ def test_builds_spec_with_derived_floor_and_live_power_limit() -> None:
         ("battery", "capacity_kwh", 0),
         ("battery", "minimum_state_of_charge_percent", 100),
         ("battery", "charge_efficiency", 1.01),
-        ("battery", "state_of_charge_entity_id", "not_an_entity"),
+        ("battery", "power_limit_entity_id", "not_an_entity"),
     ),
 )
 def test_rejects_invalid_values(section: str, key: str, value: object) -> None:
@@ -96,4 +91,22 @@ def test_rejects_unknown_keys() -> None:
     invalid["surprise"] = True
 
     with pytest.raises(ValueError, match="unknown keys: surprise"):
+        config.from_mapping(invalid)
+
+
+@pytest.mark.parametrize(
+    "stale",
+    (
+        {"battery": {"state_of_charge_entity_id": "input_number.retired_soc"}},
+        {"inverter": {}},
+    ),
+)
+def test_rejects_removed_legacy_configuration(stale: dict[str, object]) -> None:
+    invalid = source()
+    if "battery" in stale:
+        invalid["battery"] = {**invalid["battery"], **stale["battery"]}  # type: ignore[arg-type]
+    else:
+        invalid["inverter"] = stale["inverter"]
+
+    with pytest.raises(ValueError, match="unknown keys"):
         config.from_mapping(invalid)

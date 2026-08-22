@@ -1,9 +1,0 @@
-house_battery_operating_mode:
-  name: House Battery Operating Mode
-  options:
-    - grid_charge
-    - force_export
-    - self_consumption
-    - hold
-  initial: hold
-  icon: mdi:home-battery

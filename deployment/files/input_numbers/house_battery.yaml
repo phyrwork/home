@@ -1,13 +1,3 @@
-house_battery_state_of_charge:
-  name: House Battery State of Charge
-  min: 0
-  max: 100
-  step: 1
-  initial: 50
-  unit_of_measurement: "%"
-  mode: box
-  icon: mdi:battery
-
 house_battery_power_limit:
   name: House Battery Power Limit
   min: 0
@@ -37,13 +27,3 @@ house_battery_export_hysteresis:
   unit_of_measurement: kWh
   mode: box
   icon: mdi:swap-vertical-bold
-
-house_battery_state_of_charge_target:
-  name: House Battery State of Charge Target
-  min: 0
-  max: 100
-  step: 1
-  initial: 50
-  unit_of_measurement: "%"
-  mode: box
-  icon: mdi:battery-charging
