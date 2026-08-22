@@ -5,6 +5,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import yaml
 from homeassistant.core import HomeAssistant
 
@@ -41,9 +42,29 @@ def policy(coordinator: Coordinator, *, safe: bool = True) -> MagicMock:
     return instance
 
 
-def observation(health: ControllerHealth = ControllerHealth.HEALTHY) -> SimpleNamespace:
+def observation(
+    health: ControllerHealth = ControllerHealth.HEALTHY,
+    *,
+    storage_mode: str = "Self-Use",
+    grid_peak_shaving: bool = True,
+    battery_reserve: bool = False,
+    slot_enabled: bool = False,
+) -> SimpleNamespace:
+    persistent = SimpleNamespace(
+        storage_mode=storage_mode,
+        grid_peak_shaving=grid_peak_shaving,
+        battery_reserve=battery_reserve,
+    )
+    slots = tuple(
+        SimpleNamespace(
+            charge=SimpleNamespace(enabled=slot_enabled),
+            discharge=SimpleNamespace(enabled=False),
+        )
+        for _ in range(6)
+    )
     return SimpleNamespace(
         health=health,
+        snapshot=SimpleNamespace(persistent=persistent, slots=slots),
         telemetry=SimpleNamespace(
             state_of_charge_percent=Decimal("55"),
             battery_power_kw=Decimal("0"),
@@ -54,7 +75,7 @@ def observation(health: ControllerHealth = ControllerHealth.HEALTHY) -> SimpleNa
 
 async def test_disabled_controller_applies_safe_state_once(hass: HomeAssistant) -> None:
     coordinator = Coordinator(hass, config())
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
     actuator = policy(coordinator)
     with patch(
         "custom_components.house_battery_control.coordinator.read_solis_state",
@@ -74,7 +95,7 @@ async def test_disabled_controller_fault_reports_fail_safe_without_write_loop(
     hass: HomeAssistant,
 ) -> None:
     coordinator = Coordinator(hass, config())
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
     actuator = policy(coordinator)
     with patch(
         "custom_components.house_battery_control.coordinator.read_solis_state",
@@ -87,7 +108,42 @@ async def test_disabled_controller_fault_reports_fail_safe_without_write_loop(
 
     assert failed.health is ControllerHealth.FAIL_SAFE
     assert repeated.health is ControllerHealth.FAIL_SAFE
-    assert actuator.async_apply_fail_safe.await_count == 1
+    assert actuator.async_apply_fail_safe.await_count == 3
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("storage_mode", "Feed-In Priority"),
+        ("grid_peak_shaving", False),
+        ("battery_reserve", True),
+        ("slot_enabled", True),
+    ),
+)
+async def test_disabled_controller_reapplies_safe_state_after_external_drift(
+    hass: HomeAssistant,
+    field: str,
+    value: object,
+) -> None:
+    coordinator = Coordinator(hass, config())
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
+    actuator = policy(coordinator)
+    safe = observation()
+    drifted = observation(**{field: value})
+    with patch(
+        "custom_components.house_battery_control.coordinator.read_solis_state",
+        side_effect=(safe, drifted, safe),
+    ):
+        first = await coordinator._async_update_data()
+        healthy = await coordinator._async_update_data()
+        drift = await coordinator._async_update_data()
+        recovered = await coordinator._async_update_data()
+
+    assert first.health is ControllerHealth.FAIL_SAFE
+    assert healthy.health is ControllerHealth.HEALTHY
+    assert drift.health is ControllerHealth.FAIL_SAFE
+    assert recovered.health is ControllerHealth.HEALTHY
+    assert actuator.async_apply_fail_safe.await_count == 2
 
 
 async def test_enabled_unexpected_failure_fails_safe(hass: HomeAssistant) -> None:
@@ -129,6 +185,18 @@ async def test_stop_is_idempotent_and_unsubscribes(hass: HomeAssistant) -> None:
     assert coordinator._stopping
     unsub.assert_called_once_with()
     policy_instance.async_apply_fail_safe.assert_awaited_once_with()
+
+
+async def test_shutdown_policy_refuses_solis_writes_until_guard_is_asserted(
+    hass: HomeAssistant,
+) -> None:
+    coordinator = Coordinator(hass, config())
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
+
+    await coordinator.async_stop()
+
+    assert not coordinator._safe_state_applied
+    assert hass.states.get(coordinator.config.control_disable_guard_entity_id).state == "off"
 
 
 def test_heartbeat_interval_is_one_minute() -> None:

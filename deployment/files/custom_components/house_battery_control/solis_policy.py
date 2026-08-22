@@ -62,6 +62,16 @@ class SolisPolicyActuator:
         the cancelled task still owns the lock.
         """
 
+        # The independent watchdog is the sole guard assertion boundary.  A
+        # coordinator shutdown or component fault may request cleanup before
+        # that automation has asserted the guard; fail closed with no Solis
+        # writes in that case.
+        if not self._guard_on():
+            return PolicyActuationResult(
+                False,
+                False,
+                "control-disable guard is not asserted or unavailable",
+            )
         del deadline  # Writes are individually bounded by HomeAssistantWriter.
         results: list[WriteResult] = []
         try:
@@ -197,7 +207,15 @@ class SolisPolicyActuator:
         return target, None
 
     async def async_disable_all_slots(self) -> DisableAllResult:
+        if not self._guard_on():
+            return DisableAllResult((), False)
         return await self.slots.async_disable_all()
+
+    def _guard_on(self) -> bool:
+        try:
+            return self.writer.capture_precondition(self.control_disable_guard_entity_id).state == "on"
+        except Exception:
+            return False
 
     def _guard_off(self) -> bool:
         try:

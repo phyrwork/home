@@ -102,15 +102,16 @@ def fixture():
     return solis, states, guard, observation
 
 
-def policy():
+def policy(*, guard_state="off"):
     solis, states, guard, observation = fixture()
+    states[guard]["state"] = guard_state
     ha = FakeHA(states)
     return SolisPolicyActuator(solis, HomeAssistantWriter(ha), control_disable_guard_entity_id=guard, inverter_timezone=timezone.utc), ha, observation
 
 
 @pytest.mark.asyncio
 async def test_fail_safe_selects_self_use_disables_reserve_and_keeps_peak_shaving():
-    actuator, ha, _observation = policy()
+    actuator, ha, _observation = policy(guard_state="on")
     result = await actuator.async_apply_fail_safe()
 
     assert result.success and result.safe
@@ -158,7 +159,7 @@ async def _cancel_repeatedly_during_write(actuator, ha, operation):
 
 @pytest.mark.asyncio
 async def test_fail_safe_completes_slot_and_persistent_cleanup_before_cancellation():
-    actuator, ha, _observation = policy()
+    actuator, ha, _observation = policy(guard_state="on")
 
     await _cancel_repeatedly_during_write(actuator, ha, actuator.async_apply_fail_safe)
 
@@ -170,6 +171,28 @@ async def test_fail_safe_completes_slot_and_persistent_cleanup_before_cancellati
         for slot in actuator.config.slots
         for direction in (slot.charge, slot.discharge)
     )
+
+
+@pytest.mark.asyncio
+async def test_fail_safe_guard_off_returns_unsafe_without_solis_writes():
+    actuator, ha, _observation = policy(guard_state="off")
+
+    result = await actuator.async_apply_fail_safe()
+
+    assert not result.success
+    assert not result.safe
+    assert not ha.calls
+
+
+@pytest.mark.asyncio
+async def test_fail_safe_guard_unavailable_returns_unsafe_without_solis_writes():
+    actuator, ha, _observation = policy(guard_state="unavailable")
+
+    result = await actuator.async_apply_fail_safe()
+
+    assert not result.success
+    assert not result.safe
+    assert not ha.calls
 
 
 @pytest.mark.asyncio
@@ -188,8 +211,10 @@ async def test_healthy_cancellation_falls_back_without_lock_deadlock():
     )
 
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
-    assert ha.states[actuator.config.persistent.grid_peak_shaving_entity_id]["state"] == "on"
-    assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
+    # The dynamic path runs with the guard off; cancellation cleanup must not
+    # issue a fail-safe write until the watchdog has asserted it.
+    assert ha.states[actuator.config.persistent.grid_peak_shaving_entity_id]["state"] == "off"
+    assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "on"
 
 
 @pytest.mark.asyncio
@@ -208,7 +233,7 @@ async def test_healthy_rejects_reserve_below_required_capability():
     )
 
     assert not result.success
-    assert result.safe
+    assert not result.safe
     assert "cannot represent" in result.message
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
-    assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
+    assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "on"

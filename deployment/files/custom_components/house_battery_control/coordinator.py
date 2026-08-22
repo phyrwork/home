@@ -15,7 +15,7 @@ from homeassistant.util import dt as dt_util
 
 from .config import Config
 from .const import DOMAIN
-from .contracts import ControllerHealth
+from .contracts import ControllerHealth, StorageMode
 from .ha_writer import HomeAssistantWriter
 from .runtime_inputs import RuntimeInputs, async_read_runtime_inputs
 from .solis_policy import PolicyActuationResult, SolisPolicyActuator
@@ -124,16 +124,21 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             # safe write.  An unavailable/stale/invalid Solis observation is a
             # real fault even when dynamic scheduling is disabled.
             if self._safe_state_applied:
-                if guard is None or guard.state in {"unknown", "unavailable"}:
+                if guard is None or guard.state != "on":
+                    self._safe_state_applied = False
                     return await self._fail_safe_snapshot(
                         now,
-                        "control-disable guard is unavailable",
+                        "control-disable guard is not asserted",
                     )
                 observation = read_solis_state(self.config.solis, self.hass.states, now)
-                if observation.health is not ControllerHealth.HEALTHY:
+                if (
+                    observation.health is not ControllerHealth.HEALTHY
+                    or not self._is_safe_state_proven(observation)
+                ):
+                    self._safe_state_applied = False
                     return await self._fail_safe_snapshot(
                         now,
-                        "Solis observation is unavailable or stale",
+                        "Solis safe state is unavailable or not proven",
                         error=_issues_text(observation),
                     )
                 telemetry = observation.telemetry
@@ -260,6 +265,30 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         if self._stopping:
             return
         await self.async_request_refresh()
+
+    def _is_safe_state_proven(self, observation: object) -> bool:
+        """Return whether a healthy snapshot proves the disabled baseline."""
+
+        snapshot = getattr(observation, "snapshot", None)
+        if snapshot is None:
+            return False
+        try:
+            persistent = snapshot.persistent
+            slots = snapshot.slots
+            if (
+                persistent.storage_mode != StorageMode.SELF_USE.value
+                or persistent.grid_peak_shaving is not True
+                or persistent.battery_reserve is not False
+                or len(slots) != len(self.config.solis.slots)
+            ):
+                return False
+            return all(
+                direction.enabled is False
+                for slot in slots
+                for direction in (slot.charge, slot.discharge)
+            )
+        except (AttributeError, TypeError):
+            return False
 
     def _source_entity_ids(self) -> tuple[str, ...]:
         telemetry = self.config.solis.telemetry
