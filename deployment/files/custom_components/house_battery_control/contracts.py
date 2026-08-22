@@ -117,23 +117,31 @@ class PreserveCurrentValue(CapabilityTarget):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class PreserveCurrentPolicyValue:
+    """Explicitly preserve a persistent value during fail-safe application."""
+
+    pass
+
+
 MaximumVerified = MaximumVerifiedValue
 DocumentedUnlimited = DocumentedUnlimitedValue
 PreserveCurrent = PreserveCurrentValue
+PreservePolicyValue = PreserveCurrentPolicyValue
 
 
 @dataclass(frozen=True, slots=True)
 class InverterPolicy:
     storage_mode: StorageMode
-    grid_charge_allowed: bool
-    export_allowed: bool
+    grid_charge_allowed: bool | PreserveCurrentPolicyValue
+    export_allowed: bool | PreserveCurrentPolicyValue
     peak_shaving_enabled: bool
-    over_discharge_soc: Decimal
-    force_charge_soc: Decimal
-    recovery_soc: Decimal
-    maximum_charge_soc: Decimal
+    over_discharge_soc: Decimal | PreserveCurrentPolicyValue
+    force_charge_soc: Decimal | PreserveCurrentPolicyValue
+    recovery_soc: Decimal | PreserveCurrentPolicyValue
+    maximum_charge_soc: Decimal | PreserveCurrentPolicyValue
     battery_reserve_enabled: bool
-    battery_reserve_soc: Decimal
+    battery_reserve_soc: Decimal | PreserveCurrentPolicyValue
     output_power_target: CapabilityTarget
     feed_in_power_target: CapabilityTarget
 
@@ -149,6 +157,8 @@ class InverterPolicy:
 
 
 def _validate_percent(value: Decimal, name: str) -> None:
+    if isinstance(value, PreserveCurrentPolicyValue):
+        return
     if (
         not isinstance(value, Decimal)
         or not value.is_finite()

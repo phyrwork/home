@@ -17,6 +17,7 @@ from custom_components.house_battery_control.solis_policy import (
 )
 from custom_components.house_battery_control.domain_constants import MAXIMUM_GRID_IMPORT_POWER_KW
 from custom_components.house_battery_control.contracts import StorageMode
+from custom_components.house_battery_control.contracts import PreserveCurrentPolicyValue
 
 
 NOW = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
@@ -41,6 +42,8 @@ def test_candidate_and_fail_safe_builders_use_named_settings():
     assert safe.storage_mode is StorageMode.SELF_USE
     assert safe.battery_reserve_enabled is False
     assert safe.peak_shaving_enabled is True
+    assert isinstance(safe.over_discharge_soc, PreserveCurrentPolicyValue)
+    assert isinstance(safe.grid_charge_allowed, PreserveCurrentPolicyValue)
 
 
 def test_policy_serialization_is_stable_and_explicitly_decimal():
@@ -62,6 +65,15 @@ def test_ephemeral_authorization_is_single_use_and_fingerprint_bound():
     assert not store.consume(other, now=NOW + timedelta(minutes=11), mapping=MAPPING, policy=POLICY)
 
 
+def test_ephemeral_expiry_is_bounded_and_future_attempt_is_rejected_and_consumed():
+    store = EphemeralAuthorizationStore()
+    token = store.issue(now=NOW, mapping=MAPPING, policy=POLICY, ttl=timedelta(minutes=1))
+    assert not store.consume(token, now=NOW - timedelta(seconds=1), mapping=MAPPING, policy=POLICY)
+    assert not store.consume(token, now=NOW, mapping=MAPPING, policy=POLICY)
+    with pytest.raises(ValueError):
+        store.issue(now=NOW, mapping=MAPPING, policy=POLICY, ttl=timedelta(minutes=11))
+
+
 def test_manual_grid_verification_requires_exact_decimal_and_matching_fingerprints():
     record = ManualGridImportVerification(MAXIMUM_GRID_IMPORT_POWER_KW, NOW, MAPPING, POLICY, True)
     assert record.valid(now=NOW, mapping=MAPPING, policy=POLICY)
@@ -71,6 +83,16 @@ def test_manual_grid_verification_requires_exact_decimal_and_matching_fingerprin
 
 
 def test_capability_resolution_is_fingerprint_and_unit_bound():
-    record = CapabilityResolutionRecord("number.example", "W", Decimal("5000"), NOW, MAPPING, POLICY, "commissioning")
+    record = CapabilityResolutionRecord("number.example", "W", Decimal("5000"), NOW, MAPPING, POLICY, "manual_commissioning")
     assert record.valid(now=NOW, mapping=MAPPING, policy=POLICY, unit="W")
     assert not record.valid(now=NOW, mapping=MAPPING, policy=POLICY, unit="A")
+    assert not record.valid(now=NOW, mapping=MAPPING, policy=POLICY, unit="W", entity_id="number.other")
+
+
+def test_documented_unlimited_requires_exact_writable_target():
+    from custom_components.house_battery_control.contracts import DocumentedUnlimitedValue
+
+    with pytest.raises(ValueError):
+        CapabilityResolutionRecord("number.example", "W", DocumentedUnlimitedValue(), NOW, MAPPING, POLICY, "manual_commissioning")
+    record = CapabilityResolutionRecord("number.example", "W", DocumentedUnlimitedValue(), NOW, MAPPING, POLICY, "manual_commissioning", Decimal("5000"))
+    assert record.valid(now=NOW, mapping=MAPPING, policy=POLICY, unit="W", entity_id="number.example")

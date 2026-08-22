@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 import hashlib
 import inspect
@@ -25,6 +25,7 @@ from .contracts import (
     InverterPolicy,
     MaximumVerifiedValue,
     PreserveCurrentValue,
+    PreserveCurrentPolicyValue,
     StorageMode,
 )
 from .domain_constants import (
@@ -34,9 +35,9 @@ from .domain_constants import (
     MINIMUM_SOC_PERCENT,
 )
 from .ha_writer import HomeAssistantWriter
-from .solis_actuator import DisableAllResult, SolisSlotActuator, mapping_fingerprint
+from .solis_actuator import DisableAllResult, MAXIMUM_INVERTER_CLOCK_SKEW, SolisSlotActuator, mapping_fingerprint
 from .solis_config import SolisConfig
-from .solis_state import SolisStateReadResult, SolisStateSnapshot
+from .solis_state import MAXIMUM_TELEMETRY_AGE, SolisStateReadResult, SolisStateSnapshot
 from .write_contracts import (
     NumberWriteRequest,
     SelectWriteRequest,
@@ -51,6 +52,7 @@ POLICY_FINGERPRINT_SCHEMA_VERSION = 1
 ACTUATOR_ORDERING_VERSION = 1
 COMMISSIONING_AUTH_SCHEMA_VERSION = 1
 MAXIMUM_EPHEMERAL_AUTHORIZATION_AGE = timedelta(minutes=10)
+MAXIMUM_CAPABILITY_EVIDENCE_AGE = timedelta(days=30)
 
 
 def _aware(value: datetime, name: str) -> None:
@@ -129,15 +131,15 @@ def build_fail_safe_policy() -> InverterPolicy:
 
     return InverterPolicy(
         storage_mode=StorageMode.SELF_USE,
-        grid_charge_allowed=True,
-        export_allowed=True,
+        grid_charge_allowed=PreserveCurrentPolicyValue(),
+        export_allowed=PreserveCurrentPolicyValue(),
         peak_shaving_enabled=True,
-        over_discharge_soc=Decimal(MINIMUM_SOC_PERCENT),
-        force_charge_soc=Decimal(FORCE_CHARGE_SOC_PERCENT),
-        recovery_soc=Decimal(MINIMUM_SOC_PERCENT),
-        maximum_charge_soc=Decimal(FULL_SOC_PERCENT),
+        over_discharge_soc=PreserveCurrentPolicyValue(),
+        force_charge_soc=PreserveCurrentPolicyValue(),
+        recovery_soc=PreserveCurrentPolicyValue(),
+        maximum_charge_soc=PreserveCurrentPolicyValue(),
         battery_reserve_enabled=False,
-        battery_reserve_soc=Decimal(MINIMUM_SOC_PERCENT),
+        battery_reserve_soc=PreserveCurrentPolicyValue(),
         output_power_target=PreserveCurrentValue(),
         feed_in_power_target=PreserveCurrentValue(),
     )
@@ -286,22 +288,31 @@ class CapabilityResolutionRecord:
     mapping_fingerprint: str
     policy_fingerprint: str
     evidence_classification: str
+    documented_unlimited_target: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not self.entity_id or not self.observed_unit or not self.evidence_classification:
             raise ValueError("capability verification identifiers must not be empty")
         if not isinstance(self.verified_target, DocumentedUnlimitedValue):
             object.__setattr__(self, "verified_target", _decimal(self.verified_target, "verified_target"))
+        elif self.documented_unlimited_target is None:
+            raise ValueError("documented unlimited capability requires an exact writable target")
+        else:
+            object.__setattr__(self, "documented_unlimited_target", _decimal(self.documented_unlimited_target, "documented_unlimited_target"))
         _aware(self.verified_at, "verified_at")
         _fingerprint(self.mapping_fingerprint, "mapping_fingerprint")
         _fingerprint(self.policy_fingerprint, "policy_fingerprint")
 
-    def valid(self, *, now: datetime, mapping: str, policy: str, unit: str) -> bool:
+    def valid(self, *, now: datetime, mapping: str, policy: str, unit: str, entity_id: str | None = None) -> bool:
         try:
             _not_future(self.verified_at, now, "verified_at")
         except ValueError:
             return False
-        return self.entity_id and self.observed_unit == unit and self.mapping_fingerprint == mapping and self.policy_fingerprint == policy
+        if self.verified_at < now - MAXIMUM_CAPABILITY_EVIDENCE_AGE:
+            return False
+        if self.evidence_classification not in {"manual_commissioning", "device_reconciliation", "cloud_reconciliation"}:
+            return False
+        return bool(self.entity_id and (entity_id is None or self.entity_id == entity_id) and self.observed_unit == unit and self.mapping_fingerprint == mapping and self.policy_fingerprint == policy)
 
 
 class EphemeralAuthorizationStore:
@@ -328,6 +339,15 @@ class EphemeralAuthorizationStore:
         self._consumed.add(token.nonce)
         return token.issued_at <= now <= token.expires_at and token.mapping_fingerprint == mapping and token.policy_fingerprint == policy
 
+    def consume_attempt(self, token: object) -> bool:
+        """Consume any registered nonce before validating its current binding."""
+
+        nonce = getattr(token, "nonce", None)
+        if not isinstance(nonce, str) or nonce not in self._issued or nonce in self._consumed:
+            return False
+        self._consumed.add(nonce)
+        return True
+
 
 @dataclass(frozen=True, slots=True)
 class PolicyActuationResult:
@@ -343,6 +363,17 @@ class PolicyActuationResult:
     @property
     def safe(self) -> bool:
         return self.status in {"FAIL_SAFE_APPLIED_HA_PENDING_DEVICE_RECONCILIATION", "CANDIDATE_FAILED_FAIL_SAFE_APPLIED"}
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyCancellationDiagnostic:
+    """Immutable cancellation evidence; the original cancellation is retained."""
+
+    original_exception: asyncio.CancelledError
+    candidate_results: tuple[WriteResult, ...]
+    cleanup_results: tuple[WriteResult, ...]
+    safe_proven: bool
+    cleanup_exception: BaseException | None = None
 
 
 class PolicyActuationStatus:
@@ -368,6 +399,8 @@ class SolisPolicyActuator:
         observation_refresh: Callable[..., SolisStateReadResult] | None = None,
         persistent_authorization: PersistentCandidateAuthorization | None = None,
         ephemeral_authorizations: EphemeralAuthorizationStore | None = None,
+        orchestration_lock: asyncio.Lock | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.config = config
         self.writer = writer
@@ -376,6 +409,9 @@ class SolisPolicyActuator:
         self.observation_refresh = observation_refresh
         self.persistent_authorization = persistent_authorization
         self.ephemeral_authorizations = ephemeral_authorizations or EphemeralAuthorizationStore()
+        self.orchestration_lock = orchestration_lock or asyncio.Lock()
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.last_cancellation_diagnostic: PolicyCancellationDiagnostic | None = None
 
     @property
     def mapping_fingerprint(self) -> str:
@@ -397,21 +433,44 @@ class SolisPolicyActuator:
     async def _refresh(self, now: datetime) -> SolisStateReadResult | None:
         if self.observation_refresh is None:
             return None
-        try:
-            result = self.observation_refresh(now)
-        except TypeError:
-            # Keep the boundary convenient for a reader callback that closes
-            # over its clock; production callers should prefer the explicit
-            # ``now`` form so refresh timing is auditable.
-            result = self.observation_refresh()
+        result = self.observation_refresh(now)
         if inspect.isawaitable(result):
             result = await result
         return result if isinstance(result, SolisStateReadResult) else None
 
-    async def _candidate_write(self, request: object, results: list[WriteResult]) -> WriteResult:
+    def _validate_now(self, supplied: datetime) -> datetime | None:
+        try:
+            _aware(supplied, "now")
+            clock_now = self.clock()
+            _aware(clock_now, "clock now")
+            # A caller may supply a deterministic commissioning instant; the
+            # injected clock is still checked for timezone correctness rather
+            # than silently introducing a naive timestamp.
+            return supplied
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _observation_fresh(observation: SolisStateReadResult, now: datetime, previous: datetime | None = None) -> bool:
+        if not observation.is_healthy or observation.snapshot is None:
+            return False
+        observed_at = observation.snapshot.observed_at
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            return False
+        if observed_at > now or now - observed_at > MAXIMUM_TELEMETRY_AGE:
+            return False
+        if previous is not None and observed_at <= previous:
+            return False
+        inverter_time = observation.snapshot.persistent.inverter_time
+        return inverter_time.tzinfo is not None and inverter_time.utcoffset() is not None and abs(now - inverter_time) <= MAXIMUM_INVERTER_CLOCK_SKEW
+
+    async def _candidate_write(self, request: object, results: list[WriteResult], *, transaction: object | None = None) -> WriteResult:
         if not self._guard_off():
             raise RuntimeError("control-disable guard is not exactly off")
-        result = await self.writer.async_write(request)  # type: ignore[arg-type]
+        if transaction is None:
+            result = await self.writer.async_write(request)  # type: ignore[arg-type]
+        else:
+            result = await transaction.async_write(request)  # type: ignore[attr-defined]
         results.append(result)
         if not result.success:
             raise RuntimeError(f"{result.entity_id}: {result.message or result.outcome.value}")
@@ -422,7 +481,7 @@ class SolisPolicyActuator:
     def _number_request(self, entity_id: str, target: Decimal, capability: object) -> NumberWriteRequest:
         return NumberWriteRequest(self._precondition(entity_id), target, capability=capability)  # type: ignore[arg-type]
 
-    async def _safe_write(self, entity_id: str, target: object, results: list[WriteResult], *, domain: str, capability: object | None = None) -> None:
+    async def _safe_write(self, entity_id: str, target: object, results: list[WriteResult], *, domain: str, capability: object | None = None, transaction: object) -> None:
         try:
             precondition = self._precondition(entity_id)
             if domain == "switch":
@@ -431,7 +490,7 @@ class SolisPolicyActuator:
                 request = SelectWriteRequest(precondition, str(target))
             else:
                 request = NumberWriteRequest(precondition, target, capability=capability)  # type: ignore[arg-type]
-            results.append(await self.writer.async_write(request))
+            results.append(await transaction.async_write(request))  # type: ignore[attr-defined]
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -466,21 +525,38 @@ class SolisPolicyActuator:
         protection = self.config.protection
         # Continue independently after every expected failure.  The safe mode,
         # peak shaving, and reserve writes are the only persistent mutations.
-        await self._safe_write(p.storage_mode_entity_id, StorageMode.SELF_USE.value, results, domain="select")
-        await self._safe_write(p.grid_peak_shaving_entity_id, True, results, domain="switch")
-        await self._safe_write(protection.battery_reserve_entity_id, False, results, domain="switch")
+        async with self.writer.transaction() as transaction:
+            await self._safe_write(p.storage_mode_entity_id, StorageMode.SELF_USE.value, results, domain="select", transaction=transaction)
+            await self._safe_write(p.grid_peak_shaving_entity_id, True, results, domain="switch", transaction=transaction)
+            await self._safe_write(protection.battery_reserve_entity_id, False, results, domain="switch", transaction=transaction)
         safe = self._required_safe_state(self.writer, self.config)
         return tuple(results), safe
 
+    async def async_disable_all_slots(self) -> DisableAllResult:
+        """Serialize the T0006 slot cleanup with policy actuation."""
+
+        async with self.orchestration_lock:
+            return await self.slot_actuator.async_disable_all()
+
+    async def async_apply_slot_intent(self, *args: object, **kwargs: object) -> object:
+        """Serialize any future T0006 slot intent entry point with policy writes."""
+
+        async with self.orchestration_lock:
+            return await self.slot_actuator.async_apply_intent(*args, **kwargs)  # type: ignore[arg-type]
+
     async def async_apply_fail_safe(self) -> PolicyActuationResult:
+        await self.orchestration_lock.acquire()
         try:
-            results, safe = await self._apply_fail_safe_internal()
-            status = PolicyActuationStatus.FAIL_SAFE_APPLIED_HA_PENDING_DEVICE_RECONCILIATION if safe else PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE
-            return PolicyActuationResult(status, fallback_results=results)
-        except asyncio.CancelledError as original:
-            task = asyncio.create_task(self._apply_fail_safe_internal())
-            await self._await_cleanup(task)
-            raise original
+            try:
+                results, safe = await self._apply_fail_safe_internal()
+                status = PolicyActuationStatus.FAIL_SAFE_APPLIED_HA_PENDING_DEVICE_RECONCILIATION if safe else PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE
+                return PolicyActuationResult(status, fallback_results=results)
+            except asyncio.CancelledError as original:
+                task = asyncio.create_task(self._apply_fail_safe_internal())
+                await self._await_cleanup(task, original_exception=original, candidate_results=())
+                raise original
+        finally:
+            self.orchestration_lock.release()
 
     def _authorization_valid(self, authorization: object, now: datetime) -> bool:
         mapping = self.mapping_fingerprint
@@ -491,7 +567,18 @@ class SolisPolicyActuator:
             except ValueError:
                 return False
             return authorization.schema_version == COMMISSIONING_AUTH_SCHEMA_VERSION and authorization.mapping_fingerprint == mapping and authorization.policy_fingerprint == policy and authorization.ha_readback_validated and authorization.device_reconciliation_validated
-        return isinstance(authorization, EphemeralCandidateAuthorization) and authorization.mapping_fingerprint == mapping and authorization.policy_fingerprint == policy and authorization.schema_version == COMMISSIONING_AUTH_SCHEMA_VERSION
+        if not isinstance(authorization, EphemeralCandidateAuthorization):
+            return False
+        try:
+            _aware(now, "now")
+        except ValueError:
+            return False
+        return (
+            authorization.mapping_fingerprint == mapping
+            and authorization.policy_fingerprint == policy
+            and authorization.schema_version == COMMISSIONING_AUTH_SCHEMA_VERSION
+            and authorization.issued_at <= now <= authorization.expires_at
+        )
 
     def _fresh_capability(self, snapshot: SolisStateSnapshot, entity_id: str) -> object | None:
         c = snapshot.capabilities
@@ -513,16 +600,47 @@ class SolisPolicyActuator:
         manual_grid_import_verification: ManualGridImportVerification,
         capability_resolutions: Mapping[str, CapabilityResolutionRecord] | None = None,
     ) -> PolicyActuationResult:
+        if self._validate_now(now) is None:
+            return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("now must be timezone-aware",))
+        await self.orchestration_lock.acquire()
+        try:
+            return await self._async_apply_candidate_locked(
+                observation,
+                now=now,
+                reserve_target=reserve_target,
+                authorization=authorization,
+                manual_grid_import_verification=manual_grid_import_verification,
+                capability_resolutions=capability_resolutions,
+            )
+        finally:
+            self.orchestration_lock.release()
+
+    async def _async_apply_candidate_locked(
+        self,
+        observation: SolisStateReadResult,
+        *,
+        now: datetime,
+        reserve_target: Decimal | int | str,
+        authorization: EphemeralCandidateAuthorization | PersistentCandidateAuthorization,
+        manual_grid_import_verification: ManualGridImportVerification,
+        capability_resolutions: Mapping[str, CapabilityResolutionRecord] | None = None,
+    ) -> PolicyActuationResult:
         results: list[WriteResult] = []
+        if isinstance(authorization, PersistentCandidateAuthorization) and authorization is not self.persistent_authorization:
+            return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("persistent authorization is not the configured record",))
+        if isinstance(authorization, EphemeralCandidateAuthorization):
+            # Consume first, even when the current map/policy no longer matches.
+            if not self.ephemeral_authorizations.consume_attempt(authorization):
+                return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("ephemeral authorization is unknown or already consumed",))
         if not self._authorization_valid(authorization, now):
             return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("candidate authorization is invalid",))
-        if isinstance(authorization, EphemeralCandidateAuthorization):
-            if not self.ephemeral_authorizations.consume(authorization, now=now, mapping=self.mapping_fingerprint, policy=self.policy_fingerprint):
-                return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("ephemeral authorization is expired, reused, or mismatched",))
-        policy = build_candidate_policy(reserve_target)
+        try:
+            policy = build_candidate_policy(reserve_target)
+        except (TypeError, ValueError) as exc:
+            return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=(f"invalid reserve target: {exc}",))
         if not manual_grid_import_verification.valid(now=now, mapping=self.mapping_fingerprint, policy=self.policy_fingerprint):
             return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("manual grid-import verification is invalid",))
-        if not self._guard_off() or not isinstance(observation, SolisStateReadResult) or not observation.is_healthy or observation.snapshot is None:
+        if not self._guard_off() or not isinstance(observation, SolisStateReadResult) or not self._observation_fresh(observation, now):
             return PolicyActuationResult(PolicyActuationStatus.BLOCKED, issues=("healthy observation and exact guard-off are required",))
         try:
             disabled = await self.slot_actuator.async_disable_all()
@@ -532,6 +650,7 @@ class SolisPolicyActuator:
             p = self.config.persistent
             protection = self.config.protection
             snap = observation.snapshot
+            applied_capability_targets: dict[str, Decimal] = {}
             # Protection is deliberately first; every request captures a fresh
             # CAS revision and rechecks the disable guard around the mutation.
             for entity_id, target, capability in (
@@ -542,7 +661,7 @@ class SolisPolicyActuator:
             ):
                 await self._candidate_write(self._number_request(entity_id, target, capability), results)
             fresh = await self._refresh(now)
-            if fresh is None or not fresh.is_healthy or fresh.snapshot is None:
+            if fresh is None or not self._observation_fresh(fresh, now, observation.snapshot.observed_at):
                 raise RuntimeError("fresh Solis capability read is required after protection writes")
             snap = fresh.snapshot
             reserve_cap = snap.persistent.battery_reserve_soc
@@ -556,13 +675,16 @@ class SolisPolicyActuator:
                 (self.config.capability.max_export_power_entity_id, snap.capabilities.maximum_feed_in_power),
             ):
                 record = (capability_resolutions or {}).get(entity_id)
-                if record is None or capability is None or not record.valid(now=now, mapping=self.mapping_fingerprint, policy=self.policy_fingerprint, unit=capability.unit):
+                if record is None or capability is None or not record.valid(now=now, mapping=self.mapping_fingerprint, policy=self.policy_fingerprint, unit=capability.unit, entity_id=entity_id):
                     continue
                 if isinstance(record.verified_target, DocumentedUnlimitedValue):
-                    continue
-                if not capability.minimum <= record.verified_target <= capability.maximum or (record.verified_target - capability.minimum) % capability.step != 0:
+                    target = record.documented_unlimited_target
+                else:
+                    target = record.verified_target
+                if target is None or not capability.minimum <= target <= capability.maximum or (target - capability.minimum) % capability.step != 0:
                     raise RuntimeError(f"capability resolution is incompatible with fresh metadata for {entity_id}")
-                await self._candidate_write(self._number_request(entity_id, record.verified_target, capability), results)
+                await self._candidate_write(self._number_request(entity_id, target, capability), results)
+                applied_capability_targets[entity_id] = target
 
             await self._candidate_write(SwitchWriteRequest(self._precondition(p.allow_grid_charging_entity_id), True), results)
             await self._candidate_write(SwitchWriteRequest(self._precondition(p.allow_export_entity_id), True), results)
@@ -572,17 +694,34 @@ class SolisPolicyActuator:
             # Storage mode is intentionally last among persistent candidate writes.
             await self._candidate_write(SelectWriteRequest(self._precondition(p.storage_mode_entity_id), StorageMode.FEED_IN_PRIORITY.value), results)
             verified = await self._refresh(now)
-            if verified is None or not verified.is_healthy or verified.snapshot is None:
+            if verified is None or not self._observation_fresh(verified, now, snap.observed_at):
                 raise RuntimeError("complete candidate readback is unavailable")
             final = verified.snapshot
             if not self._guard_off() or any(slot.charge.enabled or slot.discharge.enabled for slot in final.slots):
                 raise RuntimeError("candidate readback did not prove all slots disabled")
-            if final.persistent.storage_mode != StorageMode.FEED_IN_PRIORITY.value or not final.persistent.allow_grid_charging or not final.persistent.allow_export or not final.persistent.grid_peak_shaving or not final.persistent.battery_reserve:
+            fp = final.persistent
+            if (
+                fp.storage_mode != StorageMode.FEED_IN_PRIORITY.value
+                or not fp.allow_grid_charging
+                or not fp.allow_export
+                or not fp.grid_peak_shaving
+                or not fp.battery_reserve
+                or fp.over_discharge_soc.current_value != Decimal(MINIMUM_SOC_PERCENT)
+                or fp.force_charge_soc.current_value != Decimal(FORCE_CHARGE_SOC_PERCENT)
+                or fp.recovery_soc.current_value != Decimal(MINIMUM_SOC_PERCENT)
+                or fp.maximum_charge_soc.current_value != Decimal(FULL_SOC_PERCENT)
+                or fp.battery_reserve_soc.current_value != policy.battery_reserve_soc
+                or abs(now - fp.inverter_time) > MAXIMUM_INVERTER_CLOCK_SKEW
+            ):
                 raise RuntimeError("candidate readback does not match the requested persistent policy")
+            for entity_id, target in applied_capability_targets.items():
+                capability = self._fresh_capability(final, entity_id)
+                if capability is None or capability.current_value != target:
+                    raise RuntimeError(f"candidate capability readback does not match {entity_id}")
             return PolicyActuationResult(PolicyActuationStatus.APPLIED_HA_PENDING_DEVICE_RECONCILIATION, candidate_results=tuple(results))
         except asyncio.CancelledError as original:
             task = asyncio.create_task(self._apply_fail_safe_internal())
-            await self._await_cleanup(task)
+            await self._await_cleanup(task, original_exception=original, candidate_results=tuple(results))
             raise original
         except Exception as exc:
             issues = (str(exc),)
@@ -595,8 +734,15 @@ class SolisPolicyActuator:
             status = PolicyActuationStatus.CANDIDATE_FAILED_FAIL_SAFE_APPLIED if safe else PolicyActuationStatus.FAILED_UNSAFE
             return PolicyActuationResult(status, tuple(results), fallback, issues)
 
-    async def _await_cleanup(self, task: asyncio.Task[object]) -> object:
+    async def _await_cleanup(
+        self,
+        task: asyncio.Task[object],
+        *,
+        original_exception: asyncio.CancelledError,
+        candidate_results: tuple[WriteResult, ...],
+    ) -> object:
         current = asyncio.current_task()
+        cleanup_exception: BaseException | None = None
         while not task.done():
             try:
                 await asyncio.shield(task)
@@ -604,7 +750,20 @@ class SolisPolicyActuator:
                 if current is not None:
                     current.uncancel()
                 continue
-        return await task
+        try:
+            cleanup_result = await task
+        except BaseException as exc:
+            cleanup_exception = exc
+            cleanup_result = ((), False)
+        cleanup_results, safe = cleanup_result if isinstance(cleanup_result, tuple) and len(cleanup_result) == 2 else ((), False)
+        self.last_cancellation_diagnostic = PolicyCancellationDiagnostic(
+            original_exception=original_exception,
+            candidate_results=candidate_results,
+            cleanup_results=tuple(cleanup_results),
+            safe_proven=bool(safe),
+            cleanup_exception=cleanup_exception,
+        )
+        return cleanup_result
 
 
 # Compatibility vocabulary for adapters and tests.
@@ -630,6 +789,7 @@ __all__ = [
     "PersistentCandidateAuthorization",
     "PolicyActuationResult",
     "PolicyActuationStatus",
+    "PolicyCancellationDiagnostic",
     "SolisCandidateActuator",
     "SolisPolicyActuator",
     "bounded_reserve_soc",
