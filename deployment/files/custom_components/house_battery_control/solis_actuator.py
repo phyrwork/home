@@ -43,6 +43,42 @@ COMMISSIONING_SCHEMA_VERSION = 1
 MAPPING_FINGERPRINT_SCHEMA_VERSION = 1
 
 _TIME_TEXT = re.compile(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+
+
+class ReentrantAsyncLock:
+    """Task-reentrant lock shared by all Solis policy and slot entry points."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: asyncio.Task[object] | None = None
+        self._depth = 0
+
+    async def acquire(self) -> bool:
+        task = asyncio.current_task()
+        if task is not None and task is self._owner:
+            self._depth += 1
+            return True
+        await self._lock.acquire()
+        self._owner = task
+        self._depth = 1
+        return True
+
+    def release(self) -> None:
+        if asyncio.current_task() is not self._owner:
+            raise RuntimeError("Solis orchestration lock released by non-owner")
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._lock.release()
+
+    async def __aenter__(self) -> "ReentrantAsyncLock":
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.release()
+
+
 @dataclass(frozen=True, slots=True)
 class CommissioningRecord:
     """The persisted proof that this exact entity map was commissioned."""
@@ -264,6 +300,7 @@ class SolisSlotActuator:
         control_disable_guard_entity_id: str,
         inverter_timezone: tzinfo,
         commissioning: CommissioningRecord | None = None,
+        orchestration_lock: ReentrantAsyncLock | None = None,
     ) -> None:
         if not control_disable_guard_entity_id.startswith("input_boolean.") and not control_disable_guard_entity_id.startswith("switch."):
             raise ValueError("control-disable guard must be a switch-like entity")
@@ -276,6 +313,7 @@ class SolisSlotActuator:
         self.inverter_timezone = inverter_timezone
         self._construction_fingerprint = mapping_fingerprint(config)
         self.last_cancellation_result: CancellationDiagnostic | None = None
+        self.orchestration_lock = orchestration_lock or ReentrantAsyncLock()
 
     @property
     def mapping_fingerprint(self) -> str:
@@ -447,13 +485,14 @@ class SolisSlotActuator:
     async def async_disable_all(self) -> DisableAllResult:
         """Disable every direction, independently of health or commissioning."""
 
-        self.last_cancellation_result = None
-        partial_results: list[WriteResult] = []
-        try:
-            return await self._disable_all_once(partial_results)
-        except asyncio.CancelledError as original:
-            await self._record_cancelled_cleanup(original, partial_results)
-            raise original
+        async with self.orchestration_lock:
+            self.last_cancellation_result = None
+            partial_results: list[WriteResult] = []
+            try:
+                return await self._disable_all_once(partial_results)
+            except asyncio.CancelledError as original:
+                await self._record_cancelled_cleanup(original, partial_results)
+                raise original
 
     async def _cleanup_after_failure(self, results: list[WriteResult]) -> bool:
         cleanup = await self._disable_all_once(results)
@@ -483,13 +522,14 @@ class SolisSlotActuator:
     ) -> SlotActuationResult:
         """Apply one active intent or prove the system safe after failure."""
 
-        self.last_cancellation_result = None
-        results: list[WriteResult] = []
-        try:
-            return await self._async_apply_intent(intent, observation, now, results)
-        except asyncio.CancelledError as original:
-            await self._record_cancelled_cleanup(original, results)
-            raise original
+        async with self.orchestration_lock:
+            self.last_cancellation_result = None
+            results: list[WriteResult] = []
+            try:
+                return await self._async_apply_intent(intent, observation, now, results)
+            except asyncio.CancelledError as original:
+                await self._record_cancelled_cleanup(original, results)
+                raise original
 
     async def _async_apply_intent(
         self,
@@ -597,6 +637,7 @@ __all__ = [
     "DisableAllResult",
     "MAXIMUM_INVERTER_CLOCK_SKEW",
     "MAPPING_FINGERPRINT_SCHEMA_VERSION",
+    "ReentrantAsyncLock",
     "SlotActuationResult",
     "SlotActuationStatus",
     "SolisSlotActuator",
