@@ -165,6 +165,12 @@ Before writes require:
 - inverter clock within the T0006 skew limit;
 - requested reserve within named physical bounds.
 
+Require the control-disable guard to be exact `off`. Re-read it immediately before
+every candidate mutation and immediately after each Home Assistant readback. If it
+becomes asserted, missing, unknown, unavailable or otherwise invalid, stop
+candidate application and invoke fail-safe. A prior guard read is never sufficient
+authorization for a later write.
+
 Candidate authorization does not authorize a slot intent.
 
 ## Candidate write order
@@ -246,6 +252,8 @@ Cover:
 - changed compatible and incompatible Reserve SOC bounds;
 - no clamping to stale or incompatible metadata;
 - storage mode applied last;
+- guard revalidation before and after every candidate mutation;
+- an in-flight guard change invoking fail-safe before further candidate writes;
 - failures at every candidate stage invoking fail-safe;
 - explicit result distinctions and ordered diagnostics;
 - shielded fail-safe and cancellation propagation;

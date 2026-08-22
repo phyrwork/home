@@ -113,6 +113,10 @@ Before acquiring a write transaction, require:
 Only active intents are accepted. Do not program a future repeating slot early.
 Return the next mandatory disable deadline as `min(end, expiry)`.
 
+The actuator also requires the configured control-disable guard entity ID. Only
+exact `off` permits slot application. Missing, `unknown`, `unavailable` or any
+other value is asserted and permits cleanup only.
+
 Reject any local interval whose repeating `HH:MM` representation is ambiguous or
 nonexistent across a daylight-saving transition. Do not guess a fold.
 
@@ -137,8 +141,12 @@ For a commissioned, valid intent:
 4. Re-read and prove all 12 are disabled.
 5. Configure target time, current and target SOC while the target is disabled.
 6. Require successful T0005 Home Assistant readback for every configured value.
-7. Enable only the target direction.
-8. Re-read all 12 enable switches and prove exactly the target is enabled.
+7. Re-read the control-disable guard and require exact `off` immediately before
+   enabling.
+8. Enable only the target direction.
+9. Re-read the guard after enable readback; an asserted or invalid guard triggers
+   immediate all-slot cleanup.
+10. Re-read all 12 enable switches and prove exactly the target is enabled.
 
 Initial disable may use the healthy snapshot as a diagnostic hint, but every write
 uses current-state compare-and-set and every post-write proof uses current state.
@@ -215,6 +223,8 @@ Use deterministic fake T0004 snapshots and a recording T0005 writer to cover:
 - exact directional owner mapping and rejection of every invalid combination;
 - uncommissioned, malformed, future-dated and fingerprint-mismatched gates;
 - proof that an uncommissioned path never writes configuration or enables;
+- guard missing/asserted/invalid before enable and guard change after enable;
+- proof that a post-enable guard change always invokes all-slot cleanup;
 - canonical serialization and stable fingerprinting;
 - fingerprint change after every mapped field category changes;
 - active, future, expired and expiry-bounded intents;
