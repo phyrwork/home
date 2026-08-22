@@ -1,6 +1,6 @@
 # T0012 — Model trusted Octopus cheap windows and cycle value
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 
