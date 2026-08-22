@@ -149,12 +149,9 @@ class BatteryEnergySensor(_EnergySensor):
     def native_value(self) -> float | None:
         """Return the current stored battery energy."""
         snapshot = self.coordinator.data
-        if snapshot is None or (snapshot.diagnostic_energy_kwh is None and snapshot.battery_state is None):
+        if snapshot is None or snapshot.diagnostic_energy_kwh is None:
             return None
-        energy = snapshot.diagnostic_energy_kwh
-        if energy is None:
-            energy = snapshot.battery_state.energy_kwh
-        return float(energy)
+        return float(snapshot.diagnostic_energy_kwh)
 
 
 class ReserveTargetSensor(_EnergySensor):
@@ -167,12 +164,9 @@ class ReserveTargetSensor(_EnergySensor):
     def native_value(self) -> float | None:
         """Return the current reserve target."""
         snapshot = self.coordinator.data
-        if snapshot is None or (snapshot.reserve is None and snapshot.decision is None):
+        if snapshot is None or snapshot.reserve is None:
             return None
-        reserve = snapshot.reserve
-        if reserve is None:
-            reserve = snapshot.decision.reserve
-        return float(reserve.start_energy_kwh)
+        return float(snapshot.reserve.start_energy_kwh)
 
 
 class ReserveBalanceSensor(_EnergySensor):
@@ -185,14 +179,10 @@ class ReserveBalanceSensor(_EnergySensor):
     def native_value(self) -> float | None:
         """Return positive surplus or negative reserve shortfall energy."""
         snapshot = self.coordinator.data
-        if snapshot is None or (snapshot.reserve is None and snapshot.decision is None) or (snapshot.diagnostic_energy_kwh is None and snapshot.battery_state is None):
+        if snapshot is None or snapshot.reserve is None or snapshot.diagnostic_energy_kwh is None:
             return None
-        reserve = snapshot.reserve or snapshot.decision.reserve
-        energy = snapshot.diagnostic_energy_kwh
-        if energy is None:
-            energy = snapshot.battery_state.energy_kwh
         return float(
-            energy - reserve.start_energy_kwh
+            snapshot.diagnostic_energy_kwh - snapshot.reserve.start_energy_kwh
         )
 
 
@@ -244,6 +234,11 @@ class HealthSensor(_SnapshotSensor):
             "source_quality": snapshot.source_quality,
             "issues": snapshot.issues,
             "unexpected_error": snapshot.unexpected_error,
+            "fail_safe_proof_complete": None if snapshot.fail_safe_proof is None else snapshot.fail_safe_proof.complete,
+            "fail_safe_ha_safe": None if snapshot.fail_safe_proof is None else snapshot.fail_safe_proof.ha_safe,
+            "fail_safe_device_reconciliation_pending": None if snapshot.fail_safe_proof is None else snapshot.fail_safe_proof.device_reconciliation_pending,
+            "fail_safe_attempt_status": None if snapshot.fail_safe_attempt is None else snapshot.fail_safe_attempt.status,
+            "fail_safe_attempt_deadline": None if snapshot.fail_safe_attempt is None else snapshot.fail_safe_attempt.deadline.isoformat(),
         }
 
 

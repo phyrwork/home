@@ -210,6 +210,33 @@ def policy_fixture(*, persistent=False):
 
 
 @pytest.mark.asyncio
+async def test_fail_safe_absolute_deadline_bounds_every_persistent_primitive():
+    actuator, ha, _initial, _token, _manual, clock, _record = policy_fixture()
+    persistent = actuator.config.persistent
+    ha.states[persistent.storage_mode_entity_id]["state"] = "Feed-In Priority"
+    ha.states[persistent.grid_peak_shaving_entity_id]["state"] = "off"
+    ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] = "on"
+
+    result = await actuator.async_apply_fail_safe(
+        deadline=NOW + timedelta(milliseconds=18)
+    )
+
+    assert result.status == PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE
+    assert len(ha.calls) == 1
+    assert ha.calls[0][2]["entity_id"] == persistent.storage_mode_entity_id
+    assert any("deadline exhausted" in item.message for item in result.results)
+    assert clock.value >= NOW + timedelta(milliseconds=18)
+
+
+@pytest.mark.asyncio
+async def test_expired_fail_safe_deadline_starts_no_primitive():
+    actuator, ha, _initial, _token, _manual, _clock, _record = policy_fixture()
+    result = await actuator.async_apply_fail_safe(deadline=NOW)
+    assert result.status == PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE
+    assert ha.calls == []
+
+
+@pytest.mark.asyncio
 async def test_real_candidate_actuator_applies_ordered_policy_and_preserves_globals():
     actuator, ha, initial, token, manual, _clock, _record = policy_fixture()
     original_globals = {entity_id: ha.states[entity_id]["state"] for entity_id in (

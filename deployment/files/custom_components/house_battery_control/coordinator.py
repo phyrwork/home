@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, fields
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant
@@ -41,6 +41,41 @@ class Decision:
 
 
 @dataclass(frozen=True, slots=True)
+class FailSafeStateEvidence:
+    """One revision-bearing HA state used in a fresh fail-safe proof."""
+
+    entity_id: str
+    expected_state: str
+    observed_state: str | None
+    last_updated: datetime | None
+    revision: str | None
+    matches: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FailSafeProof:
+    """Fresh, complete HA proof with device reconciliation kept explicit."""
+
+    observed_at: datetime
+    states: tuple[FailSafeStateEvidence, ...]
+    complete: bool
+    ha_safe: bool
+    device_reconciliation_pending: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FailSafeAttemptEvidence:
+    """Lifecycle evidence for the latest bounded fail-safe attempt."""
+
+    started_at: datetime
+    deadline: datetime
+    completed_at: datetime | None
+    status: str
+    result: PolicyActuationResult | None
+    proof: FailSafeProof | None
+
+
+@dataclass(frozen=True, slots=True)
 class Snapshot:
     """Immutable result of one heartbeat, including degraded observations."""
 
@@ -49,6 +84,8 @@ class Snapshot:
     health: ControllerHealth = ControllerHealth.DEGRADED
     fail_safe_obligation: bool = True
     fail_safe_pending: bool = False
+    fail_safe_proof: FailSafeProof | None = None
+    fail_safe_attempt: FailSafeAttemptEvidence | None = None
     guard_state: str | None = None
     guard_quality: str = "invalid"
     solis: SolisStateReadResult | None = None
@@ -85,6 +122,15 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         self._stopping = False
         self._policy: SolisPolicyActuator | None = None
         self._writer: HomeAssistantWriter | None = None
+        self._last_fail_safe_proof: FailSafeProof | None = None
+        self._last_fail_safe_attempt: FailSafeAttemptEvidence | None = None
+
+    @staticmethod
+    def _now() -> datetime:
+        try:
+            return dt_util.now()
+        except Exception:
+            return datetime.now(timezone.utc)
 
     async def async_start(self) -> None:
         self._stopping = False
@@ -100,16 +146,56 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             self._unsub_sources = None
         self._fail_safe_obligation = True
         await self.async_shutdown()
-        if self._fail_safe_task is not None and not self._fail_safe_task.done():
-            await self._await_task(self._fail_safe_task, SHUTDOWN_FAIL_SAFE_BUDGET)
-        else:
+        existing = self._fail_safe_task
+        if existing is not None and not existing.done():
+            await self._await_task(existing, SHUTDOWN_FAIL_SAFE_BUDGET)
+        proof = self._fresh_fail_safe_proof(self._now())
+        self._last_fail_safe_proof = proof
+        if not proof.ha_safe:
             await self._start_fail_safe(SHUTDOWN_FAIL_SAFE_BUDGET, wait=True)
-        if self._fail_safe_task is not None and not self._fail_safe_task.done():
-            await self._await_task(self._fail_safe_task, SHUTDOWN_FAIL_SAFE_BUDGET)
+        final_proof = self._fresh_fail_safe_proof(self._now())
+        self._last_fail_safe_proof = final_proof
+        self._fail_safe_obligation = not final_proof.ha_safe
+        if not final_proof.ha_safe:
+            _LOGGER.error("House battery shutdown fail-safe proof is incomplete")
 
     async def _async_update_data(self) -> Snapshot:
         """Read all sources and always return a heartbeat snapshot."""
-        now = dt_util.now()
+        now = self._now()
+        try:
+            return await self._async_observe(now)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._fail_safe_obligation = True
+            unexpected = f"{type(error).__name__}: {error}"
+            _LOGGER.exception("Unexpected house battery observation-cycle failure")
+            try:
+                await self._start_fail_safe(FAIL_SAFE_ATTEMPT_BUDGET)
+            except asyncio.CancelledError:
+                raise
+            except Exception as fail_safe_error:
+                self._fail_safe_diagnostics = (
+                    f"failsafe_setup:{type(fail_safe_error).__name__}: {fail_safe_error}",
+                )
+            return Snapshot(
+                heartbeat_at=now,
+                last_healthy_at=self._last_healthy_at,
+                health=ControllerHealth.FAIL_SAFE,
+                fail_safe_obligation=True,
+                fail_safe_pending=(
+                    self._fail_safe_task is not None
+                    and not self._fail_safe_task.done()
+                ),
+                fail_safe_proof=self._last_fail_safe_proof,
+                fail_safe_attempt=self._last_fail_safe_attempt,
+                issues=("unexpected_coordinator_exception",)
+                + self._fail_safe_diagnostics,
+                unexpected_error=unexpected,
+            )
+
+    async def _async_observe(self, now: datetime) -> Snapshot:
+        """Perform one complete observation under the outer exception shell."""
         if self._stopping:
             return self._snapshot(now, ())
         issues: list[str] = []
@@ -123,6 +209,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         issues.extend(issue.code for issue in solis.issues)
         energy = self._diagnostic_energy(solis)
         source: planner.Input | None = None
+        intervals: tuple[planner.InputInterval, ...] = ()
         recommendation: Decision | None = None
         try:
             source = await inputs.async_read_input(self.hass, self.config, now=now, solis_result=solis)
@@ -144,31 +231,32 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             self._fail_safe_obligation = True
             _LOGGER.exception("Unexpected house battery observation failure")
 
-        complete = solis.is_healthy and guard_quality == "valid" and source is not None and unexpected is None
+        common_horizon_end = intervals[-1].interval.end if intervals else None
+        complete = solis.is_healthy and guard_quality == "valid" and source is not None and common_horizon_end is not None and common_horizon_end > now and unexpected is None
         if not complete:
             recommendation = None
         if complete:
             self._last_healthy_at = now
         else:
             self._fail_safe_obligation = True
-        proven = self._fresh_fail_safe_proof()
-        if complete and guard_open and proven and self._fail_safe_task is None:
+        proof = self._fresh_fail_safe_proof(now)
+        self._last_fail_safe_proof = proof
+        if complete and guard_open and proof.ha_safe and self._fail_safe_task is None:
             self._fail_safe_obligation = False
-        elif self._fail_safe_obligation and not proven:
+        elif self._fail_safe_obligation and not proof.ha_safe:
             await self._start_fail_safe(FAIL_SAFE_ATTEMPT_BUDGET)
-        return self._snapshot(now, tuple(issues), guard_state=guard_state, guard_quality=guard_quality, solis=solis, energy=energy, recommendation=recommendation, source=source, quality=tuple(quality), unexpected_error=unexpected, complete=complete)
+        return self._snapshot(now, tuple(issues), guard_state=guard_state, guard_quality=guard_quality, solis=solis, energy=energy, recommendation=recommendation, source=source, intervals=intervals, quality=tuple(quality), unexpected_error=unexpected, complete=complete)
 
-    def _snapshot(self, now: datetime, issues: tuple[str, ...], *, guard_state: str | None = None, guard_quality: str = "invalid", solis: SolisStateReadResult | None = None, energy: Decimal | None = None, recommendation: Decision | None = None, source: planner.Input | None = None, quality: tuple[str, ...] = (), unexpected_error: str | None = None, complete: bool = False) -> Snapshot:
+    def _snapshot(self, now: datetime, issues: tuple[str, ...], *, guard_state: str | None = None, guard_quality: str = "invalid", solis: SolisStateReadResult | None = None, energy: Decimal | None = None, recommendation: Decision | None = None, source: planner.Input | None = None, intervals: tuple[planner.InputInterval, ...] | list[planner.InputInterval] = (), quality: tuple[str, ...] = (), unexpected_error: str | None = None, complete: bool = False) -> Snapshot:
         pending = self._fail_safe_task is not None and not self._fail_safe_task.done()
         health = ControllerHealth.FAIL_SAFE if self._fail_safe_obligation or pending else ControllerHealth.HEALTHY if complete else ControllerHealth.DEGRADED
         first = None
         if source is not None:
-            intervals = planner.fuse_forecasts(now=source.now, tariff_forecast=source.tariff_forecast, load_forecast=source.load_forecast, solar_forecast=source.solar_forecast)
             first = intervals[0] if intervals else None
         control = None
         if recommendation is not None and source is not None:
             control = solis_cloud.to_control(recommendation.command, source.battery_spec)
-        return Snapshot(heartbeat_at=now, last_healthy_at=self._last_healthy_at, health=health, fail_safe_obligation=self._fail_safe_obligation, fail_safe_pending=pending, guard_state=guard_state, guard_quality=guard_quality, solis=solis, diagnostic_energy_kwh=energy, recommendation=recommendation, reserve=None if recommendation is None else recommendation.reserve, source_quality=quality, issues=issues + self._fail_safe_diagnostics, unexpected_error=unexpected_error, decision=recommendation, battery_spec=None if source is None else source.battery_spec, battery_state=None if source is None else source.battery_state, input_interval=first, control=control, planning_horizon_end=None if source is None else max(item.interval.end for item in source.tariff_forecast), tariff_forecast_end=None if source is None else max(item.interval.end for item in source.tariff_forecast), load_forecast_end=None if source is None else max(item.interval.end for item in source.load_forecast), solar_forecast_end=None if source is None else max(item.interval.end for item in source.solar_forecast))
+        return Snapshot(heartbeat_at=now, last_healthy_at=self._last_healthy_at, health=health, fail_safe_obligation=self._fail_safe_obligation, fail_safe_pending=pending, fail_safe_proof=self._last_fail_safe_proof, fail_safe_attempt=self._last_fail_safe_attempt, guard_state=guard_state, guard_quality=guard_quality, solis=solis, diagnostic_energy_kwh=energy, recommendation=recommendation, reserve=None if recommendation is None else recommendation.reserve, source_quality=quality, issues=issues + self._fail_safe_diagnostics, unexpected_error=unexpected_error, decision=recommendation, battery_spec=None if source is None else source.battery_spec, battery_state=None if source is None else source.battery_state, input_interval=first, control=control, planning_horizon_end=None if not intervals else intervals[-1].interval.end, tariff_forecast_end=None if source is None else max(item.interval.end for item in source.tariff_forecast), load_forecast_end=None if source is None else max(item.interval.end for item in source.load_forecast), solar_forecast_end=None if source is None else max(item.interval.end for item in source.solar_forecast))
 
     def _read_guard(self) -> tuple[str | None, str]:
         state = self.hass.states.get(self.config.control_disable_guard_entity_id)
@@ -181,23 +269,55 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             return None
         return self.config.battery.capacity_kwh * telemetry.state_of_charge_percent / Decimal(100)
 
-    def _state_value(self, entity_id: str) -> str | None:
-        state = self.hass.states.get(entity_id)
-        return getattr(state, "state", None) if state is not None else None
-
-    def _fresh_fail_safe_proof(self) -> bool:
+    def _fresh_fail_safe_proof(self, observed_at: datetime) -> FailSafeProof:
         solis = self.config.solis
         if solis is None:
-            return False
-        try:
-            for slot in solis.slots:
-                for direction in (slot.charge, slot.discharge):
-                    if self._state_value(direction.enable_entity_id) != "off":
-                        return False
-            persistent = solis.persistent
-            return self._state_value(persistent.storage_mode_entity_id) == "Self-Use" and self._state_value(persistent.grid_peak_shaving_entity_id) == "on" and self._state_value(solis.protection.battery_reserve_entity_id) == "off"
-        except Exception:
-            return False
+            return FailSafeProof(observed_at, (), False, False, False)
+        required: list[tuple[str, str]] = []
+        for slot in solis.slots:
+            for direction in (slot.charge, slot.discharge):
+                required.append((direction.enable_entity_id, "off"))
+        required.extend(
+            (
+                (solis.persistent.storage_mode_entity_id, "Self-Use"),
+                (solis.persistent.grid_peak_shaving_entity_id, "on"),
+                (solis.protection.battery_reserve_entity_id, "off"),
+            )
+        )
+        evidence: list[FailSafeStateEvidence] = []
+        for entity_id, expected in required:
+            state = self.hass.states.get(entity_id)
+            observed = getattr(state, "state", None) if state is not None else None
+            updated = getattr(state, "last_updated", None) if state is not None else None
+            context = getattr(state, "context", None) if state is not None else None
+            revision = getattr(context, "id", None) if context is not None else None
+            valid_revision = isinstance(revision, str) and bool(revision)
+            valid_time = isinstance(updated, datetime) and updated.tzinfo is not None and updated.utcoffset() is not None
+            evidence.append(
+                FailSafeStateEvidence(
+                    entity_id,
+                    expected,
+                    observed if isinstance(observed, str) else None,
+                    updated if valid_time else None,
+                    revision if valid_revision else None,
+                    observed == expected and valid_time and valid_revision,
+                )
+            )
+        states = tuple(evidence)
+        complete = len(states) == 15 and all(
+            item.observed_state is not None
+            and item.last_updated is not None
+            and item.revision is not None
+            for item in states
+        )
+        ha_safe = complete and all(item.matches for item in states)
+        return FailSafeProof(
+            observed_at,
+            states,
+            complete,
+            ha_safe,
+            device_reconciliation_pending=ha_safe,
+        )
 
     async def _start_fail_safe(self, budget: timedelta, *, wait: bool = False) -> None:
         if self._fail_safe_task is not None and not self._fail_safe_task.done():
@@ -214,17 +334,30 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             except Exception as error:
                 self._fail_safe_diagnostics = (f"failsafe_setup:{error}",)
                 return
-        self._fail_safe_task = asyncio.create_task(self._run_fail_safe(budget))
+        started_at = self._now()
+        deadline = started_at + budget
+        self._last_fail_safe_attempt = FailSafeAttemptEvidence(
+            started_at,
+            deadline,
+            None,
+            "pending",
+            None,
+            None,
+        )
+        self._fail_safe_task = asyncio.create_task(
+            self._run_fail_safe(deadline, budget)
+        )
         self._fail_safe_task.add_done_callback(self._fail_safe_done)
         if wait:
             await self._await_task(self._fail_safe_task, budget)
 
-    async def _run_fail_safe(self, budget: timedelta) -> object:
+    async def _run_fail_safe(self, deadline: datetime, budget: timedelta) -> object:
         assert self._policy is not None
-        deadline = dt_util.now() + budget
         try:
             result: PolicyActuationResult = await asyncio.wait_for(self._policy.async_apply_fail_safe(deadline=deadline), budget.total_seconds())
-            self._fail_safe_obligation = not result.safe
+            proof = self._fresh_fail_safe_proof(self._now())
+            self._last_fail_safe_proof = proof
+            self._fail_safe_obligation = not proof.ha_safe
             return result
         except asyncio.CancelledError:
             raise
@@ -235,6 +368,8 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
     def _fail_safe_done(self, task: asyncio.Task[object]) -> None:
         if self._fail_safe_task is task:
             self._fail_safe_task = None
+        result_value: PolicyActuationResult | None = None
+        status = "failed"
         try:
             result = task.result()
         except asyncio.CancelledError:
@@ -247,7 +382,19 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             if isinstance(result, Exception):
                 self._fail_safe_diagnostics = (f"failsafe_exception:{result}",)
             elif isinstance(result, PolicyActuationResult):
+                result_value = result
+                status = "ha_safe_device_reconciliation_pending" if result.safe else "unsafe"
                 self._fail_safe_diagnostics = tuple(result.issues)
+        prior = self._last_fail_safe_attempt
+        if prior is not None:
+            self._last_fail_safe_attempt = FailSafeAttemptEvidence(
+                prior.started_at,
+                prior.deadline,
+                self._now(),
+                status,
+                result_value,
+                self._last_fail_safe_proof,
+            )
         if not self._stopping:
             self.hass.async_create_task(self.async_request_refresh())
 
@@ -276,4 +423,4 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         return tuple(sorted(ids))
 
 
-__all__ = ["Coordinator", "Decision", "FAIL_SAFE_ATTEMPT_BUDGET", "HEARTBEAT_INTERVAL", "HEARTBEAT_STALE_AFTER", "OBSERVATION_ONLY_LEGACY_POWER_LIMIT", "SHUTDOWN_FAIL_SAFE_BUDGET", "Snapshot"]
+__all__ = ["Coordinator", "Decision", "FailSafeAttemptEvidence", "FailSafeProof", "FailSafeStateEvidence", "FAIL_SAFE_ATTEMPT_BUDGET", "HEARTBEAT_INTERVAL", "HEARTBEAT_STALE_AFTER", "OBSERVATION_ONLY_LEGACY_POWER_LIMIT", "SHUTDOWN_FAIL_SAFE_BUDGET", "Snapshot"]

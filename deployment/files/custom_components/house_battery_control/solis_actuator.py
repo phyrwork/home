@@ -10,6 +10,7 @@ commissioning concern.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
@@ -36,6 +37,20 @@ from .write_contracts import (
     WriteOutcome,
     WriteResult,
 )
+
+
+def _remaining_deadline(
+    deadline: datetime,
+    clock: Callable[[], datetime] | None = None,
+) -> float:
+    """Return remaining seconds for an absolute, timezone-aware deadline."""
+
+    now = clock() if clock is not None else datetime.now(timezone.utc)
+    if deadline.tzinfo is None or deadline.utcoffset() is None:
+        raise ValueError("fail-safe deadline must be timezone-aware")
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("fail-safe clock must be timezone-aware")
+    return max(0.0, (deadline - now).total_seconds())
 
 
 MAXIMUM_INVERTER_CLOCK_SKEW = timedelta(minutes=1)
@@ -435,6 +450,9 @@ class SolisSlotActuator:
         transaction: WriteTransaction,
         request: SwitchWriteRequest | TextWriteRequest | NumberWriteRequest,
         results: list[WriteResult],
+        *,
+        deadline: datetime | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> WriteResult:
         """Retain an ordered uncertain marker if cancellation interrupts a write."""
 
@@ -445,16 +463,25 @@ class SolisSlotActuator:
                 "write outcome is uncertain because the operation was interrupted",
             )
         )
-        result = await transaction.async_write(request)
+        if deadline is None:
+            result = await transaction.async_write(request)
+        else:
+            remaining = _remaining_deadline(deadline, clock)
+            if remaining <= 0:
+                raise TimeoutError("fail-safe deadline exhausted")
+            result = await asyncio.wait_for(
+                transaction.async_write(request), remaining
+            )
         results[index] = result
         return result
 
     async def _disable_all_locked(
         self, transaction: WriteTransaction, results: list[WriteResult],
         deadline: datetime | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> bool:
         for direction, _physical_slot, _kind in self._directions():
-            if deadline is not None and datetime.now(timezone.utc) >= deadline:
+            if deadline is not None and _remaining_deadline(deadline, clock) <= 0:
                 results.append(_result_failure(direction.enable_entity_id, "fail-safe deadline exhausted"))
                 return False
             observed = self._verified_precondition(direction.enable_entity_id)
@@ -463,18 +490,31 @@ class SolisSlotActuator:
                 continue
             if observed.state == "on":
                 request = SwitchWriteRequest(observed, False)
-                await self._write_recorded(transaction, request, results)
+                await self._write_recorded(
+                    transaction,
+                    request,
+                    results,
+                    deadline=deadline,
+                    clock=clock,
+                )
             elif observed.state != "off":
                 results.append(_result_failure(direction.enable_entity_id, "enable state is invalid"))
         return self._prove_all_off()
 
-    async def _disable_all_once(self, results: list[WriteResult] | None = None, deadline: datetime | None = None) -> DisableAllResult:
+    async def _disable_all_once(
+        self,
+        results: list[WriteResult] | None = None,
+        deadline: datetime | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> DisableAllResult:
         sink = results if results is not None else []
         attempt_start = len(sink)
         proven = False
         try:
             async with self.writer.transaction() as transaction:
-                proven = await self._disable_all_locked(transaction, sink, deadline)
+                proven = await self._disable_all_locked(
+                    transaction, sink, deadline, clock
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

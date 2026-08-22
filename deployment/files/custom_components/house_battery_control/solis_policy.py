@@ -493,8 +493,14 @@ class SolisPolicyActuator:
     def _number_request(self, entity_id: str, target: Decimal, capability: object) -> NumberWriteRequest:
         return NumberWriteRequest(self._precondition(entity_id), target, capability=capability)  # type: ignore[arg-type]
 
-    async def _safe_write(self, entity_id: str, target: object, results: list[WriteResult], *, domain: str, capability: object | None = None, transaction: object) -> None:
+    def _remaining_deadline(self, deadline: datetime) -> float:
+        _aware(deadline, "fail-safe deadline")
+        return max(0.0, (deadline - self._clock_now()).total_seconds())
+
+    async def _safe_write(self, entity_id: str, target: object, results: list[WriteResult], *, domain: str, capability: object | None = None, transaction: object, deadline: datetime | None = None) -> None:
         try:
+            if deadline is not None and self._remaining_deadline(deadline) <= 0:
+                raise TimeoutError("fail-safe deadline exhausted")
             precondition = self._precondition(entity_id)
             if domain == "switch":
                 request = SwitchWriteRequest(precondition, bool(target))
@@ -502,7 +508,16 @@ class SolisPolicyActuator:
                 request = SelectWriteRequest(precondition, str(target))
             else:
                 request = NumberWriteRequest(precondition, target, capability=capability)  # type: ignore[arg-type]
-            results.append(await transaction.async_write(request))  # type: ignore[attr-defined]
+            if deadline is None:
+                result = await transaction.async_write(request)  # type: ignore[attr-defined]
+            else:
+                remaining = self._remaining_deadline(deadline)
+                if remaining <= 0:
+                    raise TimeoutError("fail-safe deadline exhausted")
+                result = await asyncio.wait_for(
+                    transaction.async_write(request), remaining  # type: ignore[attr-defined]
+                )
+            results.append(result)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -530,7 +545,9 @@ class SolisPolicyActuator:
             # The policy entry point already owns the shared orchestration
             # lock.  Use T0006's bounded internal primitive so a shielded
             # cleanup task cannot deadlock behind its cancelling parent.
-            disable: DisableAllResult = await self.slot_actuator._disable_all_once(deadline=deadline)
+            disable: DisableAllResult = await self.slot_actuator._disable_all_once(
+                deadline=deadline, clock=self._clock_now
+            )
             results.extend(disable.results)
         except asyncio.CancelledError:
             raise
@@ -538,15 +555,15 @@ class SolisPolicyActuator:
             results.append(WriteResult("solis.slots", WriteOutcome.REJECTED, str(exc)))
         p = self.config.persistent
         protection = self.config.protection
-        if deadline is not None and self._clock_now() >= deadline:
+        if deadline is not None and self._remaining_deadline(deadline) <= 0:
             results.append(WriteResult("solis.fail_safe", WriteOutcome.REJECTED, "fail-safe deadline exhausted"))
             return tuple(results), False
         # Continue independently after every expected failure.  The safe mode,
         # peak shaving, and reserve writes are the only persistent mutations.
         async with self.writer.transaction() as transaction:
-            await self._safe_write(p.storage_mode_entity_id, StorageMode.SELF_USE.value, results, domain="select", transaction=transaction)
-            await self._safe_write(p.grid_peak_shaving_entity_id, True, results, domain="switch", transaction=transaction)
-            await self._safe_write(protection.battery_reserve_entity_id, False, results, domain="switch", transaction=transaction)
+            await self._safe_write(p.storage_mode_entity_id, StorageMode.SELF_USE.value, results, domain="select", transaction=transaction, deadline=deadline)
+            await self._safe_write(p.grid_peak_shaving_entity_id, True, results, domain="switch", transaction=transaction, deadline=deadline)
+            await self._safe_write(protection.battery_reserve_entity_id, False, results, domain="switch", transaction=transaction, deadline=deadline)
         safe = self._required_safe_state(self.writer, self.config)
         return tuple(results), safe
 
@@ -565,7 +582,18 @@ class SolisPolicyActuator:
     async def async_apply_fail_safe(self, *, deadline: datetime | None = None) -> PolicyActuationResult:
         acquired = False
         try:
-            await self.orchestration_lock.acquire()
+            if deadline is None:
+                await self.orchestration_lock.acquire()
+            else:
+                remaining = self._remaining_deadline(deadline)
+                if remaining <= 0:
+                    return PolicyActuationResult(
+                        PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE,
+                        issues=("fail-safe deadline exhausted before lock acquisition",),
+                    )
+                await asyncio.wait_for(
+                    self.orchestration_lock.acquire(), remaining
+                )
             acquired = True
             try:
                 results, safe = await self._apply_fail_safe_internal(deadline)
@@ -575,6 +603,11 @@ class SolisPolicyActuator:
                 task = asyncio.create_task(self._apply_fail_safe_internal(deadline))
                 await self._await_cleanup(task, original_exception=original, candidate_results=())
                 raise original
+        except TimeoutError:
+            return PolicyActuationResult(
+                PolicyActuationStatus.FAIL_SAFE_FAILED_UNSAFE,
+                issues=("fail-safe deadline exhausted",),
+            )
         except asyncio.CancelledError as original:
             if not acquired:
                 task = asyncio.create_task(self._apply_fail_safe_with_lock(deadline))
@@ -585,8 +618,28 @@ class SolisPolicyActuator:
                 self.orchestration_lock.release()
 
     async def _apply_fail_safe_with_lock(self, deadline: datetime | None = None) -> tuple[tuple[WriteResult, ...], bool]:
-        async with self.orchestration_lock:
+        acquired = False
+        try:
+            if deadline is None:
+                await self.orchestration_lock.acquire()
+            else:
+                remaining = self._remaining_deadline(deadline)
+                if remaining <= 0:
+                    return (
+                        (WriteResult("solis.fail_safe", WriteOutcome.REJECTED, "fail-safe deadline exhausted"),),
+                        False,
+                    )
+                await asyncio.wait_for(self.orchestration_lock.acquire(), remaining)
+            acquired = True
             return await self._apply_fail_safe_internal(deadline)
+        except TimeoutError:
+            return (
+                (WriteResult("solis.fail_safe", WriteOutcome.REJECTED, "fail-safe deadline exhausted"),),
+                False,
+            )
+        finally:
+            if acquired:
+                self.orchestration_lock.release()
 
     def _authorization_valid(self, authorization: object, now: datetime) -> bool:
         mapping = self.mapping_fingerprint

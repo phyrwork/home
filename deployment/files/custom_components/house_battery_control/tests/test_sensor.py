@@ -24,6 +24,8 @@ from custom_components.house_battery_control.interval import TimeInterval
 from custom_components.house_battery_control.sensor import (
     BatteryEnergySensor,
     ControlSensor,
+    HealthSensor,
+    HeartbeatSensor,
     ReserveBalanceSensor,
     ReserveTargetSensor,
     async_setup_platform,
@@ -49,6 +51,11 @@ def snapshot() -> Snapshot:
     )
     command = controller.ForceExport(target_energy_kwh=Decimal("8"))
     return Snapshot(
+        heartbeat_at=NOW,
+        diagnostic_energy_kwh=Decimal("16"),
+        recommendation=Decision(reserve=reserve, command=command),
+        reserve=reserve,
+        source_quality=("OBSERVATION_ONLY_LEGACY_POWER_LIMIT",),
         decision=Decision(reserve=reserve, command=command),
         battery_spec=spec,
         battery_state=battery.State(energy_kwh=Decimal("16")),
@@ -87,6 +94,8 @@ async def test_exposes_decision_and_diagnostic_context(
     entities = async_add_entities.call_args.args[0]
     assert [type(entity) for entity in entities] == [
         ControlSensor,
+        HeartbeatSensor,
+        HealthSensor,
         BatteryEnergySensor,
         ReserveTargetSensor,
         ReserveBalanceSensor,
@@ -94,28 +103,16 @@ async def test_exposes_decision_and_diagnostic_context(
 
     sensor = entities[0]
     assert isinstance(sensor, ControlSensor)
-    assert sensor.native_value == "force_export"
+    assert sensor.native_value == "observation_only:force_export"
     assert sensor.available
-    assert sensor.extra_state_attributes == {
-        "battery_energy_kwh": 16.0,
-        "battery_state_of_charge_percent": 50.0,
-        "load_kwh": 1.5,
-        "solar_kwh": 0.5,
-        "net_load_kwh": 1.0,
-        "import_price_per_kwh": 0.3,
-        "export_price_per_kwh": 0.15,
-        "import_price_is_off_peak": False,
-        "reserve_start_energy_kwh": 8.0,
-        "reserve_end_energy_kwh": 7.0,
-        "command_target_energy_kwh": 8.0,
-        "target_state_of_charge_percent": 25.0,
-        "power_w": 6000.0,
-        "expires_at": END.isoformat(),
-        "planning_horizon_end": (END + timedelta(hours=23)).isoformat(),
-        "tariff_forecast_end": (END + timedelta(hours=23)).isoformat(),
-        "load_forecast_end": (END + timedelta(hours=23)).isoformat(),
-        "solar_forecast_end": (END + timedelta(hours=12)).isoformat(),
-    }
+    attributes = sensor.extra_state_attributes
+    assert attributes is not None
+    assert attributes["observation_only"] is True
+    assert attributes["battery_energy_kwh"] == 16.0
+    assert attributes["reserve_start_energy_kwh"] == 8.0
+    assert attributes["source_quality"] == ("OBSERVATION_ONLY_LEGACY_POWER_LIMIT",)
+    assert entities[1].native_value == NOW
+    assert entities[2].native_value == "degraded"
 
 
 def test_exposes_battery_and_reserve_energy(hass: HomeAssistant) -> None:
@@ -144,7 +141,7 @@ def test_reserve_balance_reports_a_shortfall_as_negative(
     coordinator.async_set_updated_data(
         replace(
             snapshot(),
-            battery_state=battery.State(energy_kwh=Decimal("6")),
+            diagnostic_energy_kwh=Decimal("6"),
         )
     )
 
@@ -169,3 +166,19 @@ def test_unavailable_without_a_successful_decision(hass: HomeAssistant) -> None:
     coordinator.last_update_success = False
 
     assert all(not sensor.available for sensor in sensors)
+
+
+def test_partial_sensor_availability_is_source_specific(hass: HomeAssistant) -> None:
+    coordinator = Coordinator(hass, MagicMock())
+    coordinator.async_set_updated_data(
+        Snapshot(
+            heartbeat_at=NOW,
+            diagnostic_energy_kwh=Decimal("12"),
+            issues=("planner_input_invalid",),
+        )
+    )
+    assert HeartbeatSensor(coordinator).available
+    assert HealthSensor(coordinator).available
+    assert BatteryEnergySensor(coordinator).native_value == 12.0
+    assert ReserveTargetSensor(coordinator).native_value is None
+    assert ReserveBalanceSensor(coordinator).native_value is None
