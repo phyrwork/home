@@ -1,8 +1,17 @@
+from datetime import timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
-import pytest
-
-from custom_components.house_battery_control.runtime_inputs import _runtime_powers
+from custom_components.house_battery_control.octopus_windows import (
+    CheapClassification,
+    CheapWindow,
+    CoverageStatus,
+    DispatchSourceObservation,
+    RateSourceObservation,
+    evaluate_trusted_import_rates,
+    parse_public_import_event,
+)
+from custom_components.house_battery_control.runtime_inputs import _is_standard_cheap_window, _runtime_powers
 from custom_components.house_battery_control.solis_reader import read_solis_state
 from custom_components.house_battery_control.tests.test_solis_reader import NOW, fixture
 
@@ -15,11 +24,63 @@ def test_runtime_power_is_derived_from_voltage_current_and_inverter_limit() -> N
     assert _runtime_powers(result.snapshot) == (Decimal("5"), Decimal("5"))
 
 
-def test_runtime_power_rejects_unknown_output_unit() -> None:
+def test_runtime_power_ignores_percentage_output_capability() -> None:
     parsed, states = fixture()
     result = read_solis_state(parsed, states, NOW)
 
     assert result.snapshot is not None
-    object.__setattr__(result.snapshot.capabilities.maximum_output_power, "unit", "MW")
-    with pytest.raises(ValueError, match="unsupported"):
-        _runtime_powers(result.snapshot)
+    object.__setattr__(result.snapshot.capabilities.maximum_output_power, "unit", "%")
+    assert _runtime_powers(result.snapshot) == (Decimal("5"), Decimal("5"))
+
+
+def _window(*classifications: CheapClassification) -> CheapWindow:
+    components = tuple(
+        SimpleNamespace(rate_interval=SimpleNamespace(classification=classification))
+        for classification in classifications
+    )
+    return CheapWindow(NOW, NOW + timedelta(minutes=30), components)  # type: ignore[arg-type]
+
+
+def test_pre_discharge_requires_standard_cheap_window() -> None:
+    assert _is_standard_cheap_window(_window(CheapClassification.STANDARD_CHEAP))
+    assert not _is_standard_cheap_window(_window(CheapClassification.BONUS_DISPATCH))
+    assert not _is_standard_cheap_window(
+        _window(CheapClassification.STANDARD_CHEAP, CheapClassification.BONUS_DISPATCH)
+    )
+
+
+def test_empty_cheap_window_is_not_eligible_for_pre_discharge() -> None:
+    assert not _is_standard_cheap_window(CheapWindow(NOW, NOW + timedelta(minutes=30), ()))
+
+
+def test_stale_bonus_dispatch_is_not_usable_for_reserve() -> None:
+    event = {
+        "min_rate": "0.07",
+        "tariff_code": "TEST",
+        "rates": [
+            {
+                "start": NOW.isoformat(),
+                "end": (NOW + timedelta(hours=1)).isoformat(),
+                "value_inc_vat": "0.07",
+                "is_intelligent_adjusted": True,
+            }
+        ],
+    }
+    rates = parse_public_import_event(
+        event,
+        source="test",
+        source_day="current",
+        source_event="test",
+        source_revision_at=NOW,
+        retrieval_source_entity_id="sensor.import",
+        dispatch_source_entity_id="sensor.dispatch",
+    )
+    result = evaluate_trusted_import_rates(
+        import_rates=rates,
+        start=NOW,
+        end=NOW + timedelta(hours=1),
+        now=NOW,
+        import_source=RateSourceObservation(NOW, "sensor.import"),
+        dispatch_source=DispatchSourceObservation(NOW - timedelta(hours=1), "sensor.dispatch"),
+    )
+    assert result.coverage_status is CoverageStatus.UNAVAILABLE

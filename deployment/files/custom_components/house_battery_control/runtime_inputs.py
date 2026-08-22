@@ -26,6 +26,7 @@ from .octopus_windows import (
     ExportRateInterval,
     RateSourceObservation,
     evaluate_cheap_windows,
+    evaluate_trusted_import_rates,
     parse_fused_export_rates,
     parse_fused_import_rates,
 )
@@ -86,9 +87,20 @@ async def async_read_runtime_inputs(
     current_window = next((window for window in windows if window.start <= now < window.end), None)
     next_window = next((window for window in windows if window.start > now), None)
 
-    maximum_charge_power, maximum_discharge_power = _runtime_powers(snapshot)
     reserve_end = next_window.start if next_window is not None else horizon_end
-    forecast = await _forecast_intervals(hass, config, now, reserve_end, import_rates)
+    trusted_import = evaluate_trusted_import_rates(
+        import_rates=import_rates,
+        start=now,
+        end=reserve_end,
+        now=now,
+        import_source=_rate_source(import_state, "rate_source_entity_id", "rate_source_last_retrieved"),
+        dispatch_source=_dispatch_source(import_state),
+    )
+    if trusted_import.coverage_status is not CoverageStatus.COMPLETE:
+        raise ValueError("reserve tariff input is not trusted: " + "; ".join(trusted_import.issues))
+
+    maximum_charge_power, maximum_discharge_power = _runtime_powers(snapshot)
+    forecast = await _forecast_intervals(hass, config, now, reserve_end, trusted_import.intervals)
     reserve = plan_reserve(
         intervals=forecast,
         capacity_kwh=config.battery.capacity_kwh,
@@ -140,7 +152,7 @@ async def async_read_runtime_inputs(
                 max(reserve_soc, cycle_state_observed.target_soc.minimum),
                 cycle_end,
             )
-    elif next_window is not None:
+    elif next_window is not None and _is_standard_cheap_window(next_window):
         expected = _expected_energy_at_window(
             current_energy,
             forecast,
@@ -243,18 +255,16 @@ def _runtime_powers(snapshot: SolisStateSnapshot) -> tuple[Decimal, Decimal]:
         discharge_current = min(discharge_current, snapshot.capabilities.maximum_discharge_current.maximum)
     charge = voltage * charge_current / Decimal(1000)
     discharge = voltage * discharge_current / Decimal(1000)
-    output_limit = snapshot.capabilities.maximum_output_power
-    if output_limit.unit.strip().lower() in {"w", "watt", "watts"}:
-        maximum_output_kw = output_limit.maximum / Decimal(1000)
-    elif output_limit.unit.strip().lower() in {"kw", "kilowatt", "kilowatts"}:
-        maximum_output_kw = output_limit.maximum
-    else:
-        raise ValueError("maximum output power unit is unsupported")
-    charge = min(charge, maximum_output_kw)
-    discharge = min(discharge, maximum_output_kw)
     if not Decimal("0.5") <= charge <= Decimal("10") or not Decimal("0.5") <= discharge <= Decimal("10"):
         raise ValueError("derived runtime charge/discharge power is implausible")
     return charge, discharge
+
+
+def _is_standard_cheap_window(window: CheapWindow) -> bool:
+    return bool(window.components) and all(
+        item.rate_interval.classification is CheapClassification.STANDARD_CHEAP
+        for item in window.components
+    )
 
 
 async def _forecast_intervals(
