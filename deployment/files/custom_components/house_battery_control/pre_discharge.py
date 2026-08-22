@@ -9,7 +9,7 @@ about Home Assistant, SOC conversion, or Solis writes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import datetime, time, timedelta, timezone, tzinfo
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 import hashlib
@@ -26,10 +26,12 @@ from .domain_constants import (
     OCTOPUS_RATE_SOURCE_MAX_AGE,
 )
 from .interval import TimeInterval
+from .contracts import ControllerHealth
 from .octopus_windows import (
     AdjustedRateInterval,
     CheapClassification,
     CheapWindow,
+    CheapWindowComponent,
     CoverageStatus,
     ExportRateInterval,
     RateSourceObservation,
@@ -45,7 +47,9 @@ from .reserve_planner import (
     ReservePlanningStatus,
     plan_commissioned_reserve,
 )
-from .solis_state import MAXIMUM_FUTURE_CLOCK_SKEW, MAXIMUM_TELEMETRY_AGE
+from .solis_actuator import mapping_fingerprint
+from .solis_config import SolisConfig
+from .solis_state import MAXIMUM_FUTURE_CLOCK_SKEW, MAXIMUM_TELEMETRY_AGE, SolisStateReadResult
 
 
 class PreDischargePlanningStatus(str, Enum):
@@ -58,28 +62,17 @@ class PreDischargePlanningStatus(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class BatteryEnergyObservation:
-    """A point-in-time stored-energy reading and its source revision."""
+class TrustedSolisEnergyBoundary:
+    """Stored-energy proof derived from an exact healthy T0004 result."""
 
+    state: SolisStateReadResult
+    config: SolisConfig
+    mapping_fingerprint: str
+    capacity_kwh: Decimal
     stored_energy_kwh: Decimal
     observed_at: datetime
-    source: str
-    revision: str
-    family: str = "solis.telemetry.stored_energy"
-
-
-@dataclass(frozen=True, slots=True)
-class EnergyObservationAuthority:
-    """T0004-bound identity for a stored-energy observation.
-
-    The reader/coordinator supplies these values from the authoritative T0004
-    snapshot.  A strategy must never accept an arbitrary non-empty source as
-    proof of battery energy.
-    """
-
-    source: str
-    family: str
-    revision: str
+    device_timestamp: datetime
+    proof_digest: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +83,13 @@ class ForecastObservation:
     revision: str
     retrieved_at: datetime
     fresh_until: datetime
+    content_digest: str
+    generation_digest: str
+    requested_start: datetime
+    requested_end: datetime
+    producer: str
+    source_family: str
+    schema_revision: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +118,8 @@ class PreDischargePlanResult:
     planned_stored_withdrawal_kwh: Decimal = Decimal(0)
     planned_ac_export_kwh: Decimal = Decimal(0)
     uncreated_headroom_kwh: Decimal = Decimal(0)
+    target_stored_energy_kwh: Decimal | None = None
+    target_stop: datetime | None = None
     proposed_start: datetime | None = None
     proposed_end: datetime | None = None
     expiry: datetime | None = None
@@ -137,12 +139,17 @@ class PreDischargePlanResult:
 # multiplying contracts.
 PreDischargeResult = PreDischargePlanResult
 PreDischargeStatus = PreDischargePlanningStatus
-EnergyObservation = BatteryEnergyObservation
+EnergyObservation = TrustedSolisEnergyBoundary
 
 _ZERO = Decimal(0)
 _ONE = Decimal(1)
 _MINUTE = timedelta(minutes=1)
 _DAY = timedelta(days=1)
+TRUSTED_FORECAST_PRODUCER = "house_battery_control"
+TRUSTED_FORECAST_SOURCE = "house_battery_control.forecast"
+TRUSTED_FORECAST_SOURCE_FAMILY = "load_and_external_pv"
+TRUSTED_FORECAST_REVISION = "1"
+TRUSTED_FORECAST_SCHEMA_REVISION = "1"
 
 
 def _decimal(value: Any, label: str) -> Decimal:
@@ -190,6 +197,8 @@ def _canonical(value: Any) -> Any:
         return format(value, "f")
     if isinstance(value, datetime):
         return {"utc": _utc(value).isoformat(), "fold": value.fold}
+    if isinstance(value, time):
+        return {"wall": value.isoformat(), "fold": value.fold}
     if isinstance(value, timedelta):
         return value.total_seconds()
     if isinstance(value, tzinfo):
@@ -215,6 +224,80 @@ def _fingerprint(**inputs: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _forecast_digests(
+    intervals: Sequence[ReserveInputInterval],
+    observation: ForecastObservation,
+) -> tuple[str, str]:
+    content = _fingerprint(schema="forecast-content-v1", intervals=intervals)
+    generation = _fingerprint(
+        schema="forecast-generation-v1",
+        source=observation.source,
+        revision=observation.revision,
+        retrieved_at=observation.retrieved_at,
+        requested_start=observation.requested_start,
+        requested_end=observation.requested_end,
+        producer=observation.producer,
+        source_family=observation.source_family,
+        schema_revision=observation.schema_revision,
+        content_digest=content,
+    )
+    return content, generation
+
+
+def trusted_solis_energy_boundary(
+    *, state: SolisStateReadResult, config: SolisConfig,
+    expected_mapping_fingerprint: str, capacity_kwh: Any, now: datetime,
+) -> TrustedSolisEnergyBoundary | HeadroomIssue:
+    """Derive stored energy only from a healthy exact T0004 snapshot."""
+    try:
+        now = _aware(now, "now")
+        capacity = _decimal(capacity_kwh, "capacity_kwh")
+        if capacity <= _ZERO:
+            raise ValueError("capacity_kwh must be positive")
+        if type(state) is not SolisStateReadResult or state.health is not ControllerHealth.HEALTHY or state.snapshot is None:
+            return HeadroomIssue("ENERGY_UNAVAILABLE", "a HEALTHY exact T0004 SolisStateReadResult is required")
+        if type(config) is not SolisConfig:
+            raise ValueError("current SolisConfig has an unexpected concrete type")
+        current_mapping = mapping_fingerprint(config)
+        if current_mapping != expected_mapping_fingerprint:
+            return HeadroomIssue("ENERGY_MAPPING_MISMATCH", "current exact SolisConfig does not match commissioned mapping")
+        snapshot = state.snapshot
+        if state.telemetry != snapshot.telemetry or state.persistent != snapshot.persistent or state.slots != snapshot.slots or state.issues:
+            return HeadroomIssue("ENERGY_INVALID", "T0004 result does not exactly contain its healthy snapshot")
+        if config.telemetry.state_of_charge_entity_id == "" or config.telemetry.device_timestamp_entity_id is None:
+            return HeadroomIssue("ENERGY_INVALID", "exact SOC and device timestamp entities are required")
+        # Stored energy is a function of the SOC sample, so its authoritative
+        # instant is the exact HA timestamp attached to that sample.  The
+        # snapshot/read timestamp is still covered by ``state`` in the proof,
+        # but must not silently make an older SOC sample look newer.
+        observed_at = _aware(snapshot.telemetry.soc_last_updated, "T0004 SOC observed_at")
+        device_timestamp = _aware(snapshot.telemetry.device_timestamp, "T0004 device_timestamp")
+        soc = _decimal(snapshot.telemetry.state_of_charge_percent, "T0004 SOC")
+        if not _ZERO <= soc <= Decimal(100):
+            raise ValueError("T0004 SOC is outside 0..100 percent")
+        fresh_until, observed_issue = _fresh(observed_at, now)
+        device_fresh_until, device_issue = _fresh(device_timestamp, now)
+        if observed_issue or device_issue:
+            return observed_issue or device_issue  # type: ignore[return-value]
+        stored = soc * capacity / Decimal(100)
+        proof = _fingerprint(
+            schema="t0004-trusted-energy-boundary-v1", state=state, config=config,
+            mapping_fingerprint=current_mapping, capacity_kwh=capacity,
+            stored_energy_kwh=stored, observed_at=observed_at,
+            device_timestamp=device_timestamp,
+        )
+        boundary = TrustedSolisEnergyBoundary(
+            state, config, current_mapping, capacity, stored, observed_at,
+            device_timestamp, proof,
+        )
+        # Keep the computed freshness material in the proof even though the
+        # planner derives the deadline again from both authoritative times.
+        _ = min(fresh_until, device_fresh_until)
+        return boundary
+    except (AttributeError, TypeError, ValueError) as exc:
+        return HeadroomIssue("ENERGY_INVALID", str(exc))
+
+
 def _fresh(observed_at: datetime, now: datetime) -> tuple[datetime, HeadroomIssue | None]:
     if observed_at > now + MAXIMUM_FUTURE_CLOCK_SKEW:
         return observed_at, HeadroomIssue("ENERGY_IN_FUTURE", "energy observation is beyond the allowed clock skew")
@@ -224,26 +307,26 @@ def _fresh(observed_at: datetime, now: datetime) -> tuple[datetime, HeadroomIssu
     return fresh_until, None
 
 
-def _validate_energy(energy: BatteryEnergyObservation, now: datetime) -> tuple[Decimal, datetime] | HeadroomIssue:
-    if type(energy) is not BatteryEnergyObservation:
-        return HeadroomIssue("ENERGY_INVALID", "energy observation has an unexpected concrete type")
-    try:
-        value = _decimal(energy.stored_energy_kwh, "stored_energy_kwh")
-        observed = _aware(energy.observed_at, "observed_at")
-        if value < _ZERO:
-            raise ValueError("stored energy must not be negative")
-        if not isinstance(energy.source, str) or not energy.source:
-            raise ValueError("energy source must be non-empty")
-        if not isinstance(energy.revision, str) or not energy.revision:
-            raise ValueError("energy revision must be non-empty")
-        if not isinstance(energy.family, str) or not energy.family:
-            raise ValueError("energy family must be non-empty")
-    except (TypeError, ValueError) as exc:
-        return HeadroomIssue("ENERGY_INVALID", str(exc))
-    fresh_until, issue = _fresh(observed, now)
-    if issue:
-        return issue
-    return value, fresh_until
+def _validate_energy_boundary(
+    boundary: TrustedSolisEnergyBoundary | None,
+    *, expected_mapping_fingerprint: str, capacity_kwh: Decimal, now: datetime,
+) -> tuple[Decimal, datetime, datetime] | HeadroomIssue:
+    if type(boundary) is not TrustedSolisEnergyBoundary:
+        return HeadroomIssue("ENERGY_UNAVAILABLE", "trusted T0004 energy boundary is required")
+    rebuilt = trusted_solis_energy_boundary(
+        state=boundary.state, config=boundary.config,
+        expected_mapping_fingerprint=expected_mapping_fingerprint,
+        capacity_kwh=capacity_kwh, now=now,
+    )
+    if isinstance(rebuilt, HeadroomIssue):
+        return rebuilt
+    if rebuilt != boundary:
+        return HeadroomIssue("ENERGY_FORGED", "trusted T0004 energy boundary does not match recomputed evidence")
+    fresh_until = min(
+        boundary.observed_at + MAXIMUM_TELEMETRY_AGE,
+        boundary.device_timestamp + MAXIMUM_TELEMETRY_AGE,
+    )
+    return boundary.stored_energy_kwh, boundary.observed_at, fresh_until
 
 
 def _validate_intervals(intervals: Sequence[ReserveInputInterval], start: datetime, end: datetime) -> HeadroomIssue | None:
@@ -290,6 +373,24 @@ def _validate_forecast_observation(
             raise ValueError("forecast source must be non-empty")
         if not isinstance(observation.revision, str) or not observation.revision:
             raise ValueError("forecast revision must be non-empty")
+        if observation.producer != TRUSTED_FORECAST_PRODUCER:
+            raise ValueError("forecast producer is not trusted")
+        if observation.source != TRUSTED_FORECAST_SOURCE:
+            raise ValueError("forecast source is not trusted")
+        if observation.source_family != TRUSTED_FORECAST_SOURCE_FAMILY:
+            raise ValueError("forecast source family is not trusted")
+        if observation.revision != TRUSTED_FORECAST_REVISION:
+            raise ValueError("forecast revision is not trusted")
+        if observation.schema_revision != TRUSTED_FORECAST_SCHEMA_REVISION:
+            raise ValueError("forecast schema revision is not trusted")
+        for label in ("content_digest", "generation_digest"):
+            digest = getattr(observation, label)
+            if not isinstance(digest, str) or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+                raise ValueError(f"forecast {label} must be a lowercase SHA-256 digest")
+        requested_start = _aware(observation.requested_start, "forecast requested_start")
+        requested_end = _aware(observation.requested_end, "forecast requested_end")
+        if _utc(requested_end) <= _utc(requested_start):
+            raise ValueError("forecast requested horizon must be ordered")
         if retrieved > now + MAXIMUM_SOURCE_FUTURE_SKEW:
             raise ValueError("forecast retrieval is in the future")
         if fresh_until < retrieved:
@@ -303,26 +404,6 @@ def _validate_forecast_observation(
     return fresh_until, None
 
 
-def _validate_energy_authority(
-    energy: BatteryEnergyObservation,
-    authority: EnergyObservationAuthority | None,
-) -> HeadroomIssue | None:
-    if type(authority) is not EnergyObservationAuthority:
-        return HeadroomIssue("ENERGY_UNAVAILABLE", "T0004 energy observation authority is required")
-    try:
-        for label in ("source", "family", "revision"):
-            value = getattr(authority, label)
-            if not isinstance(value, str) or not value:
-                raise ValueError(f"energy authority {label} must be non-empty")
-        if energy.source != authority.source:
-            raise ValueError("energy source does not match T0004 authority")
-        if energy.family != authority.family:
-            raise ValueError("energy family does not match T0004 authority")
-        if energy.revision != authority.revision:
-            raise ValueError("energy revision does not match T0004 authority")
-    except (AttributeError, TypeError, ValueError) as exc:
-        return HeadroomIssue("ENERGY_INVALID", str(exc))
-    return None
 
 
 def _source_until(
@@ -464,7 +545,12 @@ def _window_import_rates(
     trusted_import: TrustedImportResult,
     import_source: RateSourceObservation | None,
     dispatch_source: DispatchSourceObservation | None,
+    export_source: RateSourceObservation | None,
+    trusted_export_rates: Sequence[ExportRateInterval],
     now: datetime,
+    charge_eff: Decimal,
+    discharge_eff: Decimal,
+    cycle_cost: Decimal,
 ) -> tuple[tuple[AdjustedRateInterval, ...], HeadroomIssue | None]:
     if type(window) is not CheapWindow or not window.components:
         return (), HeadroomIssue("WINDOW_UNAVAILABLE", "a complete standard-cheap window is required")
@@ -491,6 +577,8 @@ def _window_import_rates(
     selected: list[AdjustedRateInterval] = []
     cursor = window.start
     for component in window.components:
+        if type(component) is not CheapWindowComponent:
+            return (), HeadroomIssue("WINDOW_INVALID", "window component has an unexpected concrete type")
         rate = component.rate_interval
         if rate.classification is not CheapClassification.STANDARD_CHEAP:
             return (), HeadroomIssue("BONUS_NOT_ALLOWED", "pre-discharge is restricted to STANDARD_CHEAP")
@@ -500,6 +588,21 @@ def _window_import_rates(
             return (), HeadroomIssue("WINDOW_INVALID", "standard-cheap components are not contiguous")
         if _utc(component.interval.end) <= _utc(component.interval.start):
             return (), HeadroomIssue("WINDOW_INVALID", "standard-cheap window is empty")
+        if _utc(component.interval.start) != _utc(rate.start) or _utc(component.interval.end) != _utc(rate.end):
+            return (), HeadroomIssue("WINDOW_ALIGNMENT", "component interval does not exactly equal its trusted import rate")
+        export = component.export_interval
+        if type(export) is not ExportRateInterval:
+            return (), HeadroomIssue("WINDOW_INVALID", "component export interval has an unexpected concrete type")
+        if _utc(component.interval.start) != _utc(export.start) or _utc(component.interval.end) != _utc(export.end):
+            return (), HeadroomIssue("WINDOW_ALIGNMENT", "component interval does not exactly equal its export intersection")
+        if export_source is None or export.retrieval_source_entity_id != export_source.source or export.retrieved_at != export_source.retrieved_at:
+            return (), HeadroomIssue("WINDOW_PROVENANCE", "component export provenance does not match its authoritative source")
+        matches = [candidate for candidate in trusted_export_rates if candidate == export]
+        if len(matches) != 1:
+            return (), HeadroomIssue("WINDOW_PROVENANCE", "component export interval is not exactly present in trusted export data")
+        expected_margin = export.export_price * discharge_eff - rate.import_price / charge_eff - cycle_cost
+        if component.margin_per_stored_kwh != expected_margin:
+            return (), HeadroomIssue("WINDOW_MARGIN", "component margin does not match its import/export intersection")
         selected.append(rate)
         cursor = component.interval.end
     if _utc(cursor) != _utc(window.end):
@@ -617,9 +720,9 @@ def _simulate_continuous(
     *, intervals: Sequence[ReserveInputInterval], reserve_plan: ReservePlanResult,
     start_energy: Decimal, action_start: datetime, action_end: datetime,
     maximum_charge: Decimal, maximum_discharge: Decimal, charge_eff: Decimal,
-    discharge_eff: Decimal, capacity: Decimal, minimum: Decimal, target: Decimal,
+    discharge_eff: Decimal, capacity: Decimal, minimum: Decimal, target_energy: Decimal,
 ) -> _Simulation:
-    """Simulate one continuous slot, carrying discretionary depletion forward."""
+    """Simulate one continuous slot stopped by an absolute stored-energy target."""
     if _utc(action_end) <= _utc(action_start):
         return _Simulation(False, _ZERO, None, (), HeadroomIssue("SCHEDULE_INVALID", "empty action interval"))
     points = {_utc(intervals[0].interval.start), _utc(intervals[-1].interval.end), _utc(action_start), _utc(action_end)}
@@ -628,6 +731,38 @@ def _simulate_continuous(
     points = sorted(point for point in points if _utc(intervals[0].interval.start) <= point <= _utc(intervals[-1].interval.end))
     energy, withdrawal, stop = start_energy, _ZERO, None
     ledger: list[tuple[datetime, datetime, Decimal, Decimal, Decimal]] = []
+
+    def record(
+        left: datetime,
+        right: datetime,
+        baseline_rate: Decimal,
+        discretionary_rate: Decimal,
+        *,
+        exact_end: Decimal | None = None,
+    ) -> HeadroomIssue | None:
+        nonlocal energy, withdrawal
+        duration = _hours(left, right)
+        start_value = energy
+        end_value = exact_end if exact_end is not None else energy + (baseline_rate - discretionary_rate) * duration
+        reserve_left = _reserve_at(reserve_plan, intervals, left)
+        reserve_right = _reserve_at(reserve_plan, intervals, right)
+        if isinstance(reserve_left, HeadroomIssue) or isinstance(reserve_right, HeadroomIssue):
+            return reserve_left if isinstance(reserve_left, HeadroomIssue) else reserve_right
+        if start_value < reserve_left or start_value < minimum or start_value > capacity:
+            return HeadroomIssue("RESERVE_BREACH", "trajectory starts below reserve or outside physical bounds")
+        if end_value < reserve_right or end_value < minimum or end_value > capacity:
+            return HeadroomIssue("RESERVE_BREACH", "trajectory ends below reserve or outside physical bounds")
+        discretionary_stored = (
+            start_value + baseline_rate * duration - end_value
+            if exact_end is not None
+            else discretionary_rate * duration
+        )
+        discretionary_ac = discretionary_stored * discharge_eff
+        withdrawal += discretionary_stored
+        ledger.append((left, right, start_value, end_value, discretionary_ac))
+        energy = end_value
+        return None
+
     for left, right in zip(points, points[1:]):
         if right <= left:
             continue
@@ -639,45 +774,49 @@ def _simulate_continuous(
         load = _decimal(item.load_kwh, "load_kwh") * duration / source_duration
         solar = _decimal(item.solar_kwh, "solar_kwh") * duration / source_duration
         deficit = load - solar
+        active = _utc(action_start) <= left < _utc(action_end) and stop is None and energy > target_energy
         if deficit > _ZERO:
             grid = min(deficit, MAXIMUM_GRID_IMPORT_POWER_KW * duration)
             baseline_ac = deficit - grid
             if baseline_ac > maximum_discharge * duration:
                 return _Simulation(False, withdrawal, stop, tuple(ledger), HeadroomIssue("DISCHARGE_POWER_EXCEEDED", "baseline household demand exceeds commissioned discharge output"))
-            baseline_delta = -baseline_ac / discharge_eff
+            baseline_rate = -(baseline_ac / duration) / discharge_eff
         else:
             baseline_ac = _ZERO
-            baseline_delta = min(-deficit, maximum_charge * duration) * charge_eff
-        reserve_left = _reserve_at(reserve_plan, intervals, left)
-        reserve_right = _reserve_at(reserve_plan, intervals, right)
-        if isinstance(reserve_left, HeadroomIssue) or isinstance(reserve_right, HeadroomIssue):
-            return _Simulation(False, withdrawal, stop, tuple(ledger), reserve_left if isinstance(reserve_left, HeadroomIssue) else reserve_right)
-        discretionary_ac = _ZERO
-        active_left, active_right = max(left, _utc(action_start)), min(right, _utc(action_end))
-        if active_left < active_right:
-            active_hours = _hours(active_left, active_right)
-            baseline_rate = baseline_ac / duration
-            remaining_output = max(_ZERO, (maximum_discharge - baseline_rate) * active_hours)
-            remaining_target = max(_ZERO, target - withdrawal)
-            discretionary_stored = min(remaining_target, remaining_output / discharge_eff)
-            discretionary_ac = discretionary_stored * discharge_eff
-            if discretionary_stored > _ZERO and stop is None and withdrawal + discretionary_stored >= target:
-                stop = active_left + _delta_hours(discretionary_ac / max(_ZERO, maximum_discharge - baseline_rate))
-                stop = min(stop, active_right)
-            withdrawal += discretionary_stored
-        end_energy = energy + baseline_delta - discretionary_ac / discharge_eff
-        if energy < reserve_left or energy < minimum or energy > capacity:
-            return _Simulation(False, withdrawal, stop, tuple(ledger), HeadroomIssue("RESERVE_BREACH", "trajectory starts below reserve"))
-        if end_energy < reserve_right or end_energy < minimum or end_energy > capacity:
-            return _Simulation(False, withdrawal, stop, tuple(ledger), HeadroomIssue("RESERVE_BREACH", "trajectory ends below reserve"))
-        ledger.append((left, right, energy, end_energy, discretionary_ac))
-        energy = end_energy
+            if active and deficit < _ZERO:
+                return _Simulation(
+                    False, withdrawal, stop, tuple(ledger),
+                    HeadroomIssue(
+                        "PV_DISCHARGE_OVERLAP_UNCOMMISSIONED",
+                        "external-PV charging overlaps force-discharge without commissioned one-direction evidence",
+                    ),
+                )
+            baseline_rate = (min(-deficit, maximum_charge * duration) * charge_eff) / duration
+        baseline_ac_rate = baseline_ac / duration
+        discretionary_rate = max(_ZERO, maximum_discharge - baseline_ac_rate) / discharge_eff if active else _ZERO
+        combined_rate = baseline_rate - discretionary_rate
+        if discretionary_rate > _ZERO and combined_rate < _ZERO and energy + combined_rate * duration <= target_energy:
+            hours_to_target = (energy - target_energy) / (-combined_rate)
+            midpoint = left + _delta_hours(hours_to_target)
+            midpoint = min(midpoint, right)
+            issue = record(left, midpoint, baseline_rate, discretionary_rate, exact_end=target_energy)
+            if issue:
+                return _Simulation(False, withdrawal, stop, tuple(ledger), issue)
+            stop = midpoint
+            if midpoint < right:
+                issue = record(midpoint, right, baseline_rate, _ZERO)
+                if issue:
+                    return _Simulation(False, withdrawal, stop, tuple(ledger), issue)
+        else:
+            issue = record(left, right, baseline_rate, discretionary_rate)
+            if issue:
+                return _Simulation(False, withdrawal, stop, tuple(ledger), issue)
     return _Simulation(True, withdrawal, stop, tuple(ledger))
 
 
 def _plan_pre_discharge_headroom(
     *,
-    energy: BatteryEnergyObservation,
+    energy_boundary: TrustedSolisEnergyBoundary | None = None,
     forecast_intervals: Sequence[ReserveInputInterval],
     reserve_plan: ReservePlanResult,
     standard_window: CheapWindow,
@@ -697,7 +836,6 @@ def _plan_pre_discharge_headroom(
     cycle_cost_per_kwh: Any = BATTERY_CYCLE_COST_PER_KWH,
     forecast_observation: ForecastObservation | None = None,
     inverter_timezone: tzinfo | None = None,
-    energy_authority: EnergyObservationAuthority | None = None,
 ) -> PreDischargePlanResult:
     """Plan the latest safe, profitable standard-window pre-discharge."""
     try:
@@ -708,7 +846,7 @@ def _plan_pre_discharge_headroom(
         charge_eff = _decimal(charge_efficiency, "charge_efficiency")
         discharge_eff = _decimal(discharge_efficiency, "discharge_efficiency")
         cycle_cost = _decimal(cycle_cost_per_kwh, "cycle_cost_per_kwh")
-        if capacity < _ZERO or minimum < _ZERO or minimum > capacity or margin < _ZERO:
+        if capacity <= _ZERO or minimum < _ZERO or minimum > capacity or margin < _ZERO:
             raise ValueError("energy bounds are invalid")
         if not (_ZERO < charge_eff <= _ONE and _ZERO < discharge_eff <= _ONE):
             raise ValueError("efficiencies must be greater than zero and at most one")
@@ -729,38 +867,48 @@ def _plan_pre_discharge_headroom(
     except (TypeError, ValueError) as exc:
         return _issue(PreDischargePlanningStatus.INVALID, "INPUT_INVALID", str(exc))
 
-    energy_value = _validate_energy(energy, now)
+    if type(authority) is not ReserveAuthority:
+        return _issue(PreDischargePlanningStatus.UNAVAILABLE, "AUTHORITY_MISSING", "current commissioned authority is required before reading energy")
+    energy_value = _validate_energy_boundary(
+        energy_boundary, expected_mapping_fingerprint=authority.mapping_fingerprint,
+        capacity_kwh=capacity, now=now,
+    )
     if isinstance(energy_value, HeadroomIssue):
-        status = PreDischargePlanningStatus.UNAVAILABLE if energy_value.code in {"ENERGY_STALE", "ENERGY_IN_FUTURE"} else PreDischargePlanningStatus.INVALID
+        status = PreDischargePlanningStatus.UNAVAILABLE if energy_value.code in {"ENERGY_STALE", "ENERGY_IN_FUTURE", "ENERGY_UNAVAILABLE", "ENERGY_MAPPING_MISMATCH"} else PreDischargePlanningStatus.INVALID
         return _issue(status, energy_value.code, energy_value.detail)
-    observed_kwh, fresh_until = energy_value
-    energy_authority_issue = _validate_energy_authority(energy, energy_authority)
-    if energy_authority_issue:
-        status = PreDischargePlanningStatus.UNAVAILABLE if energy_authority_issue.code.endswith("UNAVAILABLE") else PreDischargePlanningStatus.INVALID
-        return _issue(status, energy_authority_issue.code, energy_authority_issue.detail)
+    observed_kwh, energy_observed_at, fresh_until = energy_value
+    if observed_kwh < minimum or observed_kwh > capacity:
+        return _issue(PreDischargePlanningStatus.INFEASIBLE, "INITIAL_ENERGY_BOUNDARY", "initial stored energy is outside minimum/capacity bounds")
     forecast_fresh_until, forecast_issue = _validate_forecast_observation(forecast_observation, now=now)
     if forecast_issue:
         status = PreDischargePlanningStatus.UNAVAILABLE if forecast_issue.code.endswith(("STALE", "UNAVAILABLE")) else PreDischargePlanningStatus.INVALID
         return _issue(status, forecast_issue.code, forecast_issue.detail)
     fresh_until = min(fresh_until, forecast_fresh_until)
-    if _utc(energy.observed_at) > _utc(window_start):
+    if _utc(energy_observed_at) > _utc(window_start):
         return _issue(PreDischargePlanningStatus.UNAVAILABLE, "ENERGY_AFTER_WINDOW_START", "energy observation is after the window start")
     try:
         horizon_end = forecast_intervals[-1].interval.end
     except (IndexError, AttributeError, TypeError):
         return _issue(PreDischargePlanningStatus.INVALID, "FORECAST_INVALID", "forecast horizon is empty or malformed")
-    forecast_issue = _validate_intervals(forecast_intervals, energy.observed_at, horizon_end)
+    forecast_issue = _validate_intervals(forecast_intervals, energy_observed_at, horizon_end)
     if forecast_issue:
         return _issue(PreDischargePlanningStatus.INVALID, forecast_issue.code, forecast_issue.detail)
     if _utc(horizon_end) < _utc(window_end):
         return _issue(PreDischargePlanningStatus.UNAVAILABLE, "FORECAST_COVERAGE", "forecast does not cover the complete refill window")
+    if type(forecast_observation) is not ForecastObservation:
+        return _issue(PreDischargePlanningStatus.UNAVAILABLE, "FORECAST_UNAVAILABLE", "forecast observation authority is required")
+    if _utc(forecast_observation.requested_start) != _utc(forecast_intervals[0].interval.start) or _utc(forecast_observation.requested_end) != _utc(forecast_intervals[-1].interval.end):
+        return _issue(PreDischargePlanningStatus.UNAVAILABLE, "FORECAST_HORIZON_MISMATCH", "forecast content does not cover its authoritative requested horizon")
+    content_digest, generation_digest = _forecast_digests(forecast_intervals, forecast_observation)
+    if forecast_observation.content_digest != content_digest or forecast_observation.generation_digest != generation_digest:
+        return _issue(PreDischargePlanningStatus.INVALID, "FORECAST_DIGEST_MISMATCH", "forecast content/generation digest does not match the supplied intervals")
     # Reserve trajectories may include the refill window.  For this strategy,
     # only boundaries through the window start are needed for the backward
     # overlay, but all supplied material inputs remain in the fingerprint.
     # The forecast may also contain refill intervals after the window start.
     # Clip it to the pre-window horizon; the supplied trajectory is not an
     # authority, so it is re-proved through T0013 below.
-    pre_window_intervals = _slice_forecast(forecast_intervals, energy.observed_at, window_start)
+    pre_window_intervals = _slice_forecast(forecast_intervals, energy_observed_at, window_start)
     if not pre_window_intervals:
         return _issue(PreDischargePlanningStatus.INFEASIBLE, "NO_PREWINDOW_TIME", "no pre-window forecast is available")
     if commissioned is None or authority is None:
@@ -787,7 +935,10 @@ def _plan_pre_discharge_headroom(
     except (AttributeError, TypeError, ValueError) as exc:
         return _issue(PreDischargePlanningStatus.INVALID, "COMMISSIONING_INVALID", str(exc))
 
-    import_rates, issue = _window_import_rates(standard_window, trusted_import, import_source, dispatch_source, now)
+    import_rates, issue = _window_import_rates(
+        standard_window, trusted_import, import_source, dispatch_source,
+        export_source, export_rates, now, charge_eff, discharge_eff, cycle_cost,
+    )
     if issue:
         status = PreDischargePlanningStatus.UNAVAILABLE if issue.code.endswith("UNAVAILABLE") or issue.code in {"IMPORT_COVERAGE", "IMPORT_PROVENANCE"} else PreDischargePlanningStatus.INVALID
         return _issue(status, issue.code, issue.detail)
@@ -850,7 +1001,7 @@ def _plan_pre_discharge_headroom(
     # in the past.
     if _utc(now) >= _utc(window_start):
         return _issue(PreDischargePlanningStatus.INFEASIBLE, "NO_ACTION_TIME", "window has already started")
-    observed_to_now = _slice_forecast(pre_window_intervals, energy.observed_at, now)
+    observed_to_now = _slice_forecast(pre_window_intervals, energy_observed_at, now)
     action_intervals = _slice_forecast(pre_window_intervals, now, window_start)
     past_reserves = _reserve_for_intervals(reserve_plan, forecast_intervals, observed_to_now)
     action_reserves = _reserve_for_intervals(reserve_plan, forecast_intervals, action_intervals)
@@ -893,10 +1044,12 @@ def _plan_pre_discharge_headroom(
     protected_floor = minimum + margin
     maximum_stored_refill = maximum_charge * _hours(window_start, window_end) * charge_eff
     desired = max(protected_floor, reserve_window_start, capacity - maximum_stored_refill)
-    desired_withdrawal = max(_ZERO, baseline_window_start - desired)
+    target_energy = desired
+    desired_withdrawal = max(_ZERO, baseline_window_start - target_energy)
+    conceptual_withdrawal = max(_ZERO, baseline_window_start - desired)
     common_inputs = dict(
         schema="T0014-pre-discharge-headroom-v1",
-        energy=energy,
+        energy_boundary=energy_boundary,
         forecast_intervals=forecast_intervals,
         reserve_plan=reserve_plan,
         standard_window=standard_window,
@@ -907,7 +1060,6 @@ def _plan_pre_discharge_headroom(
         export_source=export_source,
         dispatch_source=dispatch_source,
         forecast_observation=forecast_observation,
-        energy_authority=energy_authority,
         inverter_timezone=inverter_timezone,
         commissioned=commissioned,
         authority=authority,
@@ -936,6 +1088,8 @@ def _plan_pre_discharge_headroom(
             desired_window_start_energy_kwh=desired,
             baseline_window_start_energy_kwh=baseline_window_start,
             reachable_window_start_energy_kwh=baseline_window_start,
+            target_stored_energy_kwh=target_energy,
+            uncreated_headroom_kwh=conceptual_withdrawal,
             input_fingerprint=fingerprint,
             expiry=fresh_until,
             fresh_until=fresh_until,
@@ -965,7 +1119,7 @@ def _plan_pre_discharge_headroom(
             start_energy=observed_kwh, action_start=candidate, action_end=quantized_end,
             maximum_charge=maximum_charge, maximum_discharge=maximum_discharge,
             charge_eff=charge_eff, discharge_eff=discharge_eff, capacity=capacity,
-            minimum=minimum, target=desired_withdrawal,
+            minimum=minimum, target_energy=target_energy,
         )
         if not simulation.safe:
             continue
@@ -980,7 +1134,7 @@ def _plan_pre_discharge_headroom(
         return _issue(PreDischargePlanningStatus.INFEASIBLE, "NO_REACHABLE_HEADROOM", "reserve or commissioned output leaves no safe continuous export interval")
     quantized_start, simulation = best
     proposed_start, proposed_end = quantized_start, quantized_end
-    planned = min(simulation.withdrawal_kwh, desired_withdrawal)
+    planned = simulation.withdrawal_kwh
     if _utc(proposed_end) - _utc(proposed_start) >= _DAY:
         return _issue(PreDischargePlanningStatus.INVALID, "SCHEDULE_NOT_REPRESENTABLE", "quantized interval is at least 24 hours")
     # Economics covers every encoded discharge instant, even when target-stop
@@ -1012,7 +1166,9 @@ def _plan_pre_discharge_headroom(
         reachable_window_start_energy_kwh=baseline_window_start - planned,
         planned_stored_withdrawal_kwh=planned,
         planned_ac_export_kwh=planned_ac,
-        uncreated_headroom_kwh=max(_ZERO, desired_withdrawal - planned),
+        uncreated_headroom_kwh=max(_ZERO, conceptual_withdrawal - planned),
+        target_stored_energy_kwh=target_energy,
+        target_stop=simulation.target_stop,
         # The schedule begins at the earlier minute boundary.  The target
         # energy stop may terminate it before the fractional latest-start
         # point, but the proof above includes this extra minute.
@@ -1024,6 +1180,7 @@ def _plan_pre_discharge_headroom(
         schedule_ledger=tuple(
             ScheduleLedgerEntry(left, right, start_energy, end_energy, discretionary_ac)
             for left, right, start_energy, end_energy, discretionary_ac in simulation.ledger
+            if _utc(proposed_start) <= _utc(left) and _utc(right) <= _utc(proposed_end)
         ),
         input_fingerprint=fingerprint,
         fresh_until=fresh_until,
@@ -1041,8 +1198,7 @@ def plan_pre_discharge_headroom(**kwargs: Any) -> PreDischargePlanResult:
 commissioned_pre_discharge_headroom = plan_pre_discharge_headroom
 
 __all__ = [
-    "BatteryEnergyObservation",
-    "EnergyObservationAuthority",
+    "TrustedSolisEnergyBoundary",
     "ForecastObservation",
     "EnergyObservation",
     "HeadroomIssue",
@@ -1051,6 +1207,12 @@ __all__ = [
     "PreDischargePlanningStatus",
     "PreDischargeResult",
     "PreDischargeStatus",
+    "TRUSTED_FORECAST_PRODUCER",
+    "TRUSTED_FORECAST_REVISION",
+    "TRUSTED_FORECAST_SCHEMA_REVISION",
+    "TRUSTED_FORECAST_SOURCE",
+    "TRUSTED_FORECAST_SOURCE_FAMILY",
     "commissioned_pre_discharge_headroom",
     "plan_pre_discharge_headroom",
+    "trusted_solis_energy_boundary",
 ]
