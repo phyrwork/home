@@ -505,6 +505,12 @@ def _values(value: object) -> list[str]:
 def _entity(value: ConfigValue, name: str, domain: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a {domain} entity ID")
+    if (
+        value in _LEGACY_STUB_IDS
+        or value.startswith("input_number.house_battery_")
+        or value.startswith("input_select.house_battery_")
+    ):
+        raise ValueError(f"{name} must not reference a legacy stub entity ID")
     match = _ENTITY_PATTERN.fullmatch(value)
     if match is None or match.group("domain") != domain:
         raise ValueError(f"{name} must be a {domain} entity ID")

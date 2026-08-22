@@ -348,7 +348,7 @@ def test_enabled_zero_interval_and_reserved_direction_are_rejected() -> None:
     assert any(issue.code == "slot_time_zero_enabled" for issue in result.issues)
 
     solis, states = valid_fixture()
-    reserved = solis.slots[1].discharge
+    reserved = solis.slots[2].discharge
     states[reserved.enable_entity_id]["state"] = "on"
     states[reserved.time_entity_id]["state"] = "23:00-01:00"
     reserved_result = read_solis_state(solis, states, NOW)
