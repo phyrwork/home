@@ -183,6 +183,20 @@ resolution entries remain absent or `preserve` unless the live session supplies
 separate verified maximum/unlimited evidence tied to the current fingerprints.
 Never derive a resolution from a generic HA maximum.
 
+When separate device evidence establishes the effective planner power envelope,
+also record:
+
+- maximum battery charge kW at the AC input boundary, before charge efficiency;
+- maximum battery discharge kW at the AC output boundary, before stored-energy
+  conversion; and
+- commissioning schema, inverter identity, mapping, policy, manual-grid and
+  capability fingerprints.
+
+These fields are absent unless explicitly verified. They remain valid only while
+every schema, identity and fingerprint matches. T0013 must treat missing or
+mismatched evidence as unavailable and must never infer kW from amperes or generic
+Home Assistant bounds.
+
 ## Required behavior outcomes
 
 Validation collects explicit enumerated outcomes, evidence notes and observation
@@ -215,6 +229,8 @@ The generated snippet:
 - contains current mapping/policy fingerprints and evidence times;
 - contains exact manual-grid verification;
 - includes only separately verified capability resolutions;
+- includes the separately verified AC planner power envelope and its authority
+  fingerprints when available;
 - sets persistent candidate authorization to `false`, pending human review;
 - contains no reusable ephemeral token;
 - contains no T0006 slot commissioning authorization;
