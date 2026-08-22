@@ -1,0 +1,548 @@
+# T0001 — Solis battery arbitrage control
+
+Status: Proposed
+
+## Objective
+
+Control the Garage Solis battery so that it:
+
+1. Prioritises exporting surplus PV.
+2. Uses stored energy to minimise expensive grid import.
+3. Cycles profitably during standard and bonus Intelligent Octopus cheap periods.
+4. Preserves a dynamically calculated household-energy reserve.
+5. Falls back to safe autonomous operation whenever Home Assistant control becomes
+   unhealthy.
+
+## System context
+
+- The battery is a 32.1536 kWh Fogstar Energy battery connected to a Solis
+  inverter.
+- The installed inverter and battery system is designed to operate safely at the
+  inverter's maximum supported charge and discharge capability.
+- PV uses a separate inverter and is not reported as PV generation by Solis.
+- Surplus PV is nevertheless visible to Solis as negative site load.
+- It has been verified that negative load can charge the battery, so the planner
+  may retain that assumption.
+- Home Assistant has separate Solis telemetry and Solis Cloud control
+  integrations.
+- Intelligent Octopus dispatch information is available in Home Assistant.
+- The existing `house_battery_control` reserve planner should be reused where its
+  model remains applicable.
+
+## Named constants
+
+Define fixed safety and policy values once in the integration configuration or
+constants module:
+
+```python
+FULL_SOC_PERCENT = 100
+MINIMUM_SOC_PERCENT = 10
+FORCE_CHARGE_SOC_PERCENT = 7
+MAXIMUM_GRID_IMPORT_POWER_KW = 0.1
+OFF_PEAK_CYCLE_DISCHARGE_MINUTES = 10
+```
+
+Safety values must not be duplicated as numeric literals throughout the
+implementation. Code, tests, diagnostics and documentation should refer to these
+constant names.
+
+Charge current, discharge current, output power and feed-in power are
+capability-derived settings rather than fixed constants in this task. At
+implementation time, the actuator must:
+
+- Discover the inverter-supported maximum or documented unlimited sentinel.
+- Apply that value.
+- Read it back and verify acceptance.
+- Avoid treating a generic Home Assistant entity range as verified equipment
+  capability.
+- Fail safely rather than applying an implausible discovered limit.
+
+The planner may retain the verified runtime capabilities for its energy and timing
+calculations.
+
+## Persistent candidate configuration
+
+Deploy the following candidate Solis configuration:
+
+- Storage mode: `Feed-In Priority`.
+- Grid Peak Shaving: enabled.
+- Maximum grid power: `MAXIMUM_GRID_IMPORT_POWER_KW`.
+- Allow grid charging: enabled.
+- Allow export: enabled.
+- Over-discharge SOC: `MINIMUM_SOC_PERCENT`.
+- Force-charge SOC: `FORCE_CHARGE_SOC_PERCENT`.
+- Recovery from protective force charging: `MINIMUM_SOC_PERCENT`.
+- Maximum charge current: inverter-supported maximum or unlimited.
+- Maximum discharge current: inverter-supported maximum or unlimited.
+- Maximum output power: inverter-supported maximum or unlimited.
+- Maximum feed-in power: inverter-supported maximum or unlimited.
+- All charge and discharge slots initially disabled.
+
+Maximum grid power means the maximum power that may be drawn from the grid.
+Maximum feed-in power means the maximum power that may be exported.
+
+The DNO-approved export limit equals the combined rated output of the site
+inverters, so no lower software feed-in limit is required.
+
+The candidate will be implemented and deployed to the real inverter to validate
+the interactions among Feed-In Priority, Peak Shaving, forced charging, forced
+discharge and timed slots.
+
+## Core operating policy
+
+### Healthy Home Assistant control
+
+While the controller is healthy:
+
+- Maintain Feed-In Priority.
+- Keep Grid Peak Shaving enabled.
+- Limit ordinary grid import to `MAXIMUM_GRID_IMPORT_POWER_KW`.
+- Control charge and discharge slots dynamically.
+- Never enable charge and discharge slots simultaneously.
+- Never discharge below the dynamic household reserve.
+- Never calculate a household reserve below `MINIMUM_SOC_PERCENT`.
+
+Feed-In Priority with the separate PV inverter is considered validated. The
+candidate deployment will validate its interaction with the remaining controls.
+
+### Fail-safe operation
+
+On orderly Home Assistant shutdown or controller failure:
+
+1. Disable every Solis charge slot.
+2. Disable every Solis discharge slot.
+3. Set storage mode to `Self-Use`.
+4. Leave physical battery-protection settings intact.
+5. Put Battery Reserve and Peak Shaving into their validated fail-safe states.
+6. Verify the fallback configuration where communication remains available.
+
+Self-Use may absorb surplus PV, but this is an accepted degraded mode because it
+provides autonomous battery operation without relying on schedules or Home
+Assistant.
+
+After recovery, the controller must wait for fresh inputs and verified Solis state
+before restoring the healthy configuration.
+
+## Battery protection and household reserve
+
+### Physical discharge protection
+
+`MINIMUM_SOC_PERCENT` is the lowest SOC available to normal inverter operation.
+The controller must not command a lower target, calculate a lower household
+reserve or export energy protected by this threshold.
+
+### Emergency force charging
+
+At `FORCE_CHARGE_SOC_PERCENT`, the inverter should initiate protective charging
+and recover the battery to `MINIMUM_SOC_PERCENT`.
+
+This protection is independent of normal cheap-period charging, arbitrage cycling,
+the dynamic household reserve and the desired end-of-window SOC.
+
+### Dynamic household reserve
+
+The household reserve represents the energy required to avoid expensive grid
+import before the next cheap charging opportunity. The lower bound for
+discretionary export is:
+
+```text
+max(MINIMUM_SOC_PERCENT, calculated household reserve)
+```
+
+The reserve remains dynamic and should reuse the existing reverse-planning model.
+It is not the same as any physical protection threshold.
+
+## Reusing the reserve planner
+
+Retain the existing reserve-planning concepts:
+
+- Reverse-plan energy needed before the next cheap charging opportunity.
+- Account for forecast household demand.
+- Account for charge and discharge efficiency.
+- Account for the verified runtime inverter capabilities.
+- Retain the configurable reserve margin.
+- Clamp the result to the physical battery range using
+  `MINIMUM_SOC_PERCENT` and `FULL_SOC_PERCENT`.
+
+Preserve the verified treatment of external PV:
+
+- Unmonitored PV surplus appears as negative load.
+- Negative load can charge the battery.
+- Forecast surplus may therefore reduce the required initial battery reserve and
+  increase forecast battery energy, subject to the active mode and charge-power
+  limit.
+
+Extend the planner to include:
+
+- Standard cheap periods.
+- Bonus Intelligent Octopus dispatches.
+- `MAXIMUM_GRID_IMPORT_POWER_KW` supplied by the grid during Peak Shaving.
+- The time required to replenish deliberately exported energy.
+- The required final SOC at the end of each cheap interval.
+
+The reserve is both a planning constraint and a candidate input to the Solis
+Battery Reserve controls. The candidate deployment must establish whether those
+controls enforce the reserve without causing unwanted peak-rate grid charging.
+
+## Headroom strategy 1 — off-peak full-SOC cycling
+
+This strategy applies only while the current import price is off-peak and the
+battery has reached `FULL_SOC_PERCENT`.
+
+When those conditions hold:
+
+1. Disable and verify the charge slot.
+2. Configure a discharge period lasting
+   `OFF_PEAK_CYCLE_DISCHARGE_MINUTES`.
+3. Force discharge, stopping early if the dynamic household reserve is reached.
+4. Disable and verify the discharge slot.
+5. Resume charging to `FULL_SOC_PERCENT`.
+6. Repeat only if sufficient cheap time remains to complete another discharge and
+   recharge cycle.
+
+This creates a bounded amount of headroom per cycle and avoids frequent
+SOC-driven direction changes.
+
+The controller must not initiate a cycle unless expected net export makes the
+cycle profitable. Discharge consumed by the house or EV is valued as avoided
+off-peak import rather than export.
+
+Near the end of a cheap interval, the controller must stop starting new discharge
+cycles, disable any discharge slot and enter a final charge phase toward
+`FULL_SOC_PERCENT`.
+
+## Headroom strategy 2 — pre-discharge before scheduled off-peak
+
+This is a separate planning action performed before a known standard or bonus
+off-peak interval.
+
+Calculate:
+
+- Battery energy expected at the start of the interval.
+- Energy that could be charged during the scheduled duration.
+- Forecast load and negative-load PV contribution.
+- The dynamic household reserve required before the interval.
+
+If the forecast charging opportunity would take the battery above
+`FULL_SOC_PERCENT`, pre-discharge the otherwise unusable energy before the cheap
+interval.
+
+The discharge target must:
+
+- Create only the useful calculated headroom.
+- Remain above the dynamic household reserve.
+- Remain above `MINIMUM_SOC_PERCENT`.
+- Account for forecast demand before cheap charging starts.
+
+This pre-discharge should normally require one discharge operation rather than
+repeated switching.
+
+Both strategies may apply to one cheap interval: pre-discharge creates forecast
+headroom before it begins, while full-SOC cycling exploits additional capacity if
+the battery becomes full during it.
+
+## Intelligent Octopus dispatches
+
+Use planned, started and completed Intelligent Octopus dispatch information
+already exposed in Home Assistant.
+
+The controller must:
+
+- Recognise new and changed dispatch windows.
+- Merge adjacent or overlapping cheap intervals when appropriate.
+- Confirm the cheap tariff before starting a cycle.
+- Recalculate available headroom when a dispatch changes.
+- Stop and clean up if a dispatch is withdrawn.
+- Clear expired slots so they cannot repeat the following day.
+- Reconcile all slots after Home Assistant restarts.
+
+A planned dispatch may justify pre-discharge before it begins, provided the
+dynamic reserve is preserved.
+
+## Arbitrage calculation
+
+For energy imported for later export, approximate value as:
+
+```text
+export price × round-trip efficiency − import price
+```
+
+Discharge output must be divided into:
+
+- Energy offsetting grid import, valued at the current import price.
+- Net exported energy, valued at the export price.
+
+Do not assume all inverter discharge becomes metered export, particularly while
+the EV is charging.
+
+Do not start a cycle unless its expected value remains positive after charge loss,
+discharge loss, forecast household and EV demand, the configured minimum profit
+margin and any future battery-wear allowance.
+
+## Controller failure guard
+
+Expose a controller heartbeat and diagnostic health state. Enter fail-safe
+operation if:
+
+- Home Assistant begins orderly shutdown.
+- The controller heartbeat becomes stale.
+- Battery telemetry is stale or unavailable.
+- Required tariff information is unavailable.
+- Dispatch data cannot be interpreted safely.
+- Solis writes fail.
+- Written settings cannot be verified.
+- Charge and discharge slots are simultaneously enabled.
+- Applied state persistently differs from desired state.
+- The planner or coordinator raises an unhandled exception.
+- A dynamic slot remains enabled beyond its expiry.
+
+A separate Home Assistant automation should monitor the custom integration
+heartbeat and invoke the fallback services if the integration becomes unavailable
+while Home Assistant remains operational.
+
+Every dynamic slot must have a real near-term end time because a sudden loss of
+the Home Assistant host cannot execute the shutdown handler.
+
+## Safe write ordering
+
+When changing direction:
+
+1. Disable the currently active slot.
+2. Verify that it is disabled.
+3. Configure the new time, current and target SOC.
+4. Verify the configured values.
+5. Enable the new slot.
+6. Verify the resulting state.
+7. Record the action, reason and expiry.
+
+A partial write must never leave both directions enabled.
+
+## Slot ownership
+
+- Charge slot 1: standard and bonus off-peak charging.
+- Discharge slot 1: full-SOC cycling during off-peak.
+- Discharge slot 2: forecast pre-discharge before a scheduled cheap interval.
+- Remaining charge and discharge slots: disabled and reserved.
+
+Home Assistant owns all Solis charge and discharge slots. Fail-safe cleanup
+therefore disables all slots.
+
+## Candidate deployment and validation
+
+Implement and deploy the persistent candidate configuration before enabling
+automated cycling.
+
+Observe and record:
+
+- Peak Shaving holding grid import near `MAXIMUM_GRID_IMPORT_POWER_KW`.
+- The interaction between forced charging and Peak Shaving.
+- Timed charge and discharge behaviour in Feed-In Priority.
+- The effective maximum accepted charge, discharge, output and feed-in settings.
+- Force charging from `FORCE_CHARGE_SOC_PERCENT` to
+  `MINIMUM_SOC_PERCENT`.
+- Battery Reserve behaviour above and below its configured SOC.
+- Updated slot entity bounds after applying the new physical protection values and
+  reloading or re-enumerating the Solis integration.
+
+Any unsafe or incompatible result must trigger the fail-safe configuration before
+the design proceeds.
+
+## Diagnostics
+
+Expose:
+
+- Controller heartbeat and health.
+- Normal, degraded or recovery state.
+- Current storage mode.
+- Current SOC and telemetry age.
+- `MINIMUM_SOC_PERCENT` and `FORCE_CHARGE_SOC_PERCENT`.
+- Current dynamic household reserve.
+- Current cheap interval and its source.
+- Remaining cheap time.
+- Current charge or discharge phase.
+- Phase start and expiry.
+- Target SOC and target energy.
+- Grid import and export power.
+- Expected arbitrage value.
+- Required final charge time.
+- Desired and applied Solis slot state.
+- Last successful write and verification.
+- Last error and fail-safe reason.
+- Startup and shutdown reconciliation status.
+
+## Implementation phases
+
+### Phase 1 — Candidate configuration
+
+- Implement named constants.
+- Map the real Solis telemetry and control entities.
+- Implement runtime capability discovery.
+- Implement the persistent candidate configuration.
+- Implement fail-safe application before other real control.
+- Deploy the candidate.
+- Observe and document the required interactions.
+
+### Phase 2 — Planner refactor in observation mode
+
+- Reuse and adapt the household reserve model.
+- Preserve negative-load charging assumptions.
+- Add standard and bonus cheap intervals.
+- Add both headroom strategies and refill-time calculations.
+- Calculate proposed actions without applying them.
+
+### Phase 3 — Controlled charging
+
+- Enable dynamic charge-slot writes.
+- Verify standard and bonus cheap-period handling.
+- Verify final charging and slot cleanup.
+
+### Phase 4 — Controlled export cycling
+
+- Enable forecast pre-discharge.
+- Enable full-SOC off-peak cycling.
+- Validate actual metered export and profitability.
+- Confirm that EV demand is handled correctly.
+
+### Phase 5 — Remove obsolete implementation
+
+- Remove stub inverter entities.
+- Remove inaccurate abstract actuator mappings.
+- Update tests, deployment documentation and working notes.
+
+## Acceptance criteria
+
+- Fixed safety and policy values are declared as named constants.
+- Solis Over-discharge SOC uses `MINIMUM_SOC_PERCENT`.
+- Solis Force-charge SOC uses `FORCE_CHARGE_SOC_PERCENT`.
+- Protective charging recovers the battery to `MINIMUM_SOC_PERCENT`.
+- The dynamic reserve never falls below `MINIMUM_SOC_PERCENT`.
+- Peak Shaving uses `MAXIMUM_GRID_IMPORT_POWER_KW`.
+- Capability-derived settings use verified maxima or unlimited sentinels rather
+  than task-card literals.
+- Feed-in is not unnecessarily restricted below inverter capability.
+- Negative load is represented as battery-charge potential in the planner.
+- Charge and discharge slots are never enabled simultaneously in production.
+- Pre-discharge creates useful headroom before a scheduled cheap interval.
+- Profitable cycling can repeat after the battery reaches full SOC during a cheap
+  interval.
+- No discharge cycle starts without enough time to recharge.
+- The battery approaches `FULL_SOC_PERCENT` before the cheap interval ends.
+- Bonus dispatch changes and expiry are handled safely.
+- Orderly shutdown leaves Self-Use active with all slots disabled.
+- Controller faults invoke the same fallback.
+- Startup reconciliation clears expired schedules before control resumes.
+- Diagnostics explain every decision and fail-safe transition.
+
+## Open decisions
+
+- The minimum arbitrage profit margin.
+- Whether to include an explicit battery-wear cost.
+- The final timing margin before the end of each cheap interval.
+- The validated fail-safe settings for Battery Reserve and Peak Shaving.
+- Any changes required after observing the deployed candidate.
+
+## Appendix A — Current Home Assistant control mapping
+
+This appendix records the active Garage Inverter Control entities observed on
+2026-08-22. Entity capabilities must be re-read during implementation rather than
+treated as immutable.
+
+### Persistent operating policy
+
+| Scheme setting | Home Assistant entity | Type and intended use |
+| --- | --- | --- |
+| Storage mode | `select.garage_inverter_control_storage_mode` | Select with `Self-Use`, `Feed-In Priority` and `Off-Grid`; use Feed-In Priority while healthy and Self-Use during fail-safe |
+| Grid charging permission | `switch.garage_inverter_control_allow_grid_charging` | Enable while scheduled charging is available |
+| Export permission | `switch.garage_inverter_control_allow_export` | Enable |
+| Peak Shaving | `switch.garage_inverter_control_grid_peak_shaving` | Enable while healthy |
+| Maximum grid import | No active entity currently exposed | Mapping gap to resolve through entity registry inspection, an integration extension or direct Solis control API |
+| Inverter operation | `switch.garage_inverter_control_inverter_on_off` | Keep enabled; do not use for routine control |
+| Inverter clock | `datetime.garage_inverter_control_inverter_time` | Verify or synchronise before programming slots |
+
+### Battery protection and reserve
+
+| Scheme setting | Home Assistant entity | Intended use |
+| --- | --- | --- |
+| Physical discharge floor | `number.garage_inverter_control_battery_over_discharge_soc` | Set to `MINIMUM_SOC_PERCENT` |
+| Emergency force-charge threshold | `number.garage_inverter_control_battery_force_charge_soc` | Set to `FORCE_CHARGE_SOC_PERCENT` |
+| Recovery SOC | `number.garage_inverter_control_battery_recovery_soc` | Configure protective charging to recover to `MINIMUM_SOC_PERCENT` and verify firmware acceptance |
+| Maximum charge SOC | `number.garage_inverter_control_battery_max_charge_soc` | Set to `FULL_SOC_PERCENT` |
+| Battery Reserve enable | `switch.garage_inverter_control_battery_reserve` | Candidate actuator for enforcing the dynamic household reserve |
+| Battery Reserve SOC | `number.garage_inverter_control_battery_reserve_soc` | Candidate mapping for the calculated reserve, rounded upward and bounded by `MINIMUM_SOC_PERCENT` |
+
+The candidate deployment must establish whether Battery Reserve:
+
+- Prevents Peak Shaving from discharging below the dynamic reserve.
+- Causes unwanted grid charging when the battery is below the reserve.
+- Works consistently in Feed-In Priority.
+- Should remain enabled during fail-safe or be reduced to
+  `MINIMUM_SOC_PERCENT`.
+
+### Inverter capability controls
+
+| Capability | Home Assistant entity | Intended handling |
+| --- | --- | --- |
+| Global maximum charge current | `number.garage_inverter_control_battery_max_charge_current` | Discover and apply the inverter-supported maximum; do not assume the exposed HA maximum is safe |
+| Global maximum discharge current | `number.garage_inverter_control_battery_max_discharge_current` | Same |
+| Maximum output power | `number.garage_inverter_control_max_output_power` | Set to the supported maximum or documented unlimited sentinel |
+| Maximum feed-in power | `number.garage_inverter_control_max_export_power` | Set to the supported maximum or documented unlimited sentinel; this is the export-power limit |
+| Export calibration | `number.garage_inverter_control_export_calibration` | Preserve unless meter calibration is explicitly required |
+
+The active global current entities currently advertise a much broader range than
+the individual slot-current entities. Capability discovery must not equate either
+generic entity bound with the safe hardware capability without verification.
+
+### Schedule-slot controls
+
+Six independent charge slots and six independent discharge slots are exposed. For
+each `n` from 1 through 6:
+
+| Function | Entity pattern | Type |
+| --- | --- | --- |
+| Enable charge | `switch.garage_inverter_control_slot{n}_charge` | Switch |
+| Charge time | `text.garage_inverter_control_slot{n}_charge_time` | Exact `HH:MM-HH:MM` text |
+| Charge current | `number.garage_inverter_control_slot{n}_charge_current` | Number; introspect and verify supported maximum |
+| Charge target SOC | `number.garage_inverter_control_slot{n}_charge_soc` | Number; introspect bounds at runtime |
+| Enable discharge | `switch.garage_inverter_control_slot{n}_discharge` | Switch |
+| Discharge time | `text.garage_inverter_control_slot{n}_discharge_time` | Exact `HH:MM-HH:MM` text |
+| Discharge current | `number.garage_inverter_control_slot{n}_discharge_current` | Number; introspect and verify supported maximum |
+| Discharge target SOC | `number.garage_inverter_control_slot{n}_discharge_soc` | Number; introspect bounds at runtime |
+
+All slots were disabled with `00:00-00:00` times when this inventory was taken.
+
+The slot SOC entities reported a lower bound derived from the then-current default
+Over-discharge SOC. That default was higher than `MINIMUM_SOC_PERCENT`. Treat the
+reported bound as stale or configuration-derived metadata: after applying the
+candidate safety thresholds, reload or re-enumerate the integration and introspect
+the bounds again. Do not encode the previously observed bound in the controller.
+
+### Telemetry input
+
+| Planner input | Home Assistant entity | Intended use |
+| --- | --- | --- |
+| Battery SOC | `sensor.garage_inverter_telemetry_garage_inverter_remaining_battery_capacity` | Authoritative current SOC, subject to freshness checks |
+
+The telemetry timestamp and battery power entities should also be mapped during
+implementation to validate freshness and whether the commanded charge or discharge
+actually occurred.
+
+### Controls outside the scheme
+
+| Entity | Treatment |
+| --- | --- |
+| `switch.garage_inverter_control_mppt_multi_peak_scanning` | Leave unmanaged; the Solis inverter has no connected PV |
+| `number.garage_inverter_control_mppt_multi_peak_scan_interval` | Leave unmanaged |
+| `number.garage_inverter_control_export_calibration` | Preserve unless separately commissioned |
+| `switch.garage_inverter_control_inverter_on_off` | Keep on; never use as a normal charge or discharge actuator |
+
+### Fail-safe mapping
+
+Fail-safe application should:
+
+1. Turn off `switch.garage_inverter_control_slot{n}_charge` for every slot.
+2. Turn off `switch.garage_inverter_control_slot{n}_discharge` for every slot.
+3. Select `Self-Use` through
+   `select.garage_inverter_control_storage_mode`.
+4. Preserve the inverter-on state and physical protection thresholds.
+5. Set Battery Reserve and Peak Shaving to their validated fail-safe states.
+6. Verify that no slot remains enabled.
