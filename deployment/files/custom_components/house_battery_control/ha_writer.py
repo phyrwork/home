@@ -1,15 +1,16 @@
 """Serialized and revision-verified Home Assistant write adapter.
 
-This module intentionally imports no Home Assistant package.  ``HomeAssistantAccess``
-is a small duck-typed boundary, which also makes all failure and race paths
-deterministically testable offline.
+The core writer uses no Home Assistant package.  ``HomeAssistantEventAdapter``
+is an optional concrete bridge for real HA state events; the duck-typed boundary
+also makes all failure and race paths deterministically testable offline.
 """
 
 import asyncio
 from collections.abc import Callable, Iterable, Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from decimal import Decimal, InvalidOperation
-from typing import Protocol
+import inspect
+from typing import Awaitable, Protocol
 
 from .contracts import ObservedCapability
 from .write_contracts import (
@@ -24,6 +25,7 @@ from .write_contracts import (
 
 HA_SERVICE_CALL_TIMEOUT = timedelta(seconds=10)
 HA_READBACK_TIMEOUT = timedelta(seconds=15)
+HA_LISTENER_CLEANUP_TIMEOUT = timedelta(seconds=5)
 _UNKNOWN = frozenset(("unknown", "unavailable"))
 
 
@@ -32,11 +34,32 @@ class HomeAssistantAccess(Protocol):
 
     def get_state(self, entity_id: str) -> object: ...
 
-    async def async_call(
-        self, domain: str, service: str, service_data: Mapping[str, object]
-    ) -> object: ...
+    def async_call(
+        self, domain: str, service: str, service_data: Mapping[str, object], *, blocking: bool = True
+    ) -> Awaitable[object]: ...
 
     def async_listen_state_change(self, entity_id: str, callback: Callable[..., object]) -> Callable[[], object]: ...
+
+
+class HomeAssistantEventAdapter:
+    """Concrete adapter for a real HA instance and its state-event helper."""
+
+    def __init__(self, hass: object) -> None:
+        self.hass = hass
+        from homeassistant.helpers.event import async_track_state_change_event
+
+        self._track_state_change_event = async_track_state_change_event
+
+    def get_state(self, entity_id: str) -> object:
+        return self.hass.states.get(entity_id)  # type: ignore[attr-defined]
+
+    def async_call(self, domain: str, service: str, service_data: Mapping[str, object], *, blocking: bool = True) -> Awaitable[object]:
+        return self.hass.services.async_call(  # type: ignore[attr-defined]
+            domain, service, service_data, blocking=blocking
+        )
+
+    def async_listen_state_change(self, entity_id: str, callback: Callable[..., object]) -> Callable[[], object]:
+        return self._track_state_change_event(self.hass, [entity_id], callback)
 
 
 def _field(state: object, name: str, default: object = None) -> object:
@@ -85,8 +108,18 @@ def _domain(entity_id: str) -> str | None:
 class HomeAssistantWriter:
     """One serialized writer boundary for all supported HA entity domains."""
 
-    def __init__(self, hass: HomeAssistantAccess | object) -> None:
-        self.hass = hass
+    def __init__(
+        self,
+        hass: HomeAssistantAccess | object,
+        *,
+        adapter: HomeAssistantAccess | None = None,
+        timezone: tzinfo | None = None,
+    ) -> None:
+        self.hass = adapter if adapter is not None else hass
+        # Datetime targets are already schedule-normalized by the caller.  If
+        # configured, this timezone is validation only; the writer never
+        # converts or adjusts a target's timezone.
+        self.timezone = timezone
         self._lock = asyncio.Lock()
         self._owner: asyncio.Task[object] | None = None
 
@@ -96,11 +129,25 @@ class HomeAssistantWriter:
     async def async_write(self, request: WriteRequest) -> WriteResult:
         """Write one request, acquiring the writer lock unless already owned."""
         if self._owner is asyncio.current_task():
-            return await self._write_locked(request)
+            raise RuntimeError("writer.async_write cannot be re-entered inside a transaction; use transaction.async_write")
         async with self.transaction() as transaction:
             return await transaction.async_write(request)
 
     write = async_write
+
+    def capture_precondition(self, entity_id: str) -> StatePrecondition:
+        """Capture an immutable current HA revision for a later write."""
+        state = self._get(entity_id)
+        if state is None:
+            raise ValueError(f"entity does not exist: {entity_id}")
+        raw = _state_value(state)
+        updated = _updated(state)
+        if raw is None or raw in _UNKNOWN or updated is None:
+            raise ValueError(f"entity state is unavailable or invalid: {entity_id}")
+        return StatePrecondition(entity_id, raw, updated, _context_id(state))
+
+    current_precondition = capture_precondition
+    read_precondition = capture_precondition
 
     def _get(self, entity_id: str) -> object:
         getter = getattr(self.hass, "get_state", None)
@@ -126,14 +173,10 @@ class HomeAssistantWriter:
             call = getattr(services, "async_call", None)
         if not callable(call):
             raise TypeError("Home Assistant access must provide async_call")
-        try:
-            result = call(request.domain, service, data, blocking=True)
-        except TypeError:
-            # Small deterministic fakes commonly omit HA's optional blocking
-            # argument; the outer wait still supplies the finite bound.
-            result = call(request.domain, service, data)
-        if hasattr(result, "__await__"):
-            await asyncio.wait_for(result, HA_SERVICE_CALL_TIMEOUT.total_seconds())
+        result = call(request.domain, service, data, blocking=True)
+        if not inspect.isawaitable(result):
+            raise TypeError("Home Assistant service call must return an awaitable")
+        await asyncio.wait_for(result, HA_SERVICE_CALL_TIMEOUT.total_seconds())
 
     def _listen(self, entity_id: str, callback: Callable[..., object]) -> Callable[[], object]:
         listen = getattr(self.hass, "async_listen_state_change", None)
@@ -204,14 +247,20 @@ class HomeAssistantWriter:
                     accepted = request.text_validator(target)
                 except Exception as exc:
                     return WriteResult(request.entity_id, WriteOutcome.REJECTED, f"text validation failed: {exc}")
-                if accepted is False:
+                if accepted is not True:
                     return WriteResult(request.entity_id, WriteOutcome.REJECTED, "text validator rejected target")
             return target, "set_value", {"entity_id": request.entity_id, "value": target}
         if request.domain == "datetime":
             if not isinstance(target, datetime) or target.tzinfo is None or target.utcoffset() is None:
                 return WriteResult(request.entity_id, WriteOutcome.REJECTED, "datetime target must be aware")
+            if self.timezone is not None and target.tzinfo != self.timezone:
+                return WriteResult(
+                    request.entity_id,
+                    WriteOutcome.REJECTED,
+                    "datetime target must already be normalized to the configured timezone",
+                )
             normalized = target.isoformat()
-            return normalized, "set_value", {"entity_id": request.entity_id, "value": normalized}
+            return normalized, "set_value", {"entity_id": request.entity_id, "datetime": normalized}
         if request.domain == "number":
             if not isinstance(target, Decimal) or not target.is_finite():
                 return WriteResult(request.entity_id, WriteOutcome.REJECTED, "number target must be finite Decimal")
@@ -310,12 +359,46 @@ class HomeAssistantWriter:
                     return WriteResult(request.entity_id, WriteOutcome.APPLIED_HA_READBACK, "Home Assistant state event and revision confirm the requested value", f"{request.domain}.{service}", service_data)
         finally:
             if remove is not None:
-                try:
-                    removed = remove()
-                    if hasattr(removed, "__await__"):
-                        await removed
-                except asyncio.CancelledError:
-                    raise
+                await _cleanup_listener(remove)
+
+
+async def _cleanup_listener(remove: Callable[[], object]) -> None:
+    """Remove a listener through a bounded shield, preserving cancellation."""
+
+    async def invoke() -> None:
+        result = remove()
+        if inspect.isawaitable(result):
+            await result
+
+    cleanup_task = asyncio.create_task(invoke())
+
+    def consume(task: asyncio.Task[object]) -> None:
+        try:
+            task.result()
+        except BaseException:
+            pass
+
+    cleanup_task.add_done_callback(consume)
+    cancellation: asyncio.CancelledError | None = None
+    try:
+        await asyncio.wait_for(asyncio.shield(cleanup_task), HA_LISTENER_CLEANUP_TIMEOUT.total_seconds())
+    except asyncio.CancelledError as exc:
+        cancellation = exc
+        current = asyncio.current_task()
+        if current is not None:
+            current.uncancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(cleanup_task), HA_LISTENER_CLEANUP_TIMEOUT.total_seconds())
+        except asyncio.TimeoutError:
+            cleanup_task.cancel()
+    except asyncio.TimeoutError:
+        cleanup_task.cancel()
+    except Exception:
+        # Listener removal is cleanup; preserve the primary write outcome.
+        pass
+    finally:
+        if cancellation is not None:
+            raise cancellation
 
 
 class WriteTransaction:
@@ -326,14 +409,23 @@ class WriteTransaction:
         self.results: list[WriteResult] = []
         self.complete = True
         self._entered = False
+        self._task: asyncio.Task[object] | None = None
 
     async def __aenter__(self) -> "WriteTransaction":
+        if self.writer._owner is asyncio.current_task():
+            raise RuntimeError("nested transactions are not supported")
         await self.writer._lock.acquire()
         self.writer._owner = asyncio.current_task()
         self._entered = True
+        self._task = asyncio.current_task()
         return self
 
+    def _assert_owner(self) -> None:
+        if not self._entered or self._task is not asyncio.current_task():
+            raise RuntimeError("transaction may only be used by its owning asyncio task")
+
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        self._assert_owner()
         if isinstance(exc, asyncio.CancelledError):
             self.complete = False
         self.writer._owner = None
@@ -341,8 +433,7 @@ class WriteTransaction:
         return False
 
     async def async_write(self, request: WriteRequest) -> WriteResult:
-        if not self._entered:
-            raise RuntimeError("transaction must be entered before writing")
+        self._assert_owner()
         try:
             result = await self.writer._write_locked(request)
         except asyncio.CancelledError:
@@ -359,6 +450,7 @@ class WriteTransaction:
         *,
         continue_on_failure: bool = False,
     ) -> TransactionResult:
+        self._assert_owner()
         for request in requests:
             result = await self.async_write(request)
             if not result.success and not continue_on_failure:
@@ -366,6 +458,7 @@ class WriteTransaction:
         return self.result()
 
     def result(self) -> TransactionResult:
+        self._assert_owner()
         failures = [result for result in self.results if not result.success]
         successes = [result for result in self.results if result.success]
         if not failures:
@@ -376,17 +469,12 @@ class WriteTransaction:
             status = TransactionStatus.FAILED
         return TransactionResult(tuple(self.results), status, self.complete)
 
-
-async def async_write(hass: HomeAssistantAccess | object, request: WriteRequest) -> WriteResult:
-    """Convenience one-shot write using a fresh serialized writer."""
-    return await HomeAssistantWriter(hass).async_write(request)
-
-
 __all__ = [
+    "HA_LISTENER_CLEANUP_TIMEOUT",
     "HA_READBACK_TIMEOUT",
     "HA_SERVICE_CALL_TIMEOUT",
     "HomeAssistantAccess",
+    "HomeAssistantEventAdapter",
     "HomeAssistantWriter",
     "WriteTransaction",
-    "async_write",
 ]

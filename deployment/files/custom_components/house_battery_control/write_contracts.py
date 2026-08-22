@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+from types import MappingProxyType
+from collections.abc import Mapping
 from typing import Callable, Literal
 
 from .contracts import ObservedCapability
@@ -41,7 +43,7 @@ class StatePrecondition:
             raise TypeError("context_id must be a string or None")
 
 
-TextValidator = Callable[[str], object]
+TextValidator = Callable[[str], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +152,11 @@ class WriteResult:
     outcome: WriteOutcome
     message: str = ""
     service: str | None = None
-    service_data: dict[str, object] | None = None
+    service_data: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        if self.service_data is not None:
+            object.__setattr__(self, "service_data", MappingProxyType(dict(self.service_data)))
 
     @property
     def success(self) -> bool:
