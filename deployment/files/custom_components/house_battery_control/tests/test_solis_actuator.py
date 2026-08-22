@@ -161,6 +161,46 @@ async def test_success_disables_before_configuring_and_enables_one_slot():
 
 
 @pytest.mark.asyncio
+async def test_repeated_identical_heartbeat_is_a_verified_noop():
+    controller, ha, observation = actuator()
+    first = await controller.async_apply_intent(intent(), observation, now=NOW)
+    assert first.status is SlotActuationStatus.APPLIED
+    ha.calls.clear()
+
+    current_observation = read_solis_state(
+        controller.config, ha.states, NOW + timedelta(seconds=30)
+    )
+    second = await controller.async_apply_intent(
+        intent(), current_observation, now=NOW + timedelta(seconds=30)
+    )
+
+    assert second.status is SlotActuationStatus.APPLIED
+    assert second.mandatory_disable_deadline == intent().end
+    assert second.results == ()
+    assert ha.calls == []
+
+
+@pytest.mark.asyncio
+async def test_changed_intent_still_replaces_existing_slot_transactionally():
+    controller, ha, observation = actuator()
+    await controller.async_apply_intent(intent(), observation, now=NOW)
+    ha.calls.clear()
+    current_observation = read_solis_state(
+        controller.config, ha.states, NOW + timedelta(seconds=30)
+    )
+
+    result = await controller.async_apply_intent(
+        intent(current=Decimal("2")), current_observation, now=NOW + timedelta(seconds=30)
+    )
+
+    assert result.status is SlotActuationStatus.APPLIED
+    assert any(call[1] == "turn_off" for call in ha.calls)
+    target = controller.config.slots[0].charge
+    assert ha.states[target.current_entity_id]["state"] == "2"
+    assert ha.states[target.enable_entity_id]["state"] == "on"
+
+
+@pytest.mark.asyncio
 async def test_failure_cleans_up_all_slot_switches():
     controller, ha, observation = actuator()
     target = controller.config.slots[0].charge

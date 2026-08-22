@@ -295,6 +295,47 @@ class SolisSlotActuator:
                 return False
         return True
 
+    def _existing_intent_is_proven(
+        self,
+        intent: SlotIntent,
+        observation: SolisStateReadResult,
+        target_state: object,
+        target_config: SolisSlotDirectionConfig,
+        schedule: str,
+    ) -> bool:
+        """Return whether the verified observation already proves this intent.
+
+        This deliberately uses the reader's complete snapshot rather than a
+        second set of entity reads.  A healthy observation records the state
+        of every direction, so an exact match can safely avoid toggling the
+        live schedule on each heartbeat.
+        """
+
+        snapshot = observation.snapshot
+        if snapshot is None:
+            return False
+        enabled: list[tuple[int, SlotDirection]] = []
+        target = None
+        for slot in snapshot.slots:
+            for direction_state in (slot.charge, slot.discharge):
+                if direction_state.enabled:
+                    enabled.append((slot.physical_slot, direction_state.direction))
+                if (
+                    slot.physical_slot == intent.physical_slot
+                    and direction_state.direction is intent.direction
+                ):
+                    target = direction_state
+        if enabled != [(intent.physical_slot, intent.direction)]:
+            return False
+        if target is None or target is not target_state or not target.enabled:
+            return False
+        return (
+            target.time_text == schedule
+            and target.current.current_value == intent.current
+            and target.target_soc.current_value == intent.target_soc
+            and self._guard_off()
+        )
+
     async def _write_recorded(
         self,
         transaction: WriteTransaction,
@@ -461,6 +502,15 @@ class SolisSlotActuator:
                 return SlotActuationResult(status, tuple(results), message=preflight)
             target_config, target_state, schedule = preflight
             deadline = min(intent.end, intent.expiry)
+            if self._existing_intent_is_proven(
+                intent, observation, target_state, target_config, schedule
+            ):
+                return SlotActuationResult(
+                    SlotActuationStatus.APPLIED,
+                    tuple(results),
+                    mandatory_disable_deadline=deadline,
+                    message="slot already enabled and Home Assistant readback verified",
+                )
             async with self.writer.transaction() as transaction:
                 # All twelve switch preconditions are captured immediately
                 # before their individual CAS writes.
