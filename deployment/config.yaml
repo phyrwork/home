@@ -17,7 +17,7 @@
         ha_api_token: "{{ ha_api_token_cmd.stdout }}"
       no_log: true
 
-    - name: validate configured octopus intelligent entity ids exist
+    - name: validate required Octopus rate and intelligent entity ids exist and are enabled
       shell: |
         python - <<'PY'
         import json
@@ -29,6 +29,13 @@
             if entity.get("disabled_by") is None
         }
         expected = [
+            "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates",
+            "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_next_day_rates",
+            "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_export_current_day_rates",
+            "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_export_next_day_rates",
+            "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_rates_data_last_retrieved",
+            "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_rates_data_last_retrieved",
+            "sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatches_data_last_retrieved",
             "number.octopus_energy_{{ ev_charger_device_id }}_intelligent_charge_target",
             "binary_sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatching",
             "switch.octopus_energy_{{ ev_charger_device_id }}_intelligent_smart_charge",
@@ -36,10 +43,10 @@
         missing = [entity_id for entity_id in expected if entity_id not in entity_ids]
         if missing:
             raise SystemExit(
-                "Configured ev_charger_device_id does not match Home Assistant entity registry. Missing: "
+                "Required Octopus rate/intelligent entities are missing or disabled in the Home Assistant entity registry: "
                 + ", ".join(missing)
             )
-        print("Validated Octopus Intelligent entity ids:", ", ".join(expected))
+        print("Validated enabled Octopus rate/intelligent entity ids:", ", ".join(expected))
         PY
       args:
         executable: /bin/sh

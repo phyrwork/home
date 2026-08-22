@@ -96,12 +96,47 @@ def test_outer_render_binds_only_exact_configured_sources() -> None:
     assert "intelligent_dispatches_data_last_retrieved$" not in rendered
 
 
+def test_outer_render_serializes_explicit_pep495_fold_fields() -> None:
+    _rendered, config = _outer_render()
+    attributes = {
+        IMPORT_EVENT: {
+            "rates": [_rate(
+                "2026-07-04T12:00:00+00:00",
+                "2026-07-04T12:30:00+00:00",
+                "0.07",
+            )],
+            "tariff_code": "E-2R-TEST-A",
+            "min_rate": "0.07",
+        },
+        IMPORT_NEXT_EVENT: {"rates": []},
+    }
+    values = {IMPORT_EVENT: _EntityState(), IMPORT_NEXT_EVENT: _EntityState()}
+    records = _render_rate_attribute(config["sensor"][0], attributes, values)
+    assert records[0]["start_fold"] == 0
+    assert records[0]["end_fold"] == 0
+
+
 def test_template_is_rendered_by_ansible_and_protected_from_static_sync() -> None:
     assert "octopus_fused_day_rates" in (DEPLOYMENT_ROOT / "config.yaml").read_text()
     assert "P octopus_fused_day_rates.yaml" in (
         DEPLOYMENT_ROOT / "files/templates/.rsync-filter"
     ).read_text()
     assert not (DEPLOYMENT_ROOT / "files/templates/octopus_fused_day_rates.yaml").exists()
+
+
+def test_deployment_preflight_requires_all_rate_sources_and_retrieval_diagnostics() -> None:
+    config = (DEPLOYMENT_ROOT / "config.yaml").read_text()
+    required = (
+        "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_current_day_rates",
+        "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_next_day_rates",
+        "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_export_current_day_rates",
+        "event.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_export_next_day_rates",
+        "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_import }}_rates_data_last_retrieved",
+        "sensor.octopus_energy_electricity_{{ electricity_meter_serial_number | lower }}_{{ electricity_meter_mpan_export }}_rates_data_last_retrieved",
+        "sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatches_data_last_retrieved",
+    )
+    assert all(entity_id in config for entity_id in required)
+    assert 'if entity.get("disabled_by") is None' in config
 
 
 def test_import_render_preserves_missing_minimum_and_parser_rejects_it() -> None:

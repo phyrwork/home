@@ -156,6 +156,7 @@ def test_pence_or_wrong_unit_is_rejected(unit: str) -> None:
 def test_fused_schema_requires_boolean_adjustment_and_rejects_legacy_record() -> None:
     record = {
         "start": NOW.isoformat(), "end": (NOW + timedelta(minutes=30)).isoformat(),
+        "start_fold": 0, "end_fold": 0,
         "value_inc_vat": "0.07", "unit": "GBP/kWh", "classification": "STANDARD_CHEAP",
         "source": "import-rates", "source_event": "current-day", "source_day": "current",
         "tariff": "T", "source_revision_at": NOW.isoformat(), "event_min_rate": "0.07",
@@ -169,10 +170,29 @@ def test_fused_schema_requires_boolean_adjustment_and_rejects_legacy_record() ->
         parse_fused_import_rates([record])
 
 
+def test_fused_schema_restores_explicit_pep495_fold_and_rejects_invalid_bits() -> None:
+    record = {
+        "start": NOW.isoformat(), "end": (NOW + timedelta(minutes=30)).isoformat(),
+        "start_fold": 1, "end_fold": 0,
+        "value_inc_vat": "0.07", "unit": "GBP/kWh", "is_intelligent_adjusted": False,
+        "classification": "NOT_CHEAP", "source": "import-rates", "source_event": "current-day",
+        "source_day": "current", "tariff": "T", "source_revision_at": NOW.isoformat(),
+        "event_min_rate": "0.07", "event_unique_price_count": 1,
+        "retrieval_source_entity_id": IMPORT_SOURCE, "dispatch_source_entity_id": DISPATCH_SOURCE,
+    }
+    parsed = parse_fused_import_rates([record])
+    assert parsed[0].start.fold == 1
+    assert parsed[0].end.fold == 0
+    record["start_fold"] = True
+    with pytest.raises(ValueError, match="fold bit"):
+        parse_fused_import_rates([record])
+
+
 def test_fused_schema_rejects_inconsistent_minimum_and_adjusted_rate() -> None:
     records = [
         {
             "start": NOW.isoformat(), "end": (NOW + timedelta(minutes=30)).isoformat(),
+            "start_fold": 0, "end_fold": 0,
             "value_inc_vat": "0.08", "unit": "GBP/kWh", "is_intelligent_adjusted": True,
             "classification": "BONUS_DISPATCH", "source": "i", "source_event": "e",
             "source_day": "current", "tariff": "T", "source_revision_at": NOW.isoformat(),
@@ -182,6 +202,7 @@ def test_fused_schema_rejects_inconsistent_minimum_and_adjusted_rate() -> None:
         },
         {
             "start": (NOW + timedelta(minutes=30)).isoformat(), "end": (NOW + timedelta(minutes=60)).isoformat(),
+            "start_fold": 0, "end_fold": 0,
             "value_inc_vat": "0.07", "unit": "GBP/kWh", "is_intelligent_adjusted": False,
             "classification": "STANDARD_CHEAP", "source": "i", "source_event": "e",
             "source_day": "current", "tariff": "T", "source_revision_at": NOW.isoformat(),
@@ -450,9 +471,11 @@ def test_forged_direct_intervals_and_wrong_concrete_types_fail_closed() -> None:
 
 def test_fused_export_parser_rejects_missing_revision_and_unordered_records() -> None:
     records = [
-        {
-            "start": item.start.isoformat(),
-            "end": item.end.isoformat(),
+            {
+                "start": item.start.isoformat(),
+                "end": item.end.isoformat(),
+                "start_fold": item.start.fold,
+                "end_fold": item.end.fold,
             "value_inc_vat": str(item.export_price),
             "unit": item.unit,
             "source": item.source,

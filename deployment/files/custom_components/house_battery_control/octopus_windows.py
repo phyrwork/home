@@ -70,6 +70,14 @@ def _bool(value: Any, label: str) -> bool:
     return value
 
 
+def _fold(value: Any, label: str) -> int:
+    """Validate the explicit PEP 495 fold bit carried by fused records."""
+
+    if type(value) is not int or value not in (0, 1):
+        raise ValueError(f"{label} must be the integer PEP 495 fold bit 0 or 1")
+    return value
+
+
 def _text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{label} must be a non-empty string")
@@ -231,7 +239,7 @@ def parse_fused_import_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
         if not isinstance(record, Mapping):
             raise ValueError("each fused rate must be an object")
         required = (
-            "start", "end", "value_inc_vat", "unit", "is_intelligent_adjusted",
+            "start", "end", "start_fold", "end_fold", "value_inc_vat", "unit", "is_intelligent_adjusted",
             "classification", "source", "source_event", "source_day", "tariff",
             "source_revision_at", "retrieval_source_entity_id",
             "dispatch_source_entity_id", "event_min_rate", "event_unique_price_count",
@@ -239,8 +247,8 @@ def parse_fused_import_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
         missing = [key for key in required if key not in record]
         if missing:
             raise ValueError(f"fused rate missing mandatory fields: {', '.join(missing)}")
-        start = _aware(_parse_datetime(record["start"], "start"), "start")
-        end = _aware(_parse_datetime(record["end"], "end"), "end")
+        start = _parse_datetime_with_fold(record["start"], record["start_fold"], "start")
+        end = _parse_datetime_with_fold(record["end"], record["end_fold"], "end")
         price = _decimal(record["value_inc_vat"], "value_inc_vat")
         adjusted = _bool(record["is_intelligent_adjusted"], "is_intelligent_adjusted")
         event_min = _decimal(record["event_min_rate"], "event_min_rate")
@@ -614,7 +622,7 @@ def parse_fused_export_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
         if not isinstance(record, Mapping):
             raise ValueError("each fused export rate must be an object")
         required = (
-            "start", "end", "value_inc_vat", "unit", "source", "source_event",
+            "start", "end", "start_fold", "end_fold", "value_inc_vat", "unit", "source", "source_event",
             "source_day", "tariff", "retrieved_at", "source_revision_at",
             "retrieval_source_entity_id",
         )
@@ -623,8 +631,8 @@ def parse_fused_export_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
             raise ValueError(f"fused export rate missing mandatory fields: {', '.join(missing)}")
         result.append(
             ExportRateInterval(
-                start=_parse_datetime(record["start"], "start"),
-                end=_parse_datetime(record["end"], "end"),
+                start=_parse_datetime_with_fold(record["start"], record["start_fold"], "start"),
+                end=_parse_datetime_with_fold(record["end"], record["end_fold"], "end"),
                 export_price=_decimal(record["value_inc_vat"], "value_inc_vat"),
                 source=_text(record["source"], "source"),
                 tariff=_text(record["tariff"], "tariff"),
@@ -658,6 +666,19 @@ def _parse_datetime(value: Any, label: str) -> datetime:
     except ValueError as exc:
         raise ValueError(f"{label} must be an ISO datetime") from exc
     return _aware(parsed, label)
+
+
+def _parse_datetime_with_fold(value: Any, fold: Any, label: str) -> datetime:
+    """Parse a fused timestamp and restore its separately serialized fold bit.
+
+    ``datetime.isoformat()`` serializes the UTC offset but not ``fold``.  The
+    producer therefore emits the bit beside each interval endpoint; restore it
+    after parsing so consumers retain the original PEP 495 wall-clock
+    occurrence rather than silently collapsing it.
+    """
+
+    parsed = _parse_datetime(value, label)
+    return parsed.replace(fold=_fold(fold, f"{label}_fold"))
 
 
 def value_for_stored_energy(margin_per_stored_kwh: Decimal, energy_kwh: Decimal) -> Decimal:

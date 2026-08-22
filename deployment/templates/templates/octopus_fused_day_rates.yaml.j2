@@ -45,6 +45,8 @@ sensor:
             {% set ns.items = ns.items + [{
               'start': as_datetime(rate.start).isoformat(),
               'end': as_datetime(rate.end).isoformat(),
+              'start_fold': as_datetime(rate.start).fold,
+              'end_fold': as_datetime(rate.end).fold,
               'value_inc_vat': rate.value_inc_vat,
               'is_capped': rate.is_capped,
               'unit': 'GBP/kWh',
@@ -98,6 +100,8 @@ sensor:
             {% set ns.items = ns.items + [{
               'start': as_datetime(rate.start).isoformat(),
               'end': as_datetime(rate.end).isoformat(),
+              'start_fold': as_datetime(rate.start).fold,
+              'end_fold': as_datetime(rate.end).fold,
               'value_inc_vat': rate.value_inc_vat,
               'is_capped': rate.is_capped,
               'unit': 'GBP/kWh',
