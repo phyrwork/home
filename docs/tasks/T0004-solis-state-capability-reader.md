@@ -1,6 +1,6 @@
 # T0004 — Read and validate Solis state and capabilities
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 

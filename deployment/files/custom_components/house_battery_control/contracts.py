@@ -83,6 +83,19 @@ class RuntimeCapabilities:
     discharge_slot_target_soc: ObservedCapability
     maximum_output_power: ObservedCapability
     maximum_feed_in_power: ObservedCapability
+    # These are optional for compatibility with T0002 callers.  A live Solis
+    # observation is not healthy until both global current capabilities have
+    # been read and validated.
+    maximum_charge_current: ObservedCapability | None = None
+    maximum_discharge_current: ObservedCapability | None = None
+
+    @property
+    def global_maximum_charge_current(self) -> ObservedCapability | None:
+        return self.maximum_charge_current
+
+    @property
+    def global_maximum_discharge_current(self) -> ObservedCapability | None:
+        return self.maximum_discharge_current
 
 
 class CapabilityTarget:
