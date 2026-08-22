@@ -1,6 +1,6 @@
 # T0007 — Implement candidate and fail-safe policy actuation
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 
