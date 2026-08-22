@@ -1,6 +1,6 @@
 # T0009 — Add an independent house battery watchdog
 
-Status: Approved
+Status: Implemented
 
 Approval: small-model design council, 2/2
 
@@ -34,11 +34,13 @@ Missing, unknown, unavailable or any other state is unsafe.
 Add `script.house_battery_fail_safe` using only built-in Home Assistant services
 and exact entity IDs from the deployed T0003 mapping.
 
-The first action always turns on
-`input_boolean.house_battery_control_disable`. The script never clears it.
+Immutable owner start/deadline variables may be established first. The first
+mutation always turns on `input_boolean.house_battery_control_disable`. The
+script never clears it.
 
 After asserting the guard, evaluate a fresh exact proof. When the complete
-fail-safe state already holds:
+fail-safe state already holds and the guard was exact `on` continuously for at
+least `OUTSTANDING_WRITE_SETTLE_SECONDS` before owner startup:
 
 - make no Solis service calls;
 - dismiss a stale watchdog notification if present;
@@ -128,6 +130,41 @@ custom integration runtime. Offline tests must cross-check its:
 
 against the deployed T0003/T0008 YAML mapping. Mapping drift must fail tests and
 invalidate the commissioning fingerprint before deployment.
+
+## Bounded implementation topology
+
+The implemented `script.house_battery_fail_safe` is the single-run,
+non-renewable 30-second owner. Repeated normal triggers coalesce and cannot
+restart its deadline.
+
+`OUTSTANDING_WRITE_SETTLE_SECONDS` is the conservative sum of T0005
+`HA_SERVICE_CALL_TIMEOUT` and `HA_READBACK_TIMEOUT` (25 seconds). Pass-one state
+cannot be accepted before that horizon. The horizon is anchored to the freshly
+proved guard-on `last_changed` time, so a guard asserted or recently changed by
+the current owner cannot use the zero-Solis fast path. If that post-guard horizon
+does not fit before the mutation cutoff, the result is
+`RECONCILIATION_PENDING`, never safe. Mutations stop at the named cutoff three
+seconds before the owner deadline. The cutoff requests nonblocking cancellation,
+allows one bounded cancellation-settlement slice and reserves the remainder for
+fresh proof and notification.
+
+It starts `script.house_battery_fail_safe_pass` nonblockingly. That child holds
+only the allowlisted safety-increasing Solis mutations and checks the unchanged
+mutation cutoff and exact guard immediately before every mutation. The owner
+observes child completion through HA state but never awaits a Solis service.
+
+Best-effort cancellation is requested nonblockingly through
+`script.house_battery_fail_safe_cancel_pass`. A cancellation-resistant cloud
+call can therefore outlive the owner only inside the safety-only child; the
+owner still records its final unsafe proof and notification by the deadline.
+Final success also requires both child script entities to be exact `off`.
+Missing, unknown, unavailable or active child state is reported as
+`RECONCILIATION_PENDING`, even when every Solis entity currently looks safe.
+
+Normal startup, periodic and evidence triggers use one short automation.
+Shutdown uses a separate short automation which reasserts the guard and requests
+the same single-run owner. It neither waits behind nor restarts an active normal
+automation run.
 
 ## Compatibility boundaries
 

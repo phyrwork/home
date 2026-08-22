@@ -1,0 +1,61 @@
+- id: house_battery_independent_watchdog
+  alias: "House battery independent watchdog"
+  description: >-
+    Coalesce startup, periodic and evidence triggers into the active bounded
+    fail-safe supervisor. The healthy/current/guard-off path is a no-op.
+  mode: single
+  max_exceeded: silent
+  trigger:
+    - platform: homeassistant
+      event: start
+      id: home_assistant_start
+    - platform: time_pattern
+      minutes: "/1"
+      id: every_minute
+    - platform: state
+      entity_id: sensor.house_battery_control_heartbeat
+      id: heartbeat_changed
+    - platform: state
+      entity_id: sensor.house_battery_control_health
+      id: controller_health_changed
+    - platform: state
+      entity_id: input_boolean.house_battery_control_disable
+      id: control_disable_changed
+  condition:
+    - condition: template
+      value_template: >-
+        {# HEARTBEAT_STALE_AFTER = 3 minutes; MAXIMUM_FUTURE_CLOCK_SKEW = 1 minute. #}
+        {% set heartbeat = as_timestamp(states('sensor.house_battery_control_heartbeat'), default=none) %}
+        {{ trigger.id == 'home_assistant_start'
+           or states('input_boolean.house_battery_control_disable') != 'off'
+           or states('sensor.house_battery_control_health') != 'healthy'
+           or heartbeat is none
+           or (as_timestamp(now()) - heartbeat) > 180
+           or (heartbeat - as_timestamp(now())) > 60 }}
+  action:
+    # Nonblocking starts coalesce under the supervisor's mode: single. Trigger
+    # churn can neither cancel the owner nor renew its absolute deadline.
+    - service: script.turn_on
+      target:
+        entity_id: script.house_battery_fail_safe
+
+- id: house_battery_independent_watchdog_shutdown
+  alias: "House battery independent watchdog shutdown"
+  description: >-
+    Reassert the guard on shutdown and independently request the existing
+    single-run supervisor without canceling or resetting its active owner.
+  mode: single
+  max_exceeded: silent
+  trigger:
+    - platform: homeassistant
+      event: shutdown
+      id: home_assistant_shutdown
+  action:
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.house_battery_control_disable
+      continue_on_error: true
+    - service: script.turn_on
+      target:
+        entity_id: script.house_battery_fail_safe
+      continue_on_error: true

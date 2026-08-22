@@ -1,0 +1,522 @@
+# The supervisor is deliberately separate from the mutation pass. A
+# script.turn_on call starts the pass without waiting for cloud-backed Solis
+# services, so the supervisor can enforce one absolute deadline and request
+# cancellation through another nonblocking script. Any escaped operation is
+# safety-increasing: slot off, Self-Use, Peak Shaving on or Battery Reserve off.
+
+house_battery_fail_safe_pass:
+  alias: "House battery fail-safe pass"
+  description: >-
+    Perform one cancellable reconciliation pass. The caller supplies the one
+    absolute supervisor deadline as deadline_timestamp.
+  mode: single
+  max_exceeded: silent
+  sequence:
+    # Each condition is a fresh exact guard proof immediately before its Solis
+    # mutation. A missing/invalid guard or expired deadline stops the pass.
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot1_charge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot1_discharge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot2_charge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot2_discharge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot3_charge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot3_discharge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot4_charge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot4_discharge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot5_charge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot5_discharge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot6_charge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_slot6_discharge
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: select.select_option
+      target:
+        entity_id: select.garage_inverter_control_storage_mode
+      data:
+        option: Self-Use
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_on
+      target:
+        entity_id: switch.garage_inverter_control_grid_peak_shaving
+      continue_on_error: true
+    - condition: template
+      value_template: >-
+        {{ states('input_boolean.house_battery_control_disable') == 'on'
+           and as_timestamp(now()) < (deadline_timestamp | float(0)) }}
+    - service: switch.turn_off
+      target:
+        entity_id: switch.garage_inverter_control_battery_reserve
+      continue_on_error: true
+
+# Cancellation also has a nonblocking boundary. The supervisor starts this
+# local script but never awaits script.turn_off, which may itself wait for a
+# cancellation-resistant cloud service. The pass deadline checks prevent any
+# later child mutation; an already-started late action is safety-increasing.
+house_battery_fail_safe_cancel_pass:
+  alias: "Cancel house battery fail-safe pass"
+  description: "Best-effort cancellation outside the bounded supervisor"
+  mode: single
+  max_exceeded: silent
+  sequence:
+    - service: script.turn_off
+      target:
+        entity_id: script.house_battery_fail_safe_pass
+      continue_on_error: true
+
+house_battery_fail_safe:
+  alias: "House battery fail-safe"
+  description: >-
+    Assert the guard, prove it, and supervise exactly two cancellable fail-safe
+    passes when reconciliation is needed.
+  # One non-renewable owner survives heartbeat/entity churn for its original
+  # deadline. Repeated script.turn_on calls coalesce under mode: single.
+  mode: single
+  max_exceeded: silent
+  sequence:
+    - variables:
+        # Immutable named timing contract. T0009 tests cross-check the settle
+        # bound against T0005 HA_SERVICE_CALL_TIMEOUT + HA_READBACK_TIMEOUT.
+        OWNER_DEADLINE_SECONDS: 30
+        OUTSTANDING_WRITE_SETTLE_SECONDS: 25
+        FINALIZATION_BUDGET_SECONDS: 3
+        CANCELLATION_SETTLE_SECONDS: 1
+        owner_started_at: "{{ as_timestamp(now()) }}"
+        # Capture the pre-assertion guard evidence in the same read-only action
+        # as the immutable owner clock. Reasserting an already-on guard must not
+        # manufacture the continuous settled interval used by the fast path.
+        initial_guard_state: >-
+          {{ states('input_boolean.house_battery_control_disable') }}
+        initial_guard_last_changed_timestamp: >-
+          {{ as_timestamp(states.input_boolean.house_battery_control_disable.last_changed, default=0) }}
+        guard_entity_id: input_boolean.house_battery_control_disable
+        storage_mode_entity_id: select.garage_inverter_control_storage_mode
+        peak_shaving_entity_id: switch.garage_inverter_control_grid_peak_shaving
+        battery_reserve_entity_id: switch.garage_inverter_control_battery_reserve
+        helper_entity_id: script.house_battery_fail_safe_pass
+        cancel_helper_entity_id: script.house_battery_fail_safe_cancel_pass
+        slot_entity_ids:
+          - switch.garage_inverter_control_slot1_charge
+          - switch.garage_inverter_control_slot1_discharge
+          - switch.garage_inverter_control_slot2_charge
+          - switch.garage_inverter_control_slot2_discharge
+          - switch.garage_inverter_control_slot3_charge
+          - switch.garage_inverter_control_slot3_discharge
+          - switch.garage_inverter_control_slot4_charge
+          - switch.garage_inverter_control_slot4_discharge
+          - switch.garage_inverter_control_slot5_charge
+          - switch.garage_inverter_control_slot5_discharge
+          - switch.garage_inverter_control_slot6_charge
+          - switch.garage_inverter_control_slot6_discharge
+        notification_id: house_battery_watchdog
+
+    - variables:
+        owner_deadline_timestamp: >-
+          {{ (owner_started_at | float(0)) + (OWNER_DEADLINE_SECONDS | float(0)) }}
+        mutation_cutoff_timestamp: >-
+          {{ (owner_started_at | float(0))
+             + (OWNER_DEADLINE_SECONDS | float(0))
+             - (FINALIZATION_BUDGET_SECONDS | float(0)) }}
+
+    # The guard remains the first mutation. The immutable clock variables above
+    # are observation-only and cannot extend under trigger churn.
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.house_battery_control_disable
+      continue_on_error: true
+
+    # Request cleanup through a separate nonblocking local script. The bounded
+    # owner never awaits cancellation or a cloud-backed Solis action.
+    - variables:
+        cancellation_requested_at: "{{ as_timestamp(now()) }}"
+    - service: script.turn_on
+      target:
+        entity_id: "{{ cancel_helper_entity_id }}"
+      continue_on_error: true
+    - wait_template: >-
+        {{ states(helper_entity_id) == 'off'
+           and states(cancel_helper_entity_id) == 'off'
+           and as_timestamp(states.script.house_battery_fail_safe_cancel_pass.last_changed, default=0)
+               >= (cancellation_requested_at | float(0)) }}
+      timeout:
+        seconds: >-
+          {{ [0, (mutation_cutoff_timestamp | float(0)) - as_timestamp(now())] | max }}
+      continue_on_timeout: true
+
+    # Guard assertion is not trusted until freshly read back. A failed proof
+    # must perform zero Solis writes.
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ states(guard_entity_id) != 'on' }}"
+          sequence:
+            - variables:
+                failure_reason: "guard={{ states(guard_entity_id) }}"
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: >-
+                        {{ states('persistent_notification.house_battery_watchdog') in ['', 'unknown', 'unavailable']
+                           or state_attr('persistent_notification.house_battery_watchdog', 'message')
+                              != ('The independent watchdog could not prove the complete safe state. Failed exact states: ' ~ failure_reason) }}
+                  sequence:
+                    - service: persistent_notification.create
+                      data:
+                        notification_id: "{{ notification_id }}"
+                        title: "House battery fail-safe is not proven"
+                        message: >-
+                          The independent watchdog could not prove the complete safe state. Failed exact states: {{ failure_reason }}
+                      continue_on_error: true
+            - stop: "Guard assertion could not be proved; no Solis writes were attempted"
+
+    # Settlement is anchored to the freshly proved guard-on interval, not to
+    # owner startup. If this run changed the guard, an in-flight pre-guard write
+    # retains its complete T0005 service/readback horizon.
+    - variables:
+        guard_on_since_timestamp: >-
+          {{ as_timestamp(states.input_boolean.house_battery_control_disable.last_changed, default=0) }}
+        outstanding_write_settle_until: >-
+          {{ as_timestamp(states.input_boolean.house_battery_control_disable.last_changed, default=0)
+             + (OUTSTANDING_WRITE_SETTLE_SECONDS | float(0)) }}
+        initial_guard_continuously_settled: >-
+          {{ initial_guard_state == 'on'
+             and states(guard_entity_id) == 'on'
+             and (initial_guard_last_changed_timestamp | float(0))
+                 == as_timestamp(states.input_boolean.house_battery_control_disable.last_changed, default=-1)
+             and (owner_started_at | float(0))
+                 - (initial_guard_last_changed_timestamp | float(0))
+                 >= (OUTSTANDING_WRITE_SETTLE_SECONDS | float(0)) }}
+
+    # Initial already-safe fast path: this is the only path which deliberately
+    # makes zero Solis calls after a successful guard assertion.
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ states(guard_entity_id) == 'on'
+                   and initial_guard_continuously_settled | bool(false)
+                   and states(helper_entity_id) == 'off'
+                   and states(cancel_helper_entity_id) == 'off'
+                   and as_timestamp(states.script.house_battery_fail_safe_cancel_pass.last_changed, default=0)
+                       >= (cancellation_requested_at | float(0))
+                   and states('switch.garage_inverter_control_slot1_charge') == 'off'
+                   and states('switch.garage_inverter_control_slot1_discharge') == 'off'
+                   and states('switch.garage_inverter_control_slot2_charge') == 'off'
+                   and states('switch.garage_inverter_control_slot2_discharge') == 'off'
+                   and states('switch.garage_inverter_control_slot3_charge') == 'off'
+                   and states('switch.garage_inverter_control_slot3_discharge') == 'off'
+                   and states('switch.garage_inverter_control_slot4_charge') == 'off'
+                   and states('switch.garage_inverter_control_slot4_discharge') == 'off'
+                   and states('switch.garage_inverter_control_slot5_charge') == 'off'
+                   and states('switch.garage_inverter_control_slot5_discharge') == 'off'
+                   and states('switch.garage_inverter_control_slot6_charge') == 'off'
+                   and states('switch.garage_inverter_control_slot6_discharge') == 'off'
+                   and states(storage_mode_entity_id) == 'Self-Use'
+                   and states(peak_shaving_entity_id) == 'on'
+                   and states(battery_reserve_entity_id) == 'off' }}
+          sequence:
+            - service: persistent_notification.dismiss
+              data:
+                notification_id: "{{ notification_id }}"
+              continue_on_error: true
+            - stop: "The fresh fail-safe proof already holds"
+
+    # Pass one. script.turn_on is intentionally nonblocking; completion is
+    # acknowledged by an off transition after pass_started_at. A lost guard or
+    # deadline simply skips the pass and reaches the final unsafe proof.
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ states(guard_entity_id) == 'on'
+                   and states(helper_entity_id) == 'off'
+                   and states(cancel_helper_entity_id) == 'off'
+                   and as_timestamp(now()) < (mutation_cutoff_timestamp | float(0)) }}
+          sequence:
+            - variables:
+                pass_started_at: "{{ as_timestamp(now()) }}"
+            - service: script.turn_on
+              target:
+                entity_id: "{{ helper_entity_id }}"
+              data:
+                variables:
+                  deadline_timestamp: "{{ mutation_cutoff_timestamp }}"
+              continue_on_error: true
+            - wait_template: >-
+                {{ states(helper_entity_id) == 'off'
+                   and as_timestamp(states.script.house_battery_fail_safe_pass.last_changed, default=0)
+                       >= (pass_started_at | float(0)) }}
+              timeout:
+                seconds: >-
+                  {{ [0, (mutation_cutoff_timestamp | float(0)) - as_timestamp(now())] | max }}
+              continue_on_timeout: true
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: >-
+                        {{ as_timestamp(now()) >= (mutation_cutoff_timestamp | float(0))
+                           or states(helper_entity_id) != 'off' }}
+                  sequence:
+                    - service: script.turn_on
+                      target:
+                        entity_id: "{{ cancel_helper_entity_id }}"
+                      continue_on_error: true
+
+    # Do not accept pass-one entity values until the complete T0005 outstanding
+    # write horizon has elapsed. This closes the graph race where a pre-guard
+    # write settles after an apparently safe first proof.
+    - delay:
+        seconds: >-
+          {{ [0,
+              [outstanding_write_settle_until | float(0), mutation_cutoff_timestamp | float(0)] | min
+              - as_timestamp(now())] | max }}
+    - variables:
+        settlement_elapsed: >-
+          {{ as_timestamp(now()) >= (outstanding_write_settle_until | float(0)) }}
+        pass_one_settled_proof: >-
+          {{ as_timestamp(now()) >= (outstanding_write_settle_until | float(0))
+             and states(guard_entity_id) == 'on'
+             and states(helper_entity_id) == 'off'
+             and states(cancel_helper_entity_id) == 'off'
+             and states('switch.garage_inverter_control_slot1_charge') == 'off'
+             and states('switch.garage_inverter_control_slot1_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot2_charge') == 'off'
+             and states('switch.garage_inverter_control_slot2_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot3_charge') == 'off'
+             and states('switch.garage_inverter_control_slot3_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot4_charge') == 'off'
+             and states('switch.garage_inverter_control_slot4_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot5_charge') == 'off'
+             and states('switch.garage_inverter_control_slot5_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot6_charge') == 'off'
+             and states('switch.garage_inverter_control_slot6_discharge') == 'off'
+             and states(storage_mode_entity_id) == 'Self-Use'
+             and states(peak_shaving_entity_id) == 'on'
+             and states(battery_reserve_entity_id) == 'off' }}
+
+    # Pass two starts only after settlement and must finish before the mutation
+    # cutoff. Otherwise detached work remains pending for the next minute retry.
+    - variables:
+        second_pass_not_before_timestamp: "{{ as_timestamp(now()) }}"
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ settlement_elapsed | bool(false)
+                   and states(guard_entity_id) == 'on'
+                   and states(helper_entity_id) == 'off'
+                   and states(cancel_helper_entity_id) == 'off'
+                   and as_timestamp(now()) < (mutation_cutoff_timestamp | float(0)) }}
+          sequence:
+            - variables:
+                pass_started_at: "{{ as_timestamp(now()) }}"
+            - service: script.turn_on
+              target:
+                entity_id: "{{ helper_entity_id }}"
+              data:
+                variables:
+                  deadline_timestamp: "{{ mutation_cutoff_timestamp }}"
+              continue_on_error: true
+            - wait_template: >-
+                {{ states(helper_entity_id) == 'off'
+                   and as_timestamp(states.script.house_battery_fail_safe_pass.last_changed, default=0)
+                       >= (pass_started_at | float(0)) }}
+              timeout:
+                seconds: >-
+                  {{ [0, (mutation_cutoff_timestamp | float(0)) - as_timestamp(now())] | max }}
+              continue_on_timeout: true
+    # Freeze completion evidence before cutoff cancellation can turn an active
+    # child off. An off transition caused by cancellation is not a completed
+    # post-settlement second pass.
+    - variables:
+        second_pass_completed_before_cutoff: >-
+          {{ settlement_elapsed | bool(false)
+             and (outstanding_write_settle_until | float(0))
+                 <= (mutation_cutoff_timestamp | float(0))
+             and states(helper_entity_id) == 'off'
+             and as_timestamp(states.script.house_battery_fail_safe_pass.last_changed, default=0)
+                 >= (second_pass_not_before_timestamp | float(0))
+             and as_timestamp(now()) <= (mutation_cutoff_timestamp | float(0)) }}
+
+    # At the cutoff, no further pass may start. Request cancellation through the
+    # detached local boundary, allow only its named short settlement slice, then
+    # reserve the remaining owner budget for proof and notification.
+    - delay:
+        seconds: >-
+          {{ [0, (mutation_cutoff_timestamp | float(0)) - as_timestamp(now())] | max }}
+    - variables:
+        cutoff_cancellation_requested_at: "{{ as_timestamp(now()) }}"
+    - service: script.turn_on
+      target:
+        entity_id: "{{ cancel_helper_entity_id }}"
+      continue_on_error: true
+    - wait_template: >-
+        {{ states(helper_entity_id) == 'off'
+           and states(cancel_helper_entity_id) == 'off'
+           and as_timestamp(states.script.house_battery_fail_safe_cancel_pass.last_changed, default=0)
+               >= (cutoff_cancellation_requested_at | float(0)) }}
+      timeout:
+        seconds: >-
+          {{ [0,
+              [CANCELLATION_SETTLE_SECONDS | float(0),
+               (owner_deadline_timestamp | float(0)) - as_timestamp(now())] | min] | max }}
+      continue_on_timeout: true
+
+    # Final proof is always a fresh state read after pass two or cancellation.
+    - variables:
+        final_proof: >-
+          {{ as_timestamp(now()) >= (outstanding_write_settle_until | float(0))
+             and as_timestamp(now()) >= (mutation_cutoff_timestamp | float(0))
+             and as_timestamp(now()) < (owner_deadline_timestamp | float(0))
+             and second_pass_completed_before_cutoff | bool(false)
+             and states(guard_entity_id) == 'on'
+             and states(helper_entity_id) == 'off'
+             and states(cancel_helper_entity_id) == 'off'
+             and as_timestamp(states.script.house_battery_fail_safe_cancel_pass.last_changed, default=0)
+                 >= (cutoff_cancellation_requested_at | float(0))
+             and states('switch.garage_inverter_control_slot1_charge') == 'off'
+             and states('switch.garage_inverter_control_slot1_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot2_charge') == 'off'
+             and states('switch.garage_inverter_control_slot2_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot3_charge') == 'off'
+             and states('switch.garage_inverter_control_slot3_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot4_charge') == 'off'
+             and states('switch.garage_inverter_control_slot4_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot5_charge') == 'off'
+             and states('switch.garage_inverter_control_slot5_discharge') == 'off'
+             and states('switch.garage_inverter_control_slot6_charge') == 'off'
+             and states('switch.garage_inverter_control_slot6_discharge') == 'off'
+             and states(storage_mode_entity_id) == 'Self-Use'
+             and states(peak_shaving_entity_id) == 'on'
+             and states(battery_reserve_entity_id) == 'off' }}
+        # HA templates use an immutable sandbox; namespace reassignment and
+        # list concatenation are supported, mutating list methods are not.
+        failure_reason: >-
+          {% set ns = namespace(failures=[]) %}
+          {% if (outstanding_write_settle_until | float(0)) > (mutation_cutoff_timestamp | float(0)) %}{% set ns.failures = ns.failures + ['RECONCILIATION_PENDING:post_guard_settlement_exceeds_cutoff'] %}{% endif %}
+          {% if as_timestamp(now()) < (outstanding_write_settle_until | float(0)) %}{% set ns.failures = ns.failures + ['OUTSTANDING_WRITE_UNSETTLED'] %}{% endif %}
+          {% if not (second_pass_completed_before_cutoff | bool(false)) %}{% set ns.failures = ns.failures + ['RECONCILIATION_PENDING:second_pass_not_completed_before_cutoff'] %}{% endif %}
+          {% if as_timestamp(now()) < (mutation_cutoff_timestamp | float(0)) %}{% set ns.failures = ns.failures + ['MUTATION_CUTOFF_NOT_REACHED'] %}{% endif %}
+          {% if as_timestamp(now()) >= (owner_deadline_timestamp | float(0)) %}{% set ns.failures = ns.failures + ['OWNER_DEADLINE_EXPIRED'] %}{% endif %}
+          {% if states(helper_entity_id) != 'off' %}{% set ns.failures = ns.failures + ['RECONCILIATION_PENDING:' ~ helper_entity_id ~ '=' ~ states(helper_entity_id)] %}{% endif %}
+          {% if states(cancel_helper_entity_id) != 'off' %}{% set ns.failures = ns.failures + ['RECONCILIATION_PENDING:' ~ cancel_helper_entity_id ~ '=' ~ states(cancel_helper_entity_id)] %}{% endif %}
+          {% if as_timestamp(states.script.house_battery_fail_safe_cancel_pass.last_changed, default=0) < (cutoff_cancellation_requested_at | float(0)) %}{% set ns.failures = ns.failures + ['RECONCILIATION_PENDING:cancellation_not_acknowledged'] %}{% endif %}
+          {% if states(guard_entity_id) != 'on' %}{% set ns.failures = ns.failures + ['guard=' ~ states(guard_entity_id)] %}{% endif %}
+          {% for entity_id in slot_entity_ids %}
+            {% if states(entity_id) != 'off' %}{% set ns.failures = ns.failures + [entity_id ~ '=' ~ states(entity_id)] %}{% endif %}
+          {% endfor %}
+          {% if states(storage_mode_entity_id) != 'Self-Use' %}{% set ns.failures = ns.failures + [storage_mode_entity_id ~ '=' ~ states(storage_mode_entity_id)] %}{% endif %}
+          {% if states(peak_shaving_entity_id) != 'on' %}{% set ns.failures = ns.failures + [peak_shaving_entity_id ~ '=' ~ states(peak_shaving_entity_id)] %}{% endif %}
+          {% if states(battery_reserve_entity_id) != 'off' %}{% set ns.failures = ns.failures + [battery_reserve_entity_id ~ '=' ~ states(battery_reserve_entity_id)] %}{% endif %}
+          {{ ns.failures | join('; ') }}
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ final_proof | bool(false) }}"
+          sequence:
+            - service: persistent_notification.dismiss
+              data:
+                notification_id: "{{ notification_id }}"
+              continue_on_error: true
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ states('persistent_notification.house_battery_watchdog') in ['', 'unknown', 'unavailable']
+                   or state_attr('persistent_notification.house_battery_watchdog', 'message')
+                      != ('The independent watchdog could not prove the complete safe state. Failed exact states: ' ~ failure_reason) }}
+          sequence:
+            - service: persistent_notification.create
+              data:
+                notification_id: "{{ notification_id }}"
+                title: "House battery fail-safe is not proven"
+                message: >-
+                  The independent watchdog could not prove the complete safe state. Failed exact states: {{ failure_reason }}
+              continue_on_error: true
