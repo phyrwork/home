@@ -81,8 +81,13 @@ def _set_sync_base_states(
     next_dispatch_end=None,
     completed_dispatches=None,
     dispatch_state="off",
+    target_delta_override=0,
 ):
     hass.states.async_set("input_number.car_battery_level_target", str(target_level))
+    hass.states.async_set(
+        "input_number.car_battery_intelligent_target_override",
+        str(target_delta_override),
+    )
     hass.states.async_set("sensor.car_battery_level", str(current_level))
     hass.states.async_set(TARGET_NUMBER_ID, str(applied_delta))
     hass.states.async_set("binary_sensor.car_charging", "on" if charging else "off")
@@ -173,6 +178,80 @@ async def test_sync_increase_allowed_after_15_minutes(hass, freezer):
 
     _freeze_time(hass, freezer, now + timedelta(minutes=16))
     hass.states.async_set("input_number.car_battery_level_target", "80")
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(service_calls[0].data["value"])) == 30
+
+
+@pytest.mark.asyncio
+async def test_sync_uses_positive_intelligent_target_override(hass, freezer):
+    now = dt_util.parse_datetime("2026-01-25T10:00:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=70,
+        current_level=50,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches=[],
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_intelligent_target_override", "35")
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(service_calls[0].data["value"])) == 35
+
+
+@pytest.mark.asyncio
+async def test_sync_clamps_small_positive_intelligent_target_override_to_ten(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T10:00:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=70,
+        current_level=50,
+        applied_delta=20,
+        charging=False,
+        planned_dispatches=[],
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_intelligent_target_override", "5")
+    await hass.async_block_till_done()
+
+    assert len(service_calls) == 1
+    assert service_calls[0].data["entity_id"] == [TARGET_NUMBER_ID]
+    assert int(float(service_calls[0].data["value"])) == 10
+
+
+@pytest.mark.asyncio
+async def test_sync_zero_intelligent_target_override_uses_calculated_delta(
+    hass, freezer
+):
+    now = dt_util.parse_datetime("2026-01-25T10:00:00+00:00")
+    _freeze_time(hass, freezer, now)
+    _set_sync_base_states(
+        hass,
+        target_level=80,
+        current_level=50,
+        applied_delta=40,
+        charging=False,
+        planned_dispatches=[],
+        target_delta_override=40,
+    )
+    await _setup_automation(hass, automation_id=SYNC_AUTOMATION_ID)
+    service_calls = async_mock_service(hass, "number", "set_value")
+
+    hass.states.async_set("input_number.car_battery_intelligent_target_override", "0")
     await hass.async_block_till_done()
 
     assert len(service_calls) == 1

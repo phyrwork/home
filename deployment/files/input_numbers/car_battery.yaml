@@ -24,3 +24,12 @@ car_battery_energy_target:
   unit_of_measurement: kWh
   mode: box
   icon: mdi:battery-charging-100
+
+car_battery_intelligent_target_override:
+  name: Car Battery Intelligent Target Override
+  min: 0
+  max: 100
+  step: 1
+  unit_of_measurement: "%"
+  mode: box
+  icon: mdi:battery-sync

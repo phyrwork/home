@@ -32,6 +32,7 @@
     - platform: state
       entity_id:
         - input_number.car_battery_level_target
+        - input_number.car_battery_intelligent_target_override
         - sensor.car_battery_level
         - binary_sensor.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_dispatching
     # The dispatch window guard depends on dispatch sensor attributes as well as its
@@ -49,19 +50,29 @@
         smart_charge_switch_entity_id: "switch.octopus_energy_{% endraw %}{{ ev_charger_device_id }}{% raw %}_intelligent_smart_charge"
         target_level_raw: "{{ states('input_number.car_battery_level_target') }}"
         current_level_raw: "{{ states('sensor.car_battery_level') }}"
+        target_delta_override_raw: "{{ states('input_number.car_battery_intelligent_target_override') }}"
         target_level_available: "{{ target_level_raw not in ['unknown', 'unavailable', 'none', ''] }}"
         current_level_available: "{{ current_level_raw not in ['unknown', 'unavailable', 'none', ''] }}"
+        target_delta_override_available: "{{ target_delta_override_raw not in ['unknown', 'unavailable', 'none', ''] }}"
+        target_delta_override: "{{ target_delta_override_raw | int(0) if target_delta_override_available else 0 }}"
+        use_target_delta_override: "{{ target_delta_override_available and (target_delta_override | int(0)) > 0 }}"
         octopus_entities_available: >-
           {{
             applied_delta_entity_id not in [none, 'unknown', 'unavailable', 'none', '']
             and dispatching_entity_id not in [none, 'unknown', 'unavailable', 'none', '']
             and smart_charge_switch_entity_id not in [none, 'unknown', 'unavailable', 'none', '']
           }}
-        required_inputs_available: "{{ target_level_available and current_level_available and octopus_entities_available }}"
+        required_inputs_available: >-
+          {{
+            octopus_entities_available
+            and (use_target_delta_override or (target_level_available and current_level_available))
+          }}
         target_level: "{{ target_level_raw | float(0) if target_level_available else none }}"
         current_level: "{{ current_level_raw | float(0) if current_level_available else none }}"
         target_delta_required: >-
-          {% if required_inputs_available %}
+          {% if use_target_delta_override %}
+            {{ target_delta_override }}
+          {% elif target_level_available and current_level_available %}
             {{ [target_level - current_level, 0] | max | round(0) | int }}
           {% else %}
             {{ none }}
