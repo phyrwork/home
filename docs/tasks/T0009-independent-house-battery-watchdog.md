@@ -83,11 +83,19 @@ shutdown fail-safe remains primary.
 Add an automation invoking the script on:
 
 - Home Assistant start;
-- Home Assistant shutdown;
 - every minute;
-- heartbeat state changes;
 - controller-health state changes;
 - control-disable guard state changes.
+
+Use a separate shutdown automation to invoke the script during Home Assistant
+shutdown.
+
+Do not trigger on heartbeat state changes. The coordinator can publish a new
+heartbeat before publishing the corresponding health state, so a heartbeat
+trigger can observe the previous fail-safe health and reassert the guard during
+healthy activation. Minute polling still catches stale or future heartbeats
+within the bounded watchdog interval; health changes provide prompt failure
+detection.
 
 Start and shutdown invoke the script unconditionally.
 
@@ -180,7 +188,7 @@ Parse and inspect the static YAML to cover:
 - exact cross-check of all entity IDs against deployed configuration;
 - guard-on is the first mutation and no action clears it;
 - start and shutdown unconditional invocation;
-- one-minute and state-change triggers;
+- one-minute and relevant state-change triggers;
 - exact healthy-state predicate;
 - stale, invalid and materially future heartbeat predicates;
 - every slot-off action and every policy action has `continue_on_error`;

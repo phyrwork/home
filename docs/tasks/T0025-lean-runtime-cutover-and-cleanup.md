@@ -53,6 +53,15 @@ consumer.
 - The explicit slot list is intentionally duplicated for safety independence;
   its coverage and reconciliation are tested.
 
+The independent watchdog deliberately uses minute polling plus health and guard
+state changes, rather than triggering on every heartbeat state update. Home
+Assistant can publish the heartbeat entity before the coordinator publishes its
+corresponding health state; a heartbeat-triggered run can therefore observe the
+previous `fail_safe` health and reassert the guard during an otherwise healthy
+activation. Minute polling still detects a stale or future heartbeat within the
+existing bounded watchdog interval, while the health trigger handles faults as
+soon as the health state is published.
+
 ## Boundaries
 
 - This is the serialized integration hotspot and is integrated only in the main

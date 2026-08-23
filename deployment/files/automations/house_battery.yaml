@@ -13,9 +13,6 @@
       minutes: "/1"
       id: every_minute
     - platform: state
-      entity_id: sensor.house_battery_control_heartbeat
-      id: heartbeat_changed
-    - platform: state
       entity_id: sensor.house_battery_control_health
       id: controller_health_changed
     - platform: state

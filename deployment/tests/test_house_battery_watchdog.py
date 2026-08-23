@@ -141,7 +141,6 @@ def test_automation_has_startup_stale_health_guard_and_shutdown_triggers() -> No
     assert trigger_ids == {
         "home_assistant_start",
         "every_minute",
-        "heartbeat_changed",
         "controller_health_changed",
         "control_disable_changed",
     }
