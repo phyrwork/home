@@ -46,13 +46,11 @@ def observation(
     health: ControllerHealth = ControllerHealth.HEALTHY,
     *,
     storage_mode: str = "Self-Use",
-    grid_peak_shaving: bool = True,
     battery_reserve: bool = False,
     slot_enabled: bool = False,
 ) -> SimpleNamespace:
     persistent = SimpleNamespace(
         storage_mode=storage_mode,
-        grid_peak_shaving=grid_peak_shaving,
         battery_reserve=battery_reserve,
     )
     slots = tuple(
@@ -115,7 +113,6 @@ async def test_disabled_controller_fault_reports_fail_safe_without_write_loop(
     ("field", "value"),
     (
         ("storage_mode", "Feed-In Priority"),
-        ("grid_peak_shaving", False),
         ("battery_reserve", True),
         ("slot_enabled", True),
     ),

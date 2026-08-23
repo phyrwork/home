@@ -10,7 +10,6 @@ house_battery_fail_safe:
     - variables:
         guard_entity_id: input_boolean.house_battery_control_disable
         storage_mode_entity_id: select.garage_inverter_control_storage_mode
-        peak_shaving_entity_id: switch.garage_inverter_control_grid_peak_shaving
         battery_reserve_entity_id: switch.garage_inverter_control_battery_reserve
         slot_entity_ids:
           - switch.garage_inverter_control_slot1_charge
@@ -28,10 +27,15 @@ house_battery_fail_safe:
         notification_id: house_battery_watchdog
 
     # Never issue Solis writes unless the local guard has been freshly proved.
-    - service: input_boolean.turn_on
-      target:
-        entity_id: "{{ guard_entity_id }}"
-      continue_on_error: true
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ states(guard_entity_id) != 'on' }}"
+          sequence:
+            - service: input_boolean.turn_on
+              target:
+                entity_id: "{{ guard_entity_id }}"
+              continue_on_error: true
     - wait_template: "{{ states(guard_entity_id) == 'on' }}"
       timeout:
         seconds: 5
@@ -45,28 +49,42 @@ house_battery_fail_safe:
     - repeat:
         count: 2
         sequence:
-          - service: switch.turn_off
-            target:
-              entity_id: "{{ slot_entity_ids }}"
-            continue_on_error: true
-          - service: select.select_option
-            target:
-              entity_id: "{{ storage_mode_entity_id }}"
-            data:
-              option: Self-Use
-            continue_on_error: true
-          - service: switch.turn_on
-            target:
-              entity_id: "{{ peak_shaving_entity_id }}"
-            continue_on_error: true
-          - service: switch.turn_off
-            target:
-              entity_id: "{{ battery_reserve_entity_id }}"
-            continue_on_error: true
+          - variables:
+              unsafe_slot_entity_ids: >-
+                {{ expand(slot_entity_ids)
+                   | rejectattr('state', 'eq', 'off')
+                   | map(attribute='entity_id')
+                   | list }}
+          - repeat:
+              for_each: "{{ unsafe_slot_entity_ids }}"
+              sequence:
+                - service: switch.turn_off
+                  target:
+                    entity_id: "{{ repeat.item }}"
+                  continue_on_error: true
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ states(storage_mode_entity_id) != 'Self-Use' }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: "{{ storage_mode_entity_id }}"
+                    data:
+                      option: Self-Use
+                    continue_on_error: true
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ states(battery_reserve_entity_id) != 'off' }}"
+                sequence:
+                  - service: switch.turn_off
+                    target:
+                      entity_id: "{{ battery_reserve_entity_id }}"
+                    continue_on_error: true
           - wait_template: >-
               {{ states(guard_entity_id) == 'on'
                  and states(storage_mode_entity_id) == 'Self-Use'
-                 and states(peak_shaving_entity_id) == 'on'
                  and states(battery_reserve_entity_id) == 'off'
                  and (expand(slot_entity_ids) | selectattr('state', 'eq', 'off')
                       | list | length)
@@ -80,7 +98,6 @@ house_battery_fail_safe:
                     value_template: >-
                       {{ states(guard_entity_id) == 'on'
                          and states(storage_mode_entity_id) == 'Self-Use'
-                         and states(peak_shaving_entity_id) == 'on'
                          and states(battery_reserve_entity_id) == 'off'
                          and (expand(slot_entity_ids) | selectattr('state', 'eq', 'off')
                               | list | length)

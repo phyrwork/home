@@ -74,7 +74,7 @@ def fixture():
         solis.persistent.storage_mode_entity_id: _state("Self-Use", attributes={"options": ["Self-Use", "Feed-In Priority", "Off-Grid"]}),
         solis.persistent.inverter_time_entity_id: _state(NOW.isoformat()),
     }
-    for entity_id in (solis.persistent.allow_grid_charging_entity_id, solis.persistent.grid_peak_shaving_entity_id, solis.persistent.inverter_on_off_entity_id):
+    for entity_id in (solis.persistent.allow_grid_charging_entity_id, solis.persistent.inverter_on_off_entity_id):
         states[entity_id] = _state("off")
     states[solis.protection.battery_reserve_entity_id] = _state("on")
     for entity_id in (
@@ -110,14 +110,50 @@ def policy(*, guard_state="off"):
 
 
 @pytest.mark.asyncio
-async def test_fail_safe_selects_self_use_disables_reserve_and_keeps_peak_shaving():
+async def test_fail_safe_selects_self_use_and_disables_reserve():
     actuator, ha, _observation = policy(guard_state="on")
     result = await actuator.async_apply_fail_safe()
 
     assert result.success and result.safe
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
-    assert ha.states[actuator.config.persistent.grid_peak_shaving_entity_id]["state"] == "on"
     assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_fail_safe_writes_mode_before_reserve():
+    actuator, ha, _observation = policy(guard_state="on")
+    ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] = "Feed-In Priority"
+
+    result = await actuator.async_apply_fail_safe()
+
+    assert result.success
+    written_entities = [call[2]["entity_id"] for call in ha.calls]
+    assert written_entities[-2:] == [
+        actuator.config.persistent.storage_mode_entity_id,
+        actuator.config.protection.battery_reserve_entity_id,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_healthy_writes_mode_before_reserve():
+    actuator, ha, observation = policy()
+    ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] = "Self-Use"
+    ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] = "off"
+
+    result = await actuator.async_apply_healthy(
+        observation=observation,
+        reserve_soc_percent=10,
+        intent=None,
+        now=NOW,
+    )
+
+    assert result.success
+    written_entities = [call[2]["entity_id"] for call in ha.calls]
+    assert written_entities[-3:] == [
+        actuator.config.persistent.storage_mode_entity_id,
+        actuator.config.persistent.allow_grid_charging_entity_id,
+        actuator.config.protection.battery_reserve_entity_id,
+    ]
 
 
 @pytest.mark.asyncio
@@ -164,7 +200,6 @@ async def test_fail_safe_completes_slot_and_persistent_cleanup_before_cancellati
     await _cancel_repeatedly_during_write(actuator, ha, actuator.async_apply_fail_safe)
 
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
-    assert ha.states[actuator.config.persistent.grid_peak_shaving_entity_id]["state"] == "on"
     assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
     assert all(
         ha.states[direction.enable_entity_id]["state"] == "off"
@@ -213,7 +248,6 @@ async def test_healthy_cancellation_falls_back_without_lock_deadlock():
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
     # The dynamic path runs with the guard off; cancellation cleanup must not
     # issue a fail-safe write until the watchdog has asserted it.
-    assert ha.states[actuator.config.persistent.grid_peak_shaving_entity_id]["state"] == "off"
     assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "on"
 
 

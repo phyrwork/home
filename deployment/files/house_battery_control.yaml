@@ -31,7 +31,6 @@ solis:
   persistent:
     storage_mode_entity_id: select.garage_inverter_control_storage_mode
     allow_grid_charging_entity_id: switch.garage_inverter_control_allow_grid_charging
-    grid_peak_shaving_entity_id: switch.garage_inverter_control_grid_peak_shaving
     inverter_on_off_entity_id: switch.garage_inverter_control_inverter_on_off
     inverter_time_entity_id: datetime.garage_inverter_control_inverter_time
 
@@ -50,10 +49,9 @@ solis:
     # Solis reports zero here as the unlimited-export sentinel; preserve it.
     max_export_power_entity_id: number.garage_inverter_control_max_export_power
 
-  # Solis Cloud Control v2.21.0 exposes no entity for this setting.  It must
-  # be commissioned and verified directly on the inverter, never written as an
-  # entity service call.
-  maximum_grid_import_policy: manual_commissioning
+  # One-time native SolisCloud commissioning: Grid Peak Shaving is enabled and
+  # its maximum grid power is 100 W (0.1 kW). The HA switch is not authoritative
+  # for this shared native setting and is intentionally not runtime-managed.
 
   # Every physical slot is mapped for reconciliation and cleanup.  Reserved
   # directions are intentionally not enabled by the MVP controller.

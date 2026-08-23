@@ -32,15 +32,6 @@ class SolisSlotOwner(str, Enum):
     RESERVED = "reserved"
 
 
-class MaximumGridImportPolicy(str, Enum):
-    """How the unavailable Solis Peak Shaving limit is commissioned."""
-
-    MANUAL_COMMISSIONING = "manual_commissioning"
-
-    def __str__(self) -> str:
-        return self.value
-
-
 @dataclass(frozen=True, slots=True)
 class SolisTelemetryConfig:
     """Authoritative Solis telemetry used by the controller."""
@@ -58,7 +49,6 @@ class SolisPersistentControlConfig:
 
     storage_mode_entity_id: str
     allow_grid_charging_entity_id: str
-    grid_peak_shaving_entity_id: str
     inverter_on_off_entity_id: str
     inverter_time_entity_id: str
 
@@ -113,7 +103,6 @@ class SolisConfig:
     persistent: SolisPersistentControlConfig
     protection: SolisProtectionControlConfig
     capability: SolisCapabilityControlConfig
-    maximum_grid_import_policy: MaximumGridImportPolicy
     slots: tuple[SolisSlotConfig, ...]
 
 
@@ -144,7 +133,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
             "persistent",
             "protection",
             "capability",
-            "maximum_grid_import_policy",
             "slots",
         },
         "solis",
@@ -194,7 +182,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         {
             "storage_mode_entity_id",
             "allow_grid_charging_entity_id",
-            "grid_peak_shaving_entity_id",
             "inverter_on_off_entity_id",
             "inverter_time_entity_id",
         },
@@ -209,11 +196,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         allow_grid_charging_entity_id=_entity(
             persistent_source["allow_grid_charging_entity_id"],
             "solis.persistent.allow_grid_charging_entity_id",
-            "switch",
-        ),
-        grid_peak_shaving_entity_id=_entity(
-            persistent_source["grid_peak_shaving_entity_id"],
-            "solis.persistent.grid_peak_shaving_entity_id",
             "switch",
         ),
         inverter_on_off_entity_id=_entity(
@@ -308,19 +290,12 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         ),
     )
 
-    policy = root["maximum_grid_import_policy"]
-    if policy != MaximumGridImportPolicy.MANUAL_COMMISSIONING.value:
-        raise ValueError(
-            "solis.maximum_grid_import_policy must be exactly manual_commissioning"
-        )
-
     slots = _slots(root["slots"])
     config = SolisConfig(
         telemetry=telemetry,
         persistent=persistent,
         protection=protection,
         capability=capability,
-        maximum_grid_import_policy=MaximumGridImportPolicy.MANUAL_COMMISSIONING,
         slots=slots,
     )
     _validate_global_entity_uniqueness(config)

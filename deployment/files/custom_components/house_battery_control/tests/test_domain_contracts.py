@@ -106,7 +106,6 @@ def test_enums_and_structural_exclusivity() -> None:
         contracts.StorageMode.SELF_USE,
         True,
         True,
-        False,
         Decimal("10"),
         Decimal("7"),
         Decimal("8"),

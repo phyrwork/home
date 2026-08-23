@@ -277,7 +277,6 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             slots = snapshot.slots
             if (
                 persistent.storage_mode != StorageMode.SELF_USE.value
-                or persistent.grid_peak_shaving is not True
                 or persistent.battery_reserve is not False
                 or len(slots) != len(self.config.solis.slots)
             ):

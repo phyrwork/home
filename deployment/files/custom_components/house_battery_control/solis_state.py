@@ -79,7 +79,6 @@ class SolisPersistentState:
     storage_mode: str
     storage_mode_options: tuple[str, ...]
     allow_grid_charging: bool
-    grid_peak_shaving: bool
     inverter_on_off: bool
     inverter_time: datetime
     over_discharge_soc: ObservedCapability

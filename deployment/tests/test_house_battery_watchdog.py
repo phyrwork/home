@@ -14,7 +14,6 @@ AUTOMATION_PATH = FILES / "automations" / "house_battery.yaml"
 
 GUARD = "input_boolean.house_battery_control_disable"
 MODE = "select.garage_inverter_control_storage_mode"
-PEAK = "switch.garage_inverter_control_grid_peak_shaving"
 RESERVE = "switch.garage_inverter_control_battery_reserve"
 
 
@@ -81,18 +80,16 @@ def test_fail_safe_covers_all_native_slots_and_safe_policy() -> None:
     variables = script["sequence"][0]["variables"]
     assert variables["guard_entity_id"] == GUARD
     assert variables["storage_mode_entity_id"] == MODE
-    assert variables["peak_shaving_entity_id"] == PEAK
     assert variables["battery_reserve_entity_id"] == RESERVE
     assert variables["slot_entity_ids"] == _configured_slots(config)
 
     text = SCRIPT_PATH.read_text()
-    for entity_id in [GUARD, MODE, PEAK, RESERVE, *_configured_slots(config)]:
+    for entity_id in [GUARD, MODE, RESERVE, *_configured_slots(config)]:
         assert entity_id in text
 
     services = [action.get("service") for action in _actions(script["sequence"])]
     assert services.count("switch.turn_off") >= 1
     assert "select.select_option" in services
-    assert "switch.turn_on" in services
     assert "persistent_notification.create" in services
     assert "Self-Use" in text
 
@@ -112,6 +109,30 @@ def test_writes_are_guarded_and_reconciliation_is_bounded() -> None:
     assert "continue_on_error: true" in text
 
 
+def test_fail_safe_skips_safe_controls_and_isolates_slot_failures() -> None:
+    script = _script()
+    text = SCRIPT_PATH.read_text()
+    repeat = next(action["repeat"] for action in script["sequence"] if "repeat" in action)
+    sequence = repeat["sequence"]
+
+    # The script computes only the unsafe slots, then turns them off one at a
+    # time so a cloud timeout for one slot cannot suppress the other attempts.
+    unsafe = sequence[0]["variables"]["unsafe_slot_entity_ids"]
+    assert "rejectattr('state', 'eq', 'off')" in unsafe
+    slot_repeat = sequence[1]["repeat"]
+    assert slot_repeat["for_each"] == "{{ unsafe_slot_entity_ids }}"
+    slot_action = slot_repeat["sequence"][0]
+    assert slot_action["service"] == "switch.turn_off"
+    assert slot_action["target"]["entity_id"] == "{{ repeat.item }}"
+    assert slot_action["continue_on_error"] is True
+
+    # Each fixed Solis control is guarded by its own state comparison. A
+    # fully-safe state therefore performs no Solis service writes at all.
+    assert "states(storage_mode_entity_id) != 'Self-Use'" in text
+    assert "states(battery_reserve_entity_id) != 'off'" in text
+    assert text.count("continue_on_error: true") >= 5
+
+
 def test_automation_has_startup_stale_health_guard_and_shutdown_triggers() -> None:
     automations = _load(AUTOMATION_PATH)
     assert len(automations) == 2
@@ -127,10 +148,12 @@ def test_automation_has_startup_stale_health_guard_and_shutdown_triggers() -> No
     condition = normal["condition"][0]["value_template"]
     assert "heartbeat" in condition
     assert "healthy" in condition
+    # The periodic trigger must retry a persistently unhealthy controller,
+    # not only the instant its health sensor changes state.
+    assert "or states('sensor.house_battery_control_health') != 'healthy'" in condition
     assert "180" in condition
     # A healthy disabled controller emits a heartbeat every minute; that
     # must not satisfy the failure branches on the periodic trigger.
-    assert "trigger.id == 'controller_health_changed'" in condition
     assert "trigger.id == 'control_disable_changed'" in condition
     assert shutdown["trigger"][0]["event"] == "shutdown"
     assert shutdown["action"][0]["service"] == "input_boolean.turn_on"

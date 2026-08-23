@@ -231,7 +231,6 @@ class SolisStateReader:
         switch_values: dict[str, bool | None] = {}
         for name, entity_id in (
             ("allow_grid_charging", persistent.allow_grid_charging_entity_id),
-            ("grid_peak_shaving", persistent.grid_peak_shaving_entity_id),
             ("inverter_on_off", persistent.inverter_on_off_entity_id),
         ):
             switch_values[name] = self._switch(entity_id)
@@ -270,7 +269,6 @@ class SolisStateReader:
             storage_mode=storage_mode,
             storage_mode_options=options,
             allow_grid_charging=switch_values["allow_grid_charging"],  # type: ignore[arg-type]
-            grid_peak_shaving=switch_values["grid_peak_shaving"],  # type: ignore[arg-type]
             inverter_on_off=switch_values["inverter_on_off"],  # type: ignore[arg-type]
             inverter_time=inverter_time,
             over_discharge_soc=over_discharge,  # type: ignore[arg-type]

@@ -24,6 +24,8 @@ consumer.
   checks.
 - Retain live entity capability validation, serialized writes, disable-all before
   direction changes, readback, and bounded fail-safe cleanup.
+- Treat native SolisCloud Grid Peak Shaving (enabled at 100 W) as one-time
+  commissioning; do not map or write its non-authoritative HA switch at runtime.
 - Delete the fake Solis dependency, abstract legacy command model, superseded
   planner/input/simulation adapters and tests after cutover.
 - Remove obsolete Home Assistant helpers and configuration.

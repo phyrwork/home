@@ -135,7 +135,6 @@ class InverterPolicy:
     storage_mode: StorageMode
     grid_charge_allowed: bool | PreserveCurrentPolicyValue
     export_allowed: bool | PreserveCurrentPolicyValue
-    peak_shaving_enabled: bool
     over_discharge_soc: Decimal | PreserveCurrentPolicyValue
     force_charge_soc: Decimal | PreserveCurrentPolicyValue
     recovery_soc: Decimal | PreserveCurrentPolicyValue

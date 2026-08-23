@@ -42,7 +42,7 @@ def fixture():
 
     persistent = parsed.persistent
     states[persistent.storage_mode_entity_id] = {"state": "Feed-In Priority", "attributes": {"options": ["Self-Use", "Feed-In Priority", "Off-Grid"]}}
-    for entity_id in (persistent.allow_grid_charging_entity_id, persistent.grid_peak_shaving_entity_id, persistent.inverter_on_off_entity_id):
+    for entity_id in (persistent.allow_grid_charging_entity_id, persistent.inverter_on_off_entity_id):
         states[entity_id] = state("on")
     states[persistent.inverter_time_entity_id] = state(NOW.isoformat())
 
