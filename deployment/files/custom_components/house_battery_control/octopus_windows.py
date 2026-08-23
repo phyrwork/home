@@ -480,135 +480,6 @@ def _validate_export_interval_sequence(
     return None
 
 
-def parse_public_import_event(
-    event: Mapping[str, Any],
-    *,
-    source: str,
-    source_day: str,
-    source_event: str,
-    source_revision_at: datetime,
-    retrieval_source_entity_id: str,
-    dispatch_source_entity_id: str,
-    unit: str = OCTOPUS_RATE_UNIT,
-) -> tuple[AdjustedRateInterval, ...]:
-    """Validate one upstream public event before it is fused.
-
-    The upstream event deliberately permits an omitted adjustment flag for
-    ordinary rates.  That omission is normalised here, at the producer
-    boundary only; ``parse_fused_import_rates`` remains strict.
-    """
-
-    raw_rates = event.get("rates")
-    import json
-
-    if isinstance(raw_rates, str):
-        try:
-            raw_rates = json.loads(raw_rates)
-        except json.JSONDecodeError as exc:
-            raise ValueError("public event rates must be JSON") from exc
-    if not isinstance(raw_rates, Sequence) or isinstance(raw_rates, (str, bytes)) or not raw_rates:
-        raise ValueError("public event rates must be a non-empty sequence")
-    if "min_rate" not in event:
-        raise ValueError("public event is missing min_rate")
-    supplied_min = _decimal(event["min_rate"], "min_rate")
-    values: list[Decimal] = []
-    for raw in raw_rates:
-        if not isinstance(raw, Mapping) or "value_inc_vat" not in raw:
-            raise ValueError("public event rate is missing value_inc_vat")
-        values.append(_decimal(raw["value_inc_vat"], "value_inc_vat"))
-    computed_min = min(values)
-    if supplied_min != computed_min:
-        raise ValueError("public event min_rate does not match its rates")
-    unique_count = len(set(values))
-    tariff = event.get("tariff_code", event.get("tariff"))
-    result: list[AdjustedRateInterval] = []
-    for raw, price in zip(raw_rates, values, strict=True):
-        adjusted = _bool(raw.get("is_intelligent_adjusted", False), "is_intelligent_adjusted")
-        classification = (
-            CheapClassification.BONUS_DISPATCH
-            if adjusted and price == computed_min
-            else CheapClassification.STANDARD_CHEAP
-            if not adjusted and price == computed_min and unique_count in (2, 3)
-            else CheapClassification.NOT_CHEAP
-        )
-        if adjusted and price != computed_min:
-            raise ValueError("adjusted rate must equal the event minimum")
-        result.append(
-            AdjustedRateInterval(
-                start=_parse_datetime(raw.get("start"), "start"),
-                end=_parse_datetime(raw.get("end"), "end"),
-                import_price=price,
-                classification=classification,
-                source=source,
-                tariff=_text(tariff, "tariff_code"),
-                source_day=_text(source_day, "source_day"),
-                source_event=_text(source_event, "source_event"),
-                source_revision_at=source_revision_at,
-                retrieval_source_entity_id=retrieval_source_entity_id,
-                dispatch_source_entity_id=dispatch_source_entity_id,
-                event_minimum=supplied_min,
-                event_unique_price_count=unique_count,
-                is_intelligent_adjusted=adjusted,
-                unit=unit,
-                is_capped=raw.get("is_capped"),
-            )
-        )
-    issue = _validate_import_interval_sequence(result)
-    if issue:
-        raise ValueError(issue)
-    return tuple(result)
-
-
-def parse_public_export_event(
-    event: Mapping[str, Any],
-    *,
-    source: str,
-    source_event: str,
-    retrieved_at: datetime,
-    source_day: str,
-    source_revision_at: datetime,
-    retrieval_source_entity_id: str,
-    unit: str = OCTOPUS_RATE_UNIT,
-) -> tuple[ExportRateInterval, ...]:
-    """Validate one public export event for use in the forecast."""
-
-    raw_rates = event.get("rates")
-    import json
-
-    if isinstance(raw_rates, str):
-        try:
-            raw_rates = json.loads(raw_rates)
-        except json.JSONDecodeError as exc:
-            raise ValueError("public export event rates must be JSON") from exc
-    if not isinstance(raw_rates, Sequence) or isinstance(raw_rates, (str, bytes)) or not raw_rates:
-        raise ValueError("public export event rates must be a non-empty sequence")
-    tariff = event.get("tariff_code", event.get("tariff"))
-    result: list[ExportRateInterval] = []
-    for raw in raw_rates:
-        if not isinstance(raw, Mapping):
-            raise ValueError("public export event rate must be an object")
-        result.append(
-            ExportRateInterval(
-                start=_parse_datetime(raw.get("start"), "start"),
-                end=_parse_datetime(raw.get("end"), "end"),
-                export_price=_decimal(raw.get("value_inc_vat"), "value_inc_vat"),
-                source=source,
-                tariff=_text(tariff, "tariff_code"),
-                retrieved_at=retrieved_at,
-                source_day=source_day,
-                source_event=source_event,
-                source_revision_at=source_revision_at,
-                retrieval_source_entity_id=retrieval_source_entity_id,
-                unit=unit,
-                is_capped=raw.get("is_capped"),
-            )
-        )
-    issue = _validate_export_interval_sequence(result)
-    if issue:
-        raise ValueError(issue)
-    return tuple(result)
-
-
 def parse_fused_export_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[ExportRateInterval, ...]:
     """Parse the provenance-rich export forecast emitted by the template."""
 
@@ -679,16 +550,6 @@ def _parse_datetime_with_fold(value: Any, fold: Any, label: str) -> datetime:
 
     parsed = _parse_datetime(value, label)
     return parsed.replace(fold=_fold(fold, f"{label}_fold"))
-
-
-def value_for_stored_energy(margin_per_stored_kwh: Decimal, energy_kwh: Decimal) -> Decimal:
-    """Return exact export-cycle value for stored energy withdrawn later."""
-
-    margin = _decimal(margin_per_stored_kwh, "margin_per_stored_kwh")
-    energy = _decimal(energy_kwh, "energy_kwh")
-    if energy < 0:
-        raise ValueError("energy_kwh must not be negative")
-    return margin * energy
 
 
 def _fresh(observation: RateSourceObservation | DispatchSourceObservation | None, now: datetime, maximum_age: timedelta, label: str) -> str | None:
@@ -989,7 +850,3 @@ def evaluate_cheap_windows(
     if current:
         windows.append(CheapWindow(current[0].interval.start, current[-1].interval.end, tuple(current)))
     return CheapWindowResult(CoverageStatus.COMPLETE, tuple(windows), tuple(diagnostics))
-
-
-# A concise alias for callers that prefer a builder verb.
-build_cheap_windows = evaluate_cheap_windows

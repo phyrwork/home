@@ -17,9 +17,6 @@ from custom_components.house_battery_control.octopus_windows import (
     evaluate_trusted_import_rates,
     parse_fused_export_rates,
     parse_fused_import_rates,
-    parse_public_export_event,
-    parse_public_import_event as _raw_parse_public_import_event,
-    value_for_stored_energy,
 )
 
 
@@ -30,72 +27,47 @@ EXPORT_SOURCE = "sensor.octopus_energy_export_rates_data_last_retrieved"
 DISPATCH_SOURCE = "sensor.octopus_energy_device_intelligent_dispatches_data_last_retrieved"
 
 
-def _rate(start: str, end: str, value: str, **extra) -> dict:
-    return {
-        "start": start,
-        "end": end,
-        "value_inc_vat": value,
-        "is_capped": False,
-        **extra,
-    }
-
-
-def _event(*, values: tuple[str, ...] = ("0.07", "0.30"), adjusted: tuple[bool, ...] | None = None) -> dict:
-    adjusted = adjusted or (False,) * len(values)
-    return {
-        "min_rate": min(values, key=Decimal),
-        "tariff_code": "E-2R-TEST-A",
-        "rates": [
-            {
-                "start": (NOW + timedelta(minutes=30 * index)).isoformat(),
-                "end": (NOW + timedelta(minutes=30 * (index + 1))).isoformat(),
-                "value_inc_vat": value,
-                "is_capped": False,
-                "is_intelligent_adjusted": is_adjusted,
-            }
-            for index, (value, is_adjusted) in enumerate(zip(values, adjusted, strict=True))
-        ],
-    }
-
-
 def _export(values: tuple[str, ...] = ("0.15", "0.15")) -> tuple[ExportRateInterval, ...]:
-    return parse_public_export_event(
-        {
-            "tariff_code": "E-EXPORT-TEST",
-            "rates": [
-                {
-                    "start": (NOW + timedelta(minutes=30 * index)).isoformat(),
-                    "end": (NOW + timedelta(minutes=30 * (index + 1))).isoformat(),
-                    "value_inc_vat": value,
-                    "is_capped": False,
-                }
-                for index, value in enumerate(values)
-            ],
-        },
-        source="export-current",
-        source_event="export-current",
-        retrieved_at=NOW,
-        source_day="current",
-        source_revision_at=NOW,
-        retrieval_source_entity_id=EXPORT_SOURCE,
+    return tuple(
+        ExportRateInterval(
+            start=NOW + timedelta(minutes=30 * index),
+            end=NOW + timedelta(minutes=30 * (index + 1)),
+            export_price=Decimal(value), source="export-current", tariff="E-EXPORT-TEST",
+            retrieved_at=NOW, source_day="current", source_event="export-current",
+            source_revision_at=NOW, retrieval_source_entity_id=EXPORT_SOURCE, is_capped=False,
+        )
+        for index, value in enumerate(values)
     )
 
 
-def _parse_import(event, **kwargs):
-    source_event = kwargs.pop("source_event", "current-day")
-    return _raw_parse_public_import_event(
-        event,
-        source=kwargs.pop("source", source_event),
-        source_day=kwargs.pop("source_day", "current"),
-        source_event=source_event,
-        source_revision_at=kwargs.pop("source_revision_at", NOW),
-        retrieval_source_entity_id=kwargs.pop("retrieval_source_entity_id", IMPORT_SOURCE),
-        dispatch_source_entity_id=kwargs.pop("dispatch_source_entity_id", DISPATCH_SOURCE),
-        **kwargs,
+def _import_rates(
+    *items: tuple[str, CheapClassification, bool],
+    source: str = "current-day",
+    source_day: str = "current",
+    source_event: str | None = None,
+    source_revision_at: datetime = NOW,
+    retrieval_source_entity_id: str = IMPORT_SOURCE,
+    dispatch_source_entity_id: str = DISPATCH_SOURCE,
+) -> tuple[AdjustedRateInterval, ...]:
+    source_event = source_event or source
+    values = [Decimal(value) for value, _classification, _adjusted in items]
+    minimum = min(values)
+    unique_count = len(set(values))
+    return tuple(
+        AdjustedRateInterval(
+            start=NOW + timedelta(minutes=30 * index),
+            end=NOW + timedelta(minutes=30 * (index + 1)),
+            import_price=price,
+            classification=classification,
+            source=source, tariff="TEST", source_day=source_day,
+            source_event=source_event, source_revision_at=source_revision_at,
+            retrieval_source_entity_id=retrieval_source_entity_id,
+            dispatch_source_entity_id=dispatch_source_entity_id, event_minimum=minimum,
+            event_unique_price_count=unique_count,
+            is_intelligent_adjusted=adjusted, is_capped=False,
+        )
+        for index, ((value, classification, adjusted), price) in enumerate(zip(items, values, strict=True))
     )
-
-
-parse_public_import_event = _parse_import
 
 
 def _result(import_rates, export_rates=None, **kwargs):
@@ -111,46 +83,6 @@ def _result(import_rates, export_rates=None, **kwargs):
         export_source=export_source,
         **kwargs,
     )
-
-
-def test_public_event_normalises_omitted_adjustment_and_classifies_two_rate_minimum() -> None:
-    event = _event()
-    event["rates"][0].pop("is_intelligent_adjusted")
-    rates = parse_public_import_event(
-        event,
-        source="import-rates",
-        source_day="current",
-        source_event="current-day",
-        source_revision_at=NOW,
-    )
-    assert rates[0].classification is CheapClassification.STANDARD_CHEAP
-    assert rates[0].is_intelligent_adjusted is False
-    assert rates[0].is_capped is False
-    assert rates[0].import_price == Decimal("0.07")
-
-
-def test_public_event_keeps_minimums_independent_between_days() -> None:
-    first = parse_public_import_event(
-        _event(values=("0.07", "0.30")),
-        source="import-rates", source_day="current", source_event="current-day", source_revision_at=NOW,
-    )
-    second_event = _event(values=("0.08", "0.31"))
-    second = parse_public_import_event(
-        second_event,
-        source="import-rates", source_day="next", source_event="next-day", source_revision_at=NOW,
-    )
-    assert first[0].classification is CheapClassification.STANDARD_CHEAP
-    assert second[0].classification is CheapClassification.STANDARD_CHEAP
-    assert first[0].event_minimum != second[0].event_minimum
-
-
-@pytest.mark.parametrize("unit", ["pence/kWh", "GBP", "GBP/MWh"])
-def test_pence_or_wrong_unit_is_rejected(unit: str) -> None:
-    with pytest.raises(ValueError, match="unsupported rate unit"):
-        parse_public_import_event(
-            _event(), source="import-rates", source_day="current", source_event="current-day",
-            source_revision_at=NOW, unit=unit,
-        )
 
 
 def test_fused_schema_requires_boolean_adjustment_and_rejects_legacy_record() -> None:
@@ -215,41 +147,36 @@ def test_fused_schema_rejects_inconsistent_minimum_and_adjusted_rate() -> None:
         parse_fused_import_rates(records)
 
 
-def test_bonus_dispatch_at_minimum_is_explicit() -> None:
-    rates = parse_public_import_event(
-        _event(adjusted=(True, False)), source="import-rates", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
-    )
-    assert rates[0].classification is CheapClassification.BONUS_DISPATCH
-
-
 def test_flat_tariff_is_not_cheap() -> None:
-    rates = parse_public_import_event(
-        _event(values=("0.07", "0.07", "0.07")), source="import-rates", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.NOT_CHEAP, False),
+        ("0.07", CheapClassification.NOT_CHEAP, False),
+        ("0.07", CheapClassification.NOT_CHEAP, False),
+        source="import-rates", source_event="current-day",
     )
     assert all(rate.classification is CheapClassification.NOT_CHEAP for rate in rates)
     assert _result(rates).coverage_status is CoverageStatus.TRUSTED_EMPTY
 
 
 def test_exact_cycle_margin_and_value() -> None:
-    rates = parse_public_import_event(
-        _event(), source="import-rates", source_day="current", source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="import-rates", source_event="current-day",
     )
     result = _result(rates)
     assert result.coverage_status is CoverageStatus.COMPLETE
     assert result.windows[0].components[0].margin_per_stored_kwh == (
         Decimal("0.15") * Decimal("0.95") - Decimal("0.07") / Decimal("0.95") - Decimal("0.0165")
     )
-    assert value_for_stored_energy(result.windows[0].components[0].margin_per_stored_kwh, Decimal("2")) == (
-        result.windows[0].components[0].margin_per_stored_kwh * 2
-    )
 
 
 @pytest.mark.parametrize("export_price", ["0.08", "0.07"])
 def test_zero_or_negative_margin_is_trusted_empty(export_price: str) -> None:
-    rates = parse_public_import_event(
-        _event(), source="import-rates", source_day="current", source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="import-rates", source_event="current-day",
     )
     result = _result(rates, _export((export_price, export_price)))
     assert result.coverage_status is CoverageStatus.TRUSTED_EMPTY
@@ -258,15 +185,19 @@ def test_zero_or_negative_margin_is_trusted_empty(export_price: str) -> None:
 
 
 def test_adjacent_profitable_components_merge_without_averaging_prices() -> None:
-    first = parse_public_import_event(
-        _event(values=("0.30", "0.07")), source="import-rates", source_day="current", source_event="current-day", source_revision_at=NOW,
+    first = _import_rates(
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        source="import-rates", source_event="current-day",
     )
     first = tuple(
         replace(item, start=item.start - timedelta(minutes=30), end=item.end - timedelta(minutes=30))
         for item in first
     )
-    second = parse_public_import_event(
-        _event(values=("0.08", "0.31")), source="import-rates", source_day="next", source_event="next-day", source_revision_at=NOW,
+    second = _import_rates(
+        ("0.08", CheapClassification.STANDARD_CHEAP, False),
+        ("0.31", CheapClassification.NOT_CHEAP, False),
+        source="import-rates", source_day="next", source_event="next-day",
     )
     second = tuple(
         replace(item, start=item.start + timedelta(minutes=30), end=item.end + timedelta(minutes=30))
@@ -281,8 +212,10 @@ def test_adjacent_profitable_components_merge_without_averaging_prices() -> None
 
 
 def test_gaps_and_overlaps_never_expose_diagnostic_components_as_windows() -> None:
-    rates = parse_public_import_event(
-        _event(), source="import-rates", source_day="current", source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="import-rates", source_event="current-day",
     )
     gapped = rates[:1] + (
         replace(rates[1], start=NOW + timedelta(minutes=45)),
@@ -293,8 +226,10 @@ def test_gaps_and_overlaps_never_expose_diagnostic_components_as_windows() -> No
 
 
 def test_stale_and_future_sources_fail_closed() -> None:
-    rates = parse_public_import_event(
-        _event(), source="import-rates", source_day="current", source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="import-rates", source_event="current-day",
     )
     stale = _result(rates, import_source=RateSourceObservation(NOW - timedelta(hours=27), IMPORT_SOURCE))
     assert stale.coverage_status is CoverageStatus.UNAVAILABLE
@@ -303,14 +238,18 @@ def test_stale_and_future_sources_fail_closed() -> None:
 
 
 def test_dispatch_freshness_required_only_for_actionable_bonus() -> None:
-    rates = parse_public_import_event(
-        _event(adjusted=(True, False)), source="import-rates", source_day="current", source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="import-rates", source_event="current-day",
     )
     stale_dispatch = DispatchSourceObservation(NOW - timedelta(minutes=11), DISPATCH_SOURCE)
     result = _result(rates, dispatch_source=stale_dispatch)
     assert result.coverage_status is CoverageStatus.UNAVAILABLE
-    ordinary = parse_public_import_event(
-        _event(), source="import-rates", source_day="current", source_event="current-day", source_revision_at=NOW,
+    ordinary = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="import-rates", source_event="current-day",
     )
     result = _result(ordinary, dispatch_source=stale_dispatch)
     assert result.coverage_status is CoverageStatus.COMPLETE
@@ -349,34 +288,11 @@ def test_cross_midnight_and_dst_fold_are_compared_by_utc_instant() -> None:
     assert result.coverage_status is CoverageStatus.GAPPED
 
 
-def test_three_rate_event_classifies_only_exact_minimum_as_standard_cheap() -> None:
-    rates = parse_public_import_event(
-        _event(values=("0.07", "0.20", "0.30")),
-        source="current-day", source_day="current", source_event="current-day",
-        source_revision_at=NOW,
-    )
-    assert [item.classification for item in rates] == [
-        CheapClassification.STANDARD_CHEAP,
-        CheapClassification.NOT_CHEAP,
-        CheapClassification.NOT_CHEAP,
-    ]
-
-
-@pytest.mark.parametrize("adjustment", [None, "false", 0, 1])
-def test_public_present_non_boolean_adjustment_is_rejected(adjustment) -> None:
-    event = _event()
-    event["rates"][0]["is_intelligent_adjusted"] = adjustment
-    with pytest.raises(ValueError, match="Boolean"):
-        parse_public_import_event(
-            event, source="current-day", source_day="current",
-            source_event="current-day", source_revision_at=NOW,
-        )
-
-
 def test_exact_zero_margin_is_not_actionable() -> None:
-    rates = parse_public_import_event(
-        _event(), source="current-day", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="current-day",
     )
     charge = Decimal("0.95")
     discharge = Decimal("0.95")
@@ -392,9 +308,10 @@ def test_exact_zero_margin_is_not_actionable() -> None:
 
 
 def test_exact_retrieval_source_and_timestamp_are_bound_to_observation() -> None:
-    rates = parse_public_import_event(
-        _event(), source="current-day", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="current-day",
     )
     mismatched_import = tuple(
         replace(item, retrieval_source_entity_id="sensor.wrong_import_source")
@@ -411,9 +328,10 @@ def test_exact_retrieval_source_and_timestamp_are_bound_to_observation() -> None
 
 
 def test_bonus_dispatch_source_must_match_exact_configured_entity() -> None:
-    rates = parse_public_import_event(
-        _event(adjusted=(True, False)), source="current-day", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="current-day",
     )
     result = _result(
         rates,
@@ -425,22 +343,23 @@ def test_bonus_dispatch_source_must_match_exact_configured_entity() -> None:
 
 def test_empty_current_only_and_export_gap_are_not_trusted_empty() -> None:
     assert _result(()).coverage_status is CoverageStatus.GAPPED
-    current_only = parse_public_import_event(
-        _event(values=("0.07",)) , source="current-day", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    current_only = _import_rates(
+        ("0.07", CheapClassification.NOT_CHEAP, False), source="current-day",
     )
     assert _result(current_only).coverage_status is CoverageStatus.GAPPED
-    rates = parse_public_import_event(
-        _event(), source="current-day", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="current-day",
     )
     assert _result(rates, _export()[:1]).coverage_status is CoverageStatus.GAPPED
 
 
 def test_overlap_duplicate_and_unordered_input_are_invalid() -> None:
-    rates = parse_public_import_event(
-        _event(), source="current-day", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="current-day",
     )
     exports = _export()
     overlap = (exports[0], replace(exports[1], start=NOW + timedelta(minutes=15)))
@@ -451,9 +370,10 @@ def test_overlap_duplicate_and_unordered_input_are_invalid() -> None:
 
 
 def test_forged_direct_intervals_and_wrong_concrete_types_fail_closed() -> None:
-    rates = parse_public_import_event(
-        _event(), source="current-day", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    rates = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="current-day",
     )
     forged = (
         replace(
@@ -497,9 +417,10 @@ def test_fused_export_parser_rejects_missing_revision_and_unordered_records() ->
 
 
 def test_trusted_import_view_is_complete_without_export_and_bonus_is_independent() -> None:
-    standard = parse_public_import_event(
-        _event(), source="current-day", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    standard = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="current-day",
     )
     result = evaluate_trusted_import_rates(
         import_rates=standard, start=NOW, end=NOW + timedelta(hours=1), now=NOW,
@@ -508,9 +429,10 @@ def test_trusted_import_view_is_complete_without_export_and_bonus_is_independent
     assert result.coverage_status is CoverageStatus.COMPLETE
     assert result.intervals == standard
 
-    bonus = parse_public_import_event(
-        _event(adjusted=(True, False)), source="current-day", source_day="current",
-        source_event="current-day", source_revision_at=NOW,
+    bonus = _import_rates(
+        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+        source="current-day",
     )
     missing = evaluate_trusted_import_rates(
         import_rates=bonus, start=NOW, end=NOW + timedelta(hours=1), now=NOW,
@@ -528,27 +450,41 @@ def test_trusted_import_view_is_complete_without_export_and_bonus_is_independent
 
 def test_complete_coverage_across_both_dst_folds_uses_utc_instants() -> None:
     fold_now = datetime(2026, 10, 25, 0, tzinfo=UTC)
-    import_event = {
-        "min_rate": "0.07",
-        "tariff_code": "T",
-        "rates": [
-            _rate("2026-10-25T01:00:00+01:00", "2026-10-25T01:00:00+00:00", "0.07"),
-            _rate("2026-10-25T01:00:00+00:00", "2026-10-25T02:00:00+00:00", "0.30"),
-        ],
-    }
-    imports = _raw_parse_public_import_event(
-        import_event, source="fold-event", source_day="current", source_event="fold-event",
-        source_revision_at=fold_now, retrieval_source_entity_id=IMPORT_SOURCE,
-        dispatch_source_entity_id=DISPATCH_SOURCE,
+    imports = (
+        AdjustedRateInterval(
+            start=datetime.fromisoformat("2026-10-25T01:00:00+01:00"),
+            end=datetime.fromisoformat("2026-10-25T01:00:00+00:00"),
+            import_price=Decimal("0.07"), classification=CheapClassification.STANDARD_CHEAP,
+            source="fold-event", tariff="T", source_day="current", source_event="fold-event",
+            source_revision_at=fold_now, retrieval_source_entity_id=IMPORT_SOURCE,
+            dispatch_source_entity_id=DISPATCH_SOURCE, event_minimum=Decimal("0.07"),
+            event_unique_price_count=2, is_intelligent_adjusted=False,
+        ),
+        AdjustedRateInterval(
+            start=datetime.fromisoformat("2026-10-25T01:00:00+00:00"),
+            end=datetime.fromisoformat("2026-10-25T02:00:00+00:00"),
+            import_price=Decimal("0.30"), classification=CheapClassification.NOT_CHEAP,
+            source="fold-event", tariff="T", source_day="current", source_event="fold-event",
+            source_revision_at=fold_now, retrieval_source_entity_id=IMPORT_SOURCE,
+            dispatch_source_entity_id=DISPATCH_SOURCE, event_minimum=Decimal("0.07"),
+            event_unique_price_count=2, is_intelligent_adjusted=False,
+        ),
     )
-    exports = parse_public_export_event(
-        {"tariff_code": "E", "rates": [
-            _rate("2026-10-25T01:00:00+01:00", "2026-10-25T01:00:00+00:00", "0.15"),
-            _rate("2026-10-25T01:00:00+00:00", "2026-10-25T02:00:00+00:00", "0.15"),
-        ]},
-        source="fold-export", source_event="fold-export", source_day="current",
-        retrieved_at=fold_now, source_revision_at=fold_now,
-        retrieval_source_entity_id=EXPORT_SOURCE,
+    exports = (
+        ExportRateInterval(
+            start=datetime.fromisoformat("2026-10-25T01:00:00+01:00"),
+            end=datetime.fromisoformat("2026-10-25T01:00:00+00:00"),
+            export_price=Decimal("0.15"), source="fold-export", tariff="E", retrieved_at=fold_now,
+            source_day="current", source_event="fold-export", source_revision_at=fold_now,
+            retrieval_source_entity_id=EXPORT_SOURCE,
+        ),
+        ExportRateInterval(
+            start=datetime.fromisoformat("2026-10-25T01:00:00+00:00"),
+            end=datetime.fromisoformat("2026-10-25T02:00:00+00:00"),
+            export_price=Decimal("0.15"), source="fold-export", tariff="E", retrieved_at=fold_now,
+            source_day="current", source_event="fold-export", source_revision_at=fold_now,
+            retrieval_source_entity_id=EXPORT_SOURCE,
+        ),
     )
     result = evaluate_cheap_windows(
         import_rates=imports, export_rates=exports,

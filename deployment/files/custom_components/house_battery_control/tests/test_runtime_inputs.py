@@ -3,11 +3,12 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from custom_components.house_battery_control.octopus_windows import (
+    AdjustedRateInterval,
+    CheapClassification,
     CoverageStatus,
     DispatchSourceObservation,
     RateSourceObservation,
     evaluate_trusted_import_rates,
-    parse_public_import_event,
 )
 from custom_components.house_battery_control.runtime_inputs import _cycle_duration, _runtime_powers
 from custom_components.house_battery_control.solis_reader import read_solis_state
@@ -46,27 +47,13 @@ def test_cycle_duration_rejects_out_of_range_values() -> None:
 
 
 def test_stale_bonus_dispatch_is_not_usable_for_reserve() -> None:
-    event = {
-        "min_rate": "0.07",
-        "tariff_code": "TEST",
-        "rates": [
-            {
-                "start": NOW.isoformat(),
-                "end": (NOW + timedelta(hours=1)).isoformat(),
-                "value_inc_vat": "0.07",
-                "is_intelligent_adjusted": True,
-            }
-        ],
-    }
-    rates = parse_public_import_event(
-        event,
-        source="test",
-        source_day="current",
-        source_event="test",
-        source_revision_at=NOW,
-        retrieval_source_entity_id="sensor.import",
-        dispatch_source_entity_id="sensor.dispatch",
-    )
+    rates = (AdjustedRateInterval(
+        start=NOW, end=NOW + timedelta(hours=1), import_price=Decimal("0.07"),
+        classification=CheapClassification.BONUS_DISPATCH, source="test", tariff="TEST",
+        source_day="current", source_event="test", source_revision_at=NOW,
+        retrieval_source_entity_id="sensor.import", dispatch_source_entity_id="sensor.dispatch",
+        event_minimum=Decimal("0.07"), event_unique_price_count=1, is_intelligent_adjusted=True,
+    ),)
     result = evaluate_trusted_import_rates(
         import_rates=rates,
         start=NOW,
