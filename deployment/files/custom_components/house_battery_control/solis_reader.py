@@ -223,9 +223,24 @@ class SolisStateReader:
         switch_values["allow_grid_charging"] = self._switch(persistent.allow_grid_charging_entity_id)
 
         inverter_time_id = persistent.inverter_time_entity_id
-        inverter_time = self._parse_datetime(self._state_value(self._state(inverter_time_id)))
-        if inverter_time is None:
+        inverter_time_state = self._state(inverter_time_id)
+        sampled_inverter_time = self._parse_datetime(self._state_value(inverter_time_state))
+        inverter_time_observed_at = self._observation_timestamp(
+            inverter_time_state, inverter_time_id, "inverter datetime"
+        )
+        inverter_time = None
+        if sampled_inverter_time is None:
             self._critical("inverter_datetime_invalid", inverter_time_id, "inverter datetime is invalid or naive")
+        elif inverter_time_observed_at is None:
+            pass
+        elif inverter_time_observed_at > self.now:
+            self._critical(
+                "inverter_datetime_observation_future",
+                inverter_time_id,
+                "inverter datetime observation timestamp is in the future",
+            )
+        else:
+            inverter_time = sampled_inverter_time + (self.now - inverter_time_observed_at)
 
         protection = config.protection
         battery_reserve = self._switch(protection.battery_reserve_entity_id)

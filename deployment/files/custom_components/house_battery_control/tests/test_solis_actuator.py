@@ -153,6 +153,35 @@ async def test_success_disables_before_configuring_and_enables_one_slot():
 
 
 @pytest.mark.asyncio
+async def test_old_inverter_clock_sample_is_extrapolated_before_actuation():
+    controller, ha, _observation = actuator()
+    sampled_at = NOW - timedelta(minutes=15)
+    ha.states[controller.config.persistent.inverter_time_entity_id].update(
+        state=(sampled_at + timedelta(seconds=30)).isoformat(), last_updated=sampled_at
+    )
+    observation = read_solis_state(controller.config, ha.states, NOW)
+
+    result = await controller.async_apply_intent(intent(), observation, now=NOW)
+
+    assert result.status is SlotActuationStatus.APPLIED
+
+
+@pytest.mark.asyncio
+async def test_old_inverter_clock_sample_with_large_offset_is_rejected():
+    controller, ha, _observation = actuator()
+    sampled_at = NOW - timedelta(minutes=15)
+    ha.states[controller.config.persistent.inverter_time_entity_id].update(
+        state=(sampled_at + timedelta(minutes=2)).isoformat(), last_updated=sampled_at
+    )
+    observation = read_solis_state(controller.config, ha.states, NOW)
+
+    result = await controller.async_apply_intent(intent(), observation, now=NOW)
+
+    assert result.status is SlotActuationStatus.FAILED_SAFE
+    assert "clock exceeds allowed skew" in result.message
+
+
+@pytest.mark.asyncio
 async def test_repeated_identical_heartbeat_is_a_verified_noop():
     controller, ha, observation = actuator()
     first = await controller.async_apply_intent(intent(), observation, now=NOW)

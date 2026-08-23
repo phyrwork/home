@@ -27,6 +27,13 @@ consumer.
   discharge current capabilities, and all six charge/discharge slots. Keep
   serialized writes, disable-all before direction changes, readback, and bounded
   fail-safe cleanup.
+- The inverter datetime is sampled; extrapolate it from its Home Assistant
+  `last_updated` timestamp before applying the one-minute clock-offset check.
+  This keeps stale-but-freshly-telemetried samples from failing solely due to
+  sample age, while preserving fail-closed behavior for invalid observations.
+- Live finding: the Solis datetime sample can lag the five-minute telemetry
+  cadence, so raw sampled values must not be treated as the current inverter
+  clock.
 - Treat native SolisCloud Grid Peak Shaving (enabled at 100 W) as one-time
   commissioning; do not map or write its non-authoritative HA switch at runtime.
 - Preserve the energy diagnostics `House Battery Energy`, `House Battery Reserve

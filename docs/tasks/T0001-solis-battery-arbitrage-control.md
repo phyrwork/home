@@ -495,6 +495,12 @@ treated as immutable.
 | Battery Reserve enable | `switch.garage_inverter_control_battery_reserve` | Candidate actuator for enforcing the dynamic household reserve |
 | Battery Reserve SOC | `number.garage_inverter_control_battery_reserve_soc` | Candidate mapping for the calculated reserve, rounded upward and bounded by `MINIMUM_SOC_PERCENT` |
 
+The inverter clock entity is a sampled datetime, not a continuously current
+clock. The reader extrapolates its raw value by the age of the Home Assistant
+sample (`reader_now - last_updated`); the actuator's one-minute skew check then
+measures the estimated current clock offset. The controller does not write or
+synchronise this clock at runtime.
+
 The physical discharge floor, 7% force-charge threshold, 10% recovery setting,
 100% maximum battery charge SOC, 100% inverter output setting and unlimited
 export setting are one-time commissioned facts recorded above; the runtime does

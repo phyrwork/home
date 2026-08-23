@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 import yaml
 
 from custom_components.house_battery_control import config
@@ -101,3 +102,33 @@ def test_unknown_power_unit_is_degraded() -> None:
     result = read_solis_state(parsed, states, NOW)
     assert result.health is ControllerHealth.DEGRADED
     assert any(issue.code == "battery_power_unit_unknown" for issue in result.issues)
+
+
+def test_reader_extrapolates_sampled_inverter_clock() -> None:
+    parsed, states = fixture()
+    sampled_at = NOW - timedelta(minutes=15)
+    states[parsed.persistent.inverter_time_entity_id] = state(
+        (sampled_at + timedelta(seconds=30)).isoformat(), updated=sampled_at
+    )
+
+    result = read_solis_state(parsed, states, NOW)
+
+    assert result.health is ControllerHealth.HEALTHY
+    assert result.snapshot is not None
+    assert result.snapshot.persistent.inverter_time == NOW + timedelta(seconds=30)
+
+
+@pytest.mark.parametrize("missing", (True, False))
+def test_missing_or_naive_inverter_clock_observation_timestamp_is_degraded(missing: bool) -> None:
+    parsed, states = fixture()
+    inverter_state = state(NOW.isoformat())
+    if missing:
+        inverter_state.pop("last_updated")
+    else:
+        inverter_state["last_updated"] = datetime(2026, 8, 22, 12)
+    states[parsed.persistent.inverter_time_entity_id] = inverter_state
+
+    result = read_solis_state(parsed, states, NOW)
+
+    assert result.health is ControllerHealth.DEGRADED
+    assert any(issue.code == ("ha_last_updated_missing" if missing else "ha_last_updated_naive") for issue in result.issues)
