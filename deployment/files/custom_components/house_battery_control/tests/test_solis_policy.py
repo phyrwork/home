@@ -343,6 +343,111 @@ async def test_safe_baseline_retries_one_timeout_and_preserves_ordered_evidence(
 
 
 @pytest.mark.asyncio
+async def test_safe_baseline_skips_backoff_when_delay_does_not_fit_deadline(
+    monkeypatch,
+) -> None:
+    actuator, _ha, _observation = policy()
+    first = _policy_result(WriteOutcome.SERVICE_TIMEOUT, "timeout")
+    attempt = AsyncMock(return_value=first)
+    actuator._apply_safe_baseline_once_locked = attempt
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.solis_policy.SAFE_BASELINE_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.solis_policy.SAFE_BASELINE_RETRY_DELAY_SECONDS",
+        0.02,
+    )
+
+    with patch(
+        "custom_components.house_battery_control.solis_policy.asyncio.sleep",
+        AsyncMock(),
+    ) as sleep:
+        result = await actuator.async_apply_safe_baseline()
+
+    assert not result.safe
+    attempt.assert_awaited_once()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_healthy_path_propagates_one_absolute_deadline_to_writer_and_slots(
+    monkeypatch,
+) -> None:
+    actuator, _ha, observation = policy()
+    deadlines: list[float | None] = []
+    original_transaction = actuator.writer.transaction
+    original_disable = actuator.slots._disable_all_once
+
+    def transaction(*, deadline=None):
+        deadlines.append(deadline)
+        return original_transaction(deadline=deadline)
+
+    async def disable(results=None, deadline=None):
+        deadlines.append(deadline)
+        return await original_disable(results, deadline=deadline)
+
+    monkeypatch.setattr(actuator.writer, "transaction", transaction)
+    monkeypatch.setattr(actuator.slots, "_disable_all_once", disable)
+
+    result = await actuator.async_apply_healthy(
+        observation=observation,
+        reserve_soc_percent=10,
+        intent=None,
+        now=NOW,
+    )
+
+    assert result.success
+    assert deadlines
+    assert all(deadline is not None for deadline in deadlines)
+    assert len({deadline for deadline in deadlines}) == 1
+
+
+@pytest.mark.asyncio
+async def test_healthy_readback_timeout_falls_back_to_safe_baseline_without_replay(
+    monkeypatch,
+) -> None:
+    actuator, ha, observation = policy()
+    storage_mode_id = actuator.config.persistent.storage_mode_entity_id
+    # The fake service does not publish a new revision, so the first healthy
+    # write is a readback timeout.  The fallback may write Self-Use, but must
+    # never replay Feed-In Priority.
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_READBACK_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+    original_call = ha.async_call
+
+    async def timeout_feed_in(domain, service, data, *, blocking=True):
+        if (
+            data["entity_id"] == storage_mode_id
+            and data.get("option") == StorageMode.FEED_IN_PRIORITY.value
+        ):
+            ha.calls.append((domain, service, data))
+            return
+        await original_call(domain, service, data, blocking=blocking)
+
+    ha.async_call = timeout_feed_in
+    result = await actuator.async_apply_healthy(
+        observation=observation,
+        reserve_soc_percent=10,
+        intent=None,
+        now=NOW,
+    )
+
+    feed_in_calls = [
+        call
+        for call in ha.calls
+        if call[2]["entity_id"] == storage_mode_id
+        and call[2].get("option") == StorageMode.FEED_IN_PRIORITY.value
+    ]
+    assert len(feed_in_calls) == 1
+    assert not result.success
+    assert result.safe
+    assert ha.states[storage_mode_id]["state"] == StorageMode.SELF_USE.value
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "outcome",
     (

@@ -501,6 +501,73 @@ async def test_cancellation_shields_bounded_async_listener_cleanup() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancellation_during_service_timeout_reconciliation_is_bounded(
+    monkeypatch,
+) -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    ha.service_wait = asyncio.Event()
+    writer = HomeAssistantWriter(ha)
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_CALL_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_TIMEOUT_CONFIRMATION",
+        timedelta(seconds=1),
+    )
+    task = asyncio.create_task(
+        writer.async_write(SwitchWriteRequest(precondition(ha, "switch.a"), True))
+    )
+    for _ in range(20):
+        await asyncio.sleep(0.001)
+        if ha.calls and not task.done():
+            break
+    assert ha.calls
+    # The service timeout has put the writer into its reconciliation wait.
+    await asyncio.sleep(0.02)
+    task.cancel("cancel during reconciliation")
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 0.2)
+    assert ha.listeners["switch.a"] == []
+    assert not writer._lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_writer_preserves_service_cancellation_identity_across_repeated_cleanup_cancel(
+) -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    remove_gate = asyncio.Event()
+    ha.remove_gate = remove_gate
+    original = asyncio.CancelledError("write cancellation")
+
+    async def cancel_service(*_args, **_kwargs):
+        ha.calls.append(("switch", "turn_on", {"entity_id": "switch.a"}))
+        raise original
+
+    ha.async_call = cancel_service
+    writer = HomeAssistantWriter(ha)
+    task = asyncio.create_task(
+        writer.async_write(SwitchWriteRequest(precondition(ha, "switch.a"), True))
+    )
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if ha.calls:
+            break
+    assert ha.calls
+    task.cancel("cleanup cancellation one")
+    await asyncio.sleep(0)
+    task.cancel("cleanup cancellation two")
+    remove_gate.set()
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+    assert caught.value is original
+    assert ha.listeners["switch.a"] == []
+    assert not writer._lock.locked()
+
+
+@pytest.mark.asyncio
 async def test_transaction_owner_nested_and_cross_task_access_are_rejected() -> None:
     ha = FakeHA()
     seed(ha, "switch.a", "off")

@@ -389,6 +389,7 @@ class HomeAssistantWriter:
             loop.call_soon_threadsafe(event.set)
 
         remove: Callable[[], object] | None = None
+        write_cancellation: asyncio.CancelledError | None = None
         try:
             # Arm before the final CAS check so a fast state transition cannot be missed.
             remove = self._listen(request.entity_id, on_change)
@@ -423,18 +424,26 @@ class HomeAssistantWriter:
                         service_data,
                     )
                 return WriteResult(request.entity_id, WriteOutcome.SERVICE_TIMEOUT, "Home Assistant service call timed out without a new matching HA revision", f"{request.domain}.{service}", service_data)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as exc:
+                # Keep the exact exception object raised by the service wait;
+                # listener cleanup may receive additional cancellation while
+                # it is unwinding, but must not replace this provenance.
+                write_cancellation = exc
                 raise
             except Exception as exc:
                 return WriteResult(request.entity_id, WriteOutcome.SERVICE_ERROR, f"Home Assistant service call failed: {exc}", f"{request.domain}.{service}", service_data)
 
-            confirmed = await self._wait_for_matching_revision(
-                request,
-                normalized,
-                event,
-                local_timeout=HA_READBACK_TIMEOUT,
-                deadline=deadline,
-            )
+            try:
+                confirmed = await self._wait_for_matching_revision(
+                    request,
+                    normalized,
+                    event,
+                    local_timeout=HA_READBACK_TIMEOUT,
+                    deadline=deadline,
+                )
+            except asyncio.CancelledError as exc:
+                write_cancellation = exc
+                raise
             if confirmed:
                 return WriteResult(
                     request.entity_id,
@@ -446,20 +455,31 @@ class HomeAssistantWriter:
             return WriteResult(request.entity_id, WriteOutcome.READBACK_TIMEOUT, "Home Assistant did not confirm a new matching state revision", f"{request.domain}.{service}", service_data)
         finally:
             if remove is not None:
-                await _cleanup_listener(remove, deadline=deadline)
+                cleanup_cancellation = await _cleanup_listener(
+                    remove, deadline=deadline
+                )
+                if write_cancellation is not None:
+                    raise write_cancellation
+                if cleanup_cancellation is not None:
+                    raise cleanup_cancellation
 
 
 async def _cleanup_listener(
     remove: Callable[[], object], *, deadline: float | None = None
-) -> None:
-    """Remove a listener through a bounded shield, preserving cancellation."""
+) -> asyncio.CancelledError | None:
+    """Remove a listener through a bounded shield, preserving cancellation.
+
+    Cancellation is returned to the caller rather than raised from this
+    helper.  The writer can then prefer a cancellation already raised by the
+    write itself, preserving its identity even if cleanup is cancelled again.
+    """
 
     try:
         result = remove()
     except Exception:
-        return
+        return None
     if not inspect.isawaitable(result):
-        return
+        return None
     cleanup_task = asyncio.create_task(result)
 
     def consume(task: asyncio.Task[object]) -> None:
@@ -492,8 +512,7 @@ async def _cleanup_listener(
             break
         except Exception:
             break
-    if cancellation is not None:
-        raise cancellation
+    return cancellation
 
 
 class WriteTransaction:

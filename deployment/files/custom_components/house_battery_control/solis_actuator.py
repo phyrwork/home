@@ -477,8 +477,10 @@ class SolisSlotActuator:
                 await self._record_cancelled_cleanup(original, partial_results)
                 raise original
 
-    async def _cleanup_after_failure(self, results: list[WriteResult]) -> bool:
-        cleanup = await self._disable_all_once(results)
+    async def _cleanup_after_failure(
+        self, results: list[WriteResult], *, deadline: float | None = None
+    ) -> bool:
+        cleanup = await self._disable_all_once(results, deadline=deadline)
         return cleanup.safe
 
     async def _record_cancelled_cleanup(
@@ -520,25 +522,27 @@ class SolisSlotActuator:
         observation: SolisStateReadResult,
         now: datetime,
         results: list[WriteResult],
+        *,
+        deadline: float | None = None,
     ) -> SlotActuationResult:
         try:
             preflight = self._preflight(intent, observation, now)
             if isinstance(preflight, str):
-                safe = await self._cleanup_after_failure(results)
+                safe = await self._cleanup_after_failure(results, deadline=deadline)
                 status = SlotActuationStatus.FAILED_SAFE if safe else SlotActuationStatus.FAILED_UNSAFE
                 return SlotActuationResult(status, tuple(results), message=preflight)
             target_config, target_state, schedule = preflight
-            deadline = min(intent.end, intent.expiry)
+            mandatory_disable_deadline = min(intent.end, intent.expiry)
             if self._existing_intent_is_proven(
                 intent, observation, target_state, target_config, schedule
             ):
                 return SlotActuationResult(
                     SlotActuationStatus.APPLIED,
                     tuple(results),
-                    mandatory_disable_deadline=deadline,
+                    mandatory_disable_deadline=mandatory_disable_deadline,
                     message="slot already enabled and Home Assistant readback verified",
                 )
-            async with self.writer.transaction() as transaction:
+            async with self.writer.transaction(deadline=deadline) as transaction:
                 preserve_target = (
                     observation.snapshot is not None
                     and target_state.enabled
@@ -549,7 +553,9 @@ class SolisSlotActuator:
                 # All twelve switch preconditions are captured immediately
                 # before their individual CAS writes.
                 result_count = len(results)
-                proven = preserve_target or await self._disable_all_locked(transaction, results)
+                proven = preserve_target or await self._disable_all_locked(
+                    transaction, results, deadline=deadline
+                )
                 disable_results = results[result_count:]
                 if not proven or not all(result.success for result in disable_results):
                     raise RuntimeError("all Solis slot directions were not proven disabled")
@@ -575,7 +581,9 @@ class SolisSlotActuator:
                 ):
                     if current == request.target:
                         continue
-                    write_result = await self._write_recorded(transaction, request, results)
+                    write_result = await self._write_recorded(
+                        transaction, request, results, deadline=deadline
+                    )
                     if not write_result.success:
                         raise RuntimeError(f"configuration write failed: {write_result.message}")
                 if not preserve_target and not self._prove_all_off():
@@ -585,7 +593,9 @@ class SolisSlotActuator:
                 enable_precondition = self._require_verified_precondition(target_config.enable_entity_id)
                 if enable_precondition.state != "on":
                     enable_request = SwitchWriteRequest(enable_precondition, True)
-                    write_result = await self._write_recorded(transaction, enable_request, results)
+                    write_result = await self._write_recorded(
+                        transaction, enable_request, results, deadline=deadline
+                    )
                     if not write_result.success:
                         raise RuntimeError(f"slot enable failed: {write_result.message}")
                 if not self._guard_off():
@@ -595,11 +605,11 @@ class SolisSlotActuator:
             return SlotActuationResult(
                 SlotActuationStatus.APPLIED,
                 tuple(results),
-                mandatory_disable_deadline=deadline,
+                mandatory_disable_deadline=mandatory_disable_deadline,
                 message="slot enabled and Home Assistant readback verified",
             )
         except Exception as exc:
-            safe = await self._cleanup_after_failure(results)
+            safe = await self._cleanup_after_failure(results, deadline=deadline)
             status = SlotActuationStatus.FAILED_SAFE if safe else SlotActuationStatus.FAILED_UNSAFE
             return SlotActuationResult(status, tuple(results), message=str(exc))
 

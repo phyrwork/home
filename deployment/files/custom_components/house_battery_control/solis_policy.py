@@ -137,9 +137,19 @@ class SolisPolicyActuator:
         first = await self._apply_safe_baseline_once_locked(deadline=deadline)
         if first.safe or not self._baseline_retryable(first):
             return first
-        if self._remaining(deadline) <= SAFE_BASELINE_RETRY_DELAY_SECONDS:
+        remaining = self._remaining(deadline)
+        if remaining < SAFE_BASELINE_RETRY_DELAY_SECONDS:
             return first
-        await asyncio.sleep(SAFE_BASELINE_RETRY_DELAY_SECONDS)
+        try:
+            # The delay is part of the one absolute budget.  In particular,
+            # do not start a retry merely because there is some time left and
+            # then let the sleep carry the operation past its deadline.
+            await asyncio.wait_for(
+                asyncio.sleep(SAFE_BASELINE_RETRY_DELAY_SECONDS),
+                timeout=remaining,
+            )
+        except asyncio.TimeoutError:
+            return first
         if self._remaining(deadline) <= 0:
             return first
         second = await self._apply_safe_baseline_once_locked(deadline=deadline)
@@ -191,9 +201,22 @@ class SolisPolicyActuator:
                 cleanup.cancel()
                 break
         if not cleanup.done():
+            # Cancellation of a child is itself asynchronous.  Give it one
+            # scheduling turn to release locks, but never await it without a
+            # deadline.  The done callback below consumes any late result.
             cleanup.cancel()
+            cleanup.add_done_callback(self._consume_task)
+            try:
+                await asyncio.sleep(0)
+            except asyncio.CancelledError:
+                # Preserve the original cancellation owned by the caller;
+                # this additional delivery must not extend cleanup.
+                self._clear_cancellation()
+            return PolicyActuationResult(
+                False, False, "safe baseline cleanup deadline exhausted"
+            )
         try:
-            return await cleanup
+            return cleanup.result()
         except asyncio.CancelledError:
             return PolicyActuationResult(
                 False, False, "safe baseline cleanup deadline exhausted"
@@ -202,6 +225,15 @@ class SolisPolicyActuator:
             return PolicyActuationResult(
                 False, False, f"safe baseline cleanup failed: {exc}"
             )
+
+    @staticmethod
+    def _consume_task(task: asyncio.Task[object]) -> None:
+        """Consume a detached bounded-cleanup task without leaking warnings."""
+
+        try:
+            task.result()
+        except BaseException:
+            pass
 
     async def async_apply_safe_baseline(self) -> PolicyActuationResult:
         """Apply at most two HA-proven baseline attempts within one minute."""
@@ -229,24 +261,27 @@ class SolisPolicyActuator:
     ) -> PolicyActuationResult:
         """Apply Feed-In Priority, dynamic reserve and zero or one slot."""
 
+        # Every healthy write and any resulting safe cleanup shares this one
+        # absolute budget.  Never create a fresh budget from a failure path.
+        deadline = self._new_safe_deadline()
         try:
-            await self._lock.acquire()
+            await self._lock.acquire(deadline=deadline)
             results: list[WriteResult] = []
             try:
                 if not self._guard_off():
                     return await self._apply_safe_baseline_attempts_locked(
-                        deadline=self._new_safe_deadline()
+                        deadline=deadline
                     )
                 if observation.health is not ControllerHealth.HEALTHY or observation.snapshot is None:
                     return await self._apply_safe_baseline_attempts_locked(
-                        deadline=self._new_safe_deadline()
+                        deadline=deadline
                     )
                 snapshot = observation.snapshot
                 reserve_capability = snapshot.persistent.battery_reserve_soc
                 reserve, reserve_error = self._reserve_target(reserve_soc_percent, reserve_capability)
                 if reserve is None:
                     fallback = await self._apply_safe_baseline_attempts_locked(
-                        deadline=self._new_safe_deadline()
+                        deadline=deadline
                     )
                     return PolicyActuationResult(
                         False,
@@ -256,7 +291,7 @@ class SolisPolicyActuator:
                     )
                 persistent = self.config.persistent
                 protection = self.config.protection
-                async with self.writer.transaction() as transaction:
+                async with self.writer.transaction(deadline=deadline) as transaction:
                     for request in (
                         SelectWriteRequest(self.writer.capture_precondition(persistent.storage_mode_entity_id), StorageMode.FEED_IN_PRIORITY.value),
                         SwitchWriteRequest(self.writer.capture_precondition(persistent.allow_grid_charging_entity_id), True),
@@ -269,7 +304,9 @@ class SolisPolicyActuator:
                     ):
                         if not self._guard_off():
                             raise RuntimeError("control-disable guard changed during healthy actuation")
-                        result = await transaction.async_write(request)
+                        result = await transaction.async_write(
+                            request, deadline=deadline
+                        )
                         results.append(result)
                         if not result.success:
                             raise RuntimeError(result.message)
@@ -278,14 +315,22 @@ class SolisPolicyActuator:
                 if intent is None:
                     if not self._guard_off():
                         raise RuntimeError("control-disable guard changed before slot cleanup")
-                    disabled = await self.slots._disable_all_once(results)
+                    disabled = await self.slots._disable_all_once(
+                        results, deadline=deadline
+                    )
                     if not disabled.safe:
                         raise RuntimeError("not all Solis slots were proven disabled")
                     return PolicyActuationResult(True, False, "healthy baseline active; all slots off", tuple(results))
                 slot_results: list[WriteResult] = []
                 if not self._guard_off():
                     raise RuntimeError("control-disable guard changed before slot actuation")
-                slot_result = await self.slots._async_apply_intent(intent, observation, now, slot_results)
+                slot_result = await self.slots._async_apply_intent(
+                    intent,
+                    observation,
+                    now,
+                    slot_results,
+                    deadline=deadline,
+                )
                 results.extend(slot_results)
                 if slot_result.status is not SlotActuationStatus.APPLIED:
                     raise RuntimeError(slot_result.message or "slot actuation failed")
@@ -296,16 +341,18 @@ class SolisPolicyActuator:
                 # Never replay an ambiguous healthy mutation.  Move directly
                 # to the independently retryable safe baseline.
                 fallback = await self._apply_safe_baseline_attempts_locked(
-                    deadline=self._new_safe_deadline()
+                    deadline=deadline
                 )
                 return PolicyActuationResult(False, fallback.safe, f"healthy actuation failed: {exc}", tuple(results) + fallback.results)
             finally:
                 self._lock.release()
         except asyncio.CancelledError as original:
             await self._finish_safe_baseline_after_cancellation(
-                deadline=self._new_safe_deadline()
+                deadline=deadline
             )
             raise original
+        except TimeoutError as exc:
+            return PolicyActuationResult(False, False, f"healthy actuation deadline exhausted: {exc}")
 
     @staticmethod
     def _reserve_target(reserve_soc_percent: Decimal, capability: object) -> tuple[Decimal | None, str | None]:
