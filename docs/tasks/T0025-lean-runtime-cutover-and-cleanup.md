@@ -95,14 +95,14 @@ soon as the health state is published.
 ## Live verification — 2026-08-23
 
 - Home Assistant OS 18.2 and Core 2026.8.3.
-- Full focused suite: 175 tests passed.
+- Current house-battery component suite: 147 tests passed.
 - Ansible recap: `ok=139`, `changed=5`, `failed=0`, `unreachable=0`.
 - Post-deploy `ha core check` completed successfully.
 - Dynamic control is enabled and the coordinator is healthy in
   `RESERVE_DISCHARGE` with no last error.
-- Solis readback proved Self-Use, battery reserve off, and all 12 slot directions
-  off. Native SolisCloud commissioning remains EMS disabled and Grid Peak
-  Shaving enabled at 100 W.
+- Initial fail-safe readback proved Self-Use, battery reserve off, and all 12
+  slot directions off before activation. Native SolisCloud commissioning
+  remains EMS disabled and Grid Peak Shaving enabled at 100 W.
 - Both fused Octopus sensors loaded with 96 current/next-day intervals.
 - The commissioned Solis telemetry cadence is five minutes. SolisCloud has also
   returned successful polls with a device timestamp about 15 minutes old. The

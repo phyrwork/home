@@ -37,8 +37,8 @@ integration is replaced, the operator repeats this procedure and updates IaC.
 - EMS is disabled for the plant so SolisCloud does not dispatch or overwrite
   inverter controls.
 - Maximum inverter output is set to the installed entity's maximum value.
-- Native charge and discharge slots are commissioned through SolisCloud; live
-  Slot 2 is 16:54–22:30, 100 A, target 19%.
+- Native charge and discharge slots were disabled before deployment. The
+  runtime now owns them; SolisCloud was used for authoritative live readback.
 
 ## Keep
 

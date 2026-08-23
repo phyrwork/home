@@ -1,6 +1,6 @@
 # T0001 — Solis battery arbitrage control
 
-Status: Live verified
+Status: In progress — reserve discharge live verified
 
 ## Objective
 
@@ -110,9 +110,10 @@ are not runtime writes:
 - Maximum discharge current: inverter-supported maximum or unlimited.
 - Maximum output power: installed maximum (100%, one-time commissioned).
 - Maximum feed-in power: unlimited within the DNO-approved export limit (one-time commissioned).
-- Slot 2 forced discharge is commissioned live for 16:54–22:30, 100 A, target
-  19%. The active schedule uses the inverter's authoritative UTC datetime;
-  HA Europe/London introduced a one-hour offset.
+- All charge and discharge slots were initially disabled. The runtime owns and
+  changes them dynamically; live verification used Slot 2 at 16:54–22:30,
+  100 A and a 19% target. Schedule encoding uses the inverter's authoritative
+  UTC datetime because HA Europe/London introduced a one-hour offset.
 
 Maximum grid power means the maximum power that may be drawn from the grid.
 Maximum feed-in power means the maximum power that may be exported.
@@ -146,9 +147,11 @@ Feed-In Priority with the separate PV inverter and the commissioned Peak
 Shaving/forced-export combination are live verified.
 
 Live verification of forced export showed Solis battery power −4917 W and
-Octopus current demand −4104 W. Disabling Grid Peak Shaving left only
-load-following (about −299 W, with no export); restoring the 100 W setting
-restored forced export. EMS remains disabled and inverter output power is 100%.
+Octopus current demand −4104 W. Disabling Grid Peak Shaving left the same
+load-following behaviour (about −299 W, with no export), proving it was not the
+blocker. After restoring Peak Shaving to 100 W, raising the native feed-in
+limits from 0 W / 0 A to 9900 W / 52 A enabled forced export. EMS remains
+disabled and inverter output power is 100%.
 
 ### Fail-safe operation
 

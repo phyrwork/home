@@ -81,7 +81,6 @@ solis:
         current_entity_id: number.garage_inverter_control_slot2_discharge_current
         target_soc_entity_id: number.garage_inverter_control_slot2_discharge_soc
         owner: reserve_export
-        # Live commissioning: active 16:54-22:30, 100 A, target 19%.
     - physical_slot: 3
       charge:
         enable_entity_id: switch.garage_inverter_control_slot3_charge
