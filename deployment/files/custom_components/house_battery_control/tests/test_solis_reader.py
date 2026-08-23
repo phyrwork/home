@@ -42,20 +42,17 @@ def fixture():
 
     persistent = parsed.persistent
     states[persistent.storage_mode_entity_id] = {"state": "Feed-In Priority", "attributes": {"options": ["Self-Use", "Feed-In Priority", "Off-Grid"]}}
-    for entity_id in (persistent.allow_grid_charging_entity_id, persistent.inverter_on_off_entity_id):
-        states[entity_id] = state("on")
+    states[persistent.allow_grid_charging_entity_id] = state("on")
     states[persistent.inverter_time_entity_id] = state(NOW.isoformat())
 
     protection = parsed.protection
-    for entity_id in (protection.battery_over_discharge_soc_entity_id, protection.battery_force_charge_soc_entity_id, protection.battery_recovery_soc_entity_id, protection.battery_max_charge_soc_entity_id, protection.battery_reserve_soc_entity_id):
+    for entity_id in (protection.battery_reserve_soc_entity_id,):
         states[entity_id] = capability("10", "%")
     states[protection.battery_reserve_entity_id] = state("off")
 
     capability_config = parsed.capability
     states[capability_config.battery_max_charge_current_entity_id] = capability("100", "A", maximum="100")
     states[capability_config.battery_max_discharge_current_entity_id] = capability("100", "A", maximum="100")
-    states[capability_config.max_output_power_entity_id] = capability("5000", "W", maximum="5000")
-    states[capability_config.max_export_power_entity_id] = capability("0", "W", maximum="6000")
     for slot in parsed.slots:
         for direction in (slot.charge, slot.discharge):
             states[direction.enable_entity_id] = state("off")

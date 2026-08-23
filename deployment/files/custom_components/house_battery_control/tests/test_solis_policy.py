@@ -74,21 +74,15 @@ def fixture():
         solis.persistent.storage_mode_entity_id: _state("Self-Use", attributes={"options": ["Self-Use", "Feed-In Priority", "Off-Grid"]}),
         solis.persistent.inverter_time_entity_id: _state(NOW.isoformat()),
     }
-    for entity_id in (solis.persistent.allow_grid_charging_entity_id, solis.persistent.inverter_on_off_entity_id):
+    for entity_id in (solis.persistent.allow_grid_charging_entity_id,):
         states[entity_id] = _state("off")
     states[solis.protection.battery_reserve_entity_id] = _state("on")
     for entity_id in (
-        solis.protection.battery_over_discharge_soc_entity_id,
-        solis.protection.battery_force_charge_soc_entity_id,
-        solis.protection.battery_recovery_soc_entity_id,
-        solis.protection.battery_max_charge_soc_entity_id,
         solis.protection.battery_reserve_soc_entity_id,
     ):
         states[entity_id] = _capability("10", "%")
     for entity_id in (solis.capability.battery_max_charge_current_entity_id, solis.capability.battery_max_discharge_current_entity_id):
         states[entity_id] = _capability("100", "A", "200")
-    states[solis.capability.max_output_power_entity_id] = _capability("5000", "W", "6000")
-    states[solis.capability.max_export_power_entity_id] = _capability("5000", "W", "6000")
     for slot in solis.slots:
         for direction in (slot.charge, slot.discharge):
             states[direction.enable_entity_id] = _state("off")

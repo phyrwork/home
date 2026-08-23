@@ -58,11 +58,6 @@ class StrategyResult:
     next_cycle_state: CycleState
     reason: str
 
-    @property
-    def intent(self) -> SlotIntent | None:
-        return self.slot
-
-
 def _result(action: StrategyAction, reason: str, *, slot: SlotIntent | None = None, state: CycleState = CycleState.IDLE) -> StrategyResult:
     return StrategyResult(action, slot, state, reason)
 

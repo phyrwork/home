@@ -249,10 +249,8 @@ def _runtime_powers(snapshot: SolisStateSnapshot) -> tuple[Decimal, Decimal]:
     voltage = snapshot.telemetry.battery_voltage_v
     charge_current = snapshot.slots[0].charge.current.maximum
     discharge_current = min(snapshot.slots[0].discharge.current.maximum, snapshot.slots[1].discharge.current.maximum)
-    if snapshot.capabilities.maximum_charge_current is not None:
-        charge_current = min(charge_current, snapshot.capabilities.maximum_charge_current.maximum)
-    if snapshot.capabilities.maximum_discharge_current is not None:
-        discharge_current = min(discharge_current, snapshot.capabilities.maximum_discharge_current.maximum)
+    charge_current = min(charge_current, snapshot.capabilities.maximum_charge_current.maximum)
+    discharge_current = min(discharge_current, snapshot.capabilities.maximum_discharge_current.maximum)
     charge = voltage * charge_current / Decimal(1000)
     discharge = voltage * discharge_current / Decimal(1000)
     if not Decimal("0.5") <= charge <= Decimal("10") or not Decimal("0.5") <= discharge <= Decimal("10"):

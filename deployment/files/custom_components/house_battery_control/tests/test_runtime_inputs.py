@@ -22,12 +22,11 @@ def test_runtime_power_is_derived_from_voltage_and_current_capabilities() -> Non
     assert _runtime_powers(result.snapshot) == (Decimal("5.12"), Decimal("5.12"))
 
 
-def test_runtime_power_ignores_percentage_output_capability() -> None:
+def test_runtime_power_uses_current_capabilities() -> None:
     parsed, states = fixture()
     result = read_solis_state(parsed, states, NOW)
 
     assert result.snapshot is not None
-    object.__setattr__(result.snapshot.capabilities.maximum_output_power, "unit", "%")
     assert _runtime_powers(result.snapshot) == (Decimal("5.12"), Decimal("5.12"))
 
 

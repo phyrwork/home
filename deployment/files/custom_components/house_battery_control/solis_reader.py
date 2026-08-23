@@ -80,16 +80,7 @@ class SolisStateReader:
             and len(slots) == 6
             and not any(issue.critical for issue in self._issues)
         ):
-            first = slots[0].capability
-            # The legacy aggregate remains available for compatibility.  The
-            # complete, authoritative values are also retained per slot above.
             capabilities = RuntimeCapabilities(
-                charge_slot_current=first.charge_current,
-                discharge_slot_current=first.discharge_current,
-                charge_slot_target_soc=first.charge_target_soc,
-                discharge_slot_target_soc=first.discharge_target_soc,
-                maximum_output_power=self._global_capabilities["maximum_output_power"],
-                maximum_feed_in_power=self._global_capabilities["maximum_feed_in_power"],
                 maximum_charge_current=self._global_capabilities["maximum_charge_current"],
                 maximum_discharge_current=self._global_capabilities["maximum_discharge_current"],
             )
@@ -229,11 +220,7 @@ class SolisStateReader:
             )
 
         switch_values: dict[str, bool | None] = {}
-        for name, entity_id in (
-            ("allow_grid_charging", persistent.allow_grid_charging_entity_id),
-            ("inverter_on_off", persistent.inverter_on_off_entity_id),
-        ):
-            switch_values[name] = self._switch(entity_id)
+        switch_values["allow_grid_charging"] = self._switch(persistent.allow_grid_charging_entity_id)
 
         inverter_time_id = persistent.inverter_time_entity_id
         inverter_time = self._parse_datetime(self._state_value(self._state(inverter_time_id)))
@@ -241,23 +228,15 @@ class SolisStateReader:
             self._critical("inverter_datetime_invalid", inverter_time_id, "inverter datetime is invalid or naive")
 
         protection = config.protection
-        over_discharge = self._capability(protection.battery_over_discharge_soc_entity_id, "%", "over_discharge_soc")
-        force_charge = self._capability(protection.battery_force_charge_soc_entity_id, "%", "force_charge_soc")
-        recovery = self._capability(protection.battery_recovery_soc_entity_id, "%", "recovery_soc")
-        maximum_charge_soc = self._capability(protection.battery_max_charge_soc_entity_id, "%", "maximum_charge_soc")
         battery_reserve = self._switch(protection.battery_reserve_entity_id)
         reserve_soc = self._capability(protection.battery_reserve_soc_entity_id, "%", "battery_reserve_soc")
 
         if (
-            any(value is None for value in switch_values.values())
+            switch_values["allow_grid_charging"] is None
             or inverter_time is None
             or any(
                 value is None
                 for value in (
-                    over_discharge,
-                    force_charge,
-                    recovery,
-                    maximum_charge_soc,
                     battery_reserve,
                     reserve_soc,
                 )
@@ -269,12 +248,7 @@ class SolisStateReader:
             storage_mode=storage_mode,
             storage_mode_options=options,
             allow_grid_charging=switch_values["allow_grid_charging"],  # type: ignore[arg-type]
-            inverter_on_off=switch_values["inverter_on_off"],  # type: ignore[arg-type]
             inverter_time=inverter_time,
-            over_discharge_soc=over_discharge,  # type: ignore[arg-type]
-            force_charge_soc=force_charge,  # type: ignore[arg-type]
-            recovery_soc=recovery,  # type: ignore[arg-type]
-            maximum_charge_soc=maximum_charge_soc,  # type: ignore[arg-type]
             battery_reserve=battery_reserve,  # type: ignore[arg-type]
             battery_reserve_soc=reserve_soc,  # type: ignore[arg-type]
         )
@@ -286,12 +260,6 @@ class SolisStateReader:
         )
         self._global_capabilities["maximum_discharge_current"] = self._capability(
             config.capability.battery_max_discharge_current_entity_id, "A", "maximum_discharge_current"
-        )
-        self._global_capabilities["maximum_output_power"] = self._capability(
-            config.capability.max_output_power_entity_id, None, "maximum_output_power"
-        )
-        self._global_capabilities["maximum_feed_in_power"] = self._capability(
-            config.capability.max_export_power_entity_id, None, "maximum_feed_in_power"
         )
 
         result: list[SolisSlotState] = []

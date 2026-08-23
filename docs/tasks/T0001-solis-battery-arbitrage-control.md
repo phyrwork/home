@@ -43,15 +43,37 @@ MAXIMUM_GRID_IMPORT_POWER_KW = 0.1
 
 The cycle duration is the live Home Assistant entity
 `input_number.house_battery_cycle_discharge_duration_minutes`; it is currently
-commissioned to 10 minutes and remains configurable from 1 to 60.
+not yet live commissioned. Deployment will set it to 10 minutes; it remains
+configurable from 1 to 60.
+
+### One-time commissioned facts
+
+These are operator-recorded Solis settings, not runtime-managed entities, except
+that the runtime writes Self-Use when applying fail-safe:
+
+- EMS is disabled for this plant.
+- Self-Use is the fail-safe storage mode and is the one commissioned setting
+  deliberately written by the runtime during fail-safe.
+- Native Grid Peak Shaving is enabled with a 100 W maximum grid-import setting.
+- The protective force-charge safety threshold is 7% (`FORCE_CHARGE_SOC_PERCENT`).
+- The absolute minimum SOC is 10%; the already-recorded over-discharge and
+  recovery settings use that floor.
+- Maximum battery charge SOC is 100% (`FULL_SOC_PERCENT`).
+- Maximum inverter output is 100%.
+- Export is unlimited, within the DNO-approved site-inverter export limit.
+
+The runtime boundary is limited to the storage mode, grid-charging permission,
+inverter clock, Battery Reserve and reserve SOC, global charge/discharge current
+capabilities, the cycle-duration helper, all six charge/discharge slots, and
+telemetry. Runtime does not discover, write or reconcile the commissioned facts
+above, apart from writing Self-Use for fail-safe.
 
 Safety values must not be duplicated as numeric literals throughout the
 implementation. Code, tests, diagnostics and documentation should refer to these
 constant names.
 
-Charge current, discharge current, output power and feed-in power are
-capability-derived settings rather than fixed constants in this task. At
-implementation time, the actuator must:
+Charge and discharge current are runtime capability-derived settings. For those
+two current caps only, the actuator must:
 
 - Discover the inverter-supported maximum or documented unlimited sentinel.
 - Apply that value.
@@ -60,12 +82,19 @@ implementation time, the actuator must:
   capability.
 - Fail safely rather than applying an implausible discovered limit.
 
+Output power and feed-in power were commissioned manually and are recorded
+above. They are not actuator inputs and must not be discovered, applied or read
+back by the runtime.
+
 The planner may retain the verified runtime capabilities for its energy and timing
 calculations.
 
-## Persistent candidate configuration
+## Persistent candidate configuration (commissioning record)
 
-Deploy the following candidate Solis configuration:
+The following records the one-time commissioned baseline. Only storage mode,
+grid-charging permission, current capabilities and schedule slots remain in the
+runtime boundary; the native protection, output, export and Peak Shaving values
+are not runtime writes:
 
 - Storage mode: `Feed-In Priority`.
 - Grid Peak Shaving: enabled.
@@ -77,8 +106,8 @@ Deploy the following candidate Solis configuration:
 - Recovery from protective force charging: `MINIMUM_SOC_PERCENT`.
 - Maximum charge current: inverter-supported maximum or unlimited.
 - Maximum discharge current: inverter-supported maximum or unlimited.
-- Maximum output power: inverter-supported maximum or unlimited.
-- Maximum feed-in power: inverter-supported maximum or unlimited.
+- Maximum output power: installed maximum (100%, one-time commissioned).
+- Maximum feed-in power: unlimited within the DNO-approved export limit (one-time commissioned).
 - All charge and discharge slots initially disabled.
 
 Maximum grid power means the maximum power that may be drawn from the grid.
@@ -87,9 +116,9 @@ Maximum feed-in power means the maximum power that may be exported.
 The DNO-approved export limit equals the combined rated output of the site
 inverters, so no lower software feed-in limit is required.
 
-The candidate will be implemented and deployed to the real inverter to validate
-the interactions among Feed-In Priority, Peak Shaving, forced charging, forced
-discharge and timed slots.
+The runtime deployment validates interactions among the already-commissioned
+Feed-In Priority, Peak Shaving, protective thresholds, forced discharge and
+timed slots without taking ownership of the one-time native settings.
 
 ## Core operating policy
 
@@ -98,7 +127,8 @@ discharge and timed slots.
 While the controller is healthy:
 
 - Maintain Feed-In Priority.
-- Keep Grid Peak Shaving enabled.
+- Keep the commissioned native Grid Peak Shaving setting enabled at 100 W; the
+  controller does not write its non-authoritative HA switch.
 - Limit ordinary grid import to `MAXIMUM_GRID_IMPORT_POWER_KW`.
 - Control charge and discharge slots dynamically.
 - Never enable charge and discharge slots simultaneously.
@@ -116,8 +146,10 @@ On orderly Home Assistant shutdown or controller failure:
 2. Disable every Solis discharge slot.
 3. Set storage mode to `Self-Use`.
 4. Leave physical battery-protection settings intact.
-5. Put Battery Reserve and Peak Shaving into their validated fail-safe states.
-6. Verify the fallback configuration where communication remains available.
+5. Preserve the commissioned native Grid Peak Shaving setting; the controller
+   does not write or verify a non-authoritative HA switch.
+6. Verify the runtime-controlled fallback configuration where communication
+   remains available.
 
 Self-Use may absorb surplus PV, but this is an accepted degraded mode because it
 provides autonomous battery operation without relying on schedules or Home
@@ -196,8 +228,8 @@ When those conditions hold:
 
 1. Disable and verify the charge slot.
 2. Configure a discharge period lasting
-   `input_number.house_battery_cycle_discharge_duration_minutes` (commissioned
-   to 10 minutes, configurable from 1 to 60).
+   `input_number.house_battery_cycle_discharge_duration_minutes` (set to 10
+   minutes during deployment, configurable from 1 to 60).
 3. Force discharge, stopping early if the dynamic household reserve is reached.
 4. Disable and verify the discharge slot.
 5. Resume charging to `FULL_SOC_PERCENT`.
@@ -330,9 +362,10 @@ therefore disables all slots.
 Implement and deploy the persistent candidate configuration before enabling
 automated cycling.
 
-Observe and record:
+Observe and record the runtime behaviour against the commissioned baseline:
 
-- Peak Shaving holding grid import near `MAXIMUM_GRID_IMPORT_POWER_KW`.
+- Peak Shaving holding grid import near `MAXIMUM_GRID_IMPORT_POWER_KW` (the
+  native 100 W setting is already commissioned).
 - The interaction between forced charging and Peak Shaving.
 - Timed charge and discharge behaviour in Feed-In Priority.
 - The effective maximum accepted charge, discharge, output and feed-in settings.
@@ -374,7 +407,7 @@ Expose:
 
 - Implement named constants.
 - Map the real Solis telemetry and control entities.
-- Implement runtime capability discovery.
+- Implement runtime charge/discharge-current capability discovery.
 - Implement the persistent candidate configuration.
 - Implement fail-safe application before other real control.
 - Deploy the candidate.
@@ -436,7 +469,8 @@ Expose:
 - The minimum arbitrage profit margin.
 - Whether to include an explicit battery-wear cost.
 - The final timing margin before the end of each cheap interval.
-- The validated fail-safe settings for Battery Reserve and Peak Shaving.
+- The validated fail-safe setting for Battery Reserve; native Peak Shaving
+  remains the commissioned 100 W invariant.
 - Any changes required after observing the deployed candidate.
 
 ## Appendix A — Current Home Assistant control mapping
@@ -451,22 +485,20 @@ treated as immutable.
 | --- | --- | --- |
 | Storage mode | `select.garage_inverter_control_storage_mode` | Select with `Self-Use`, `Feed-In Priority` and `Off-Grid`; use Feed-In Priority while healthy and Self-Use during fail-safe |
 | Grid charging permission | `switch.garage_inverter_control_allow_grid_charging` | Enable while scheduled charging is available |
-| Export permission | `switch.garage_inverter_control_allow_export` | Enable |
-| Peak Shaving | `switch.garage_inverter_control_grid_peak_shaving` | Enable while healthy |
-| Maximum grid import | No active entity currently exposed | Mapping gap to resolve through entity registry inspection, an integration extension or direct Solis control API |
-| Inverter operation | `switch.garage_inverter_control_inverter_on_off` | Keep enabled; do not use for routine control |
+| Maximum grid import | Native Grid Peak Shaving setting | One-time commissioned at 100 W; no runtime entity mapping |
 | Inverter clock | `datetime.garage_inverter_control_inverter_time` | Verify or synchronise before programming slots |
 
 ### Battery protection and reserve
 
 | Scheme setting | Home Assistant entity | Intended use |
 | --- | --- | --- |
-| Physical discharge floor | `number.garage_inverter_control_battery_over_discharge_soc` | Set to `MINIMUM_SOC_PERCENT` |
-| Emergency force-charge threshold | `number.garage_inverter_control_battery_force_charge_soc` | Set to `FORCE_CHARGE_SOC_PERCENT` |
-| Recovery SOC | `number.garage_inverter_control_battery_recovery_soc` | Configure protective charging to recover to `MINIMUM_SOC_PERCENT` and verify firmware acceptance |
-| Maximum charge SOC | `number.garage_inverter_control_battery_max_charge_soc` | Set to `FULL_SOC_PERCENT` |
 | Battery Reserve enable | `switch.garage_inverter_control_battery_reserve` | Candidate actuator for enforcing the dynamic household reserve |
 | Battery Reserve SOC | `number.garage_inverter_control_battery_reserve_soc` | Candidate mapping for the calculated reserve, rounded upward and bounded by `MINIMUM_SOC_PERCENT` |
+
+The physical discharge floor, 7% force-charge threshold, 10% recovery setting,
+100% maximum battery charge SOC, 100% inverter output setting and unlimited
+export setting are one-time commissioned facts recorded above; the runtime does
+not map them.
 
 The candidate deployment must establish whether Battery Reserve:
 
@@ -482,9 +514,11 @@ The candidate deployment must establish whether Battery Reserve:
 | --- | --- | --- |
 | Global maximum charge current | `number.garage_inverter_control_battery_max_charge_current` | Discover and apply the inverter-supported maximum; do not assume the exposed HA maximum is safe |
 | Global maximum discharge current | `number.garage_inverter_control_battery_max_discharge_current` | Same |
-| Maximum output power | `number.garage_inverter_control_max_output_power` | Set to the supported maximum or documented unlimited sentinel |
-| Maximum feed-in power | `number.garage_inverter_control_max_export_power` | Set to the supported maximum or documented unlimited sentinel; this is the export-power limit |
 | Export calibration | `number.garage_inverter_control_export_calibration` | Preserve unless meter calibration is explicitly required |
+
+Output power (100%) and feed-in power (unlimited, within the DNO limit) are
+commissioned facts and are not runtime capability inputs. Export calibration is
+also outside the runtime boundary and remains unmanaged.
 
 The active global current entities currently advertise a much broader range than
 the individual slot-current entities. Capability discovery must not equate either
@@ -531,7 +565,6 @@ actually occurred.
 | `switch.garage_inverter_control_mppt_multi_peak_scanning` | Leave unmanaged; the Solis inverter has no connected PV |
 | `number.garage_inverter_control_mppt_multi_peak_scan_interval` | Leave unmanaged |
 | `number.garage_inverter_control_export_calibration` | Preserve unless separately commissioned |
-| `switch.garage_inverter_control_inverter_on_off` | Keep on; never use as a normal charge or discharge actuator |
 
 ### Fail-safe mapping
 
@@ -541,6 +574,5 @@ Fail-safe application should:
 2. Turn off `switch.garage_inverter_control_slot{n}_discharge` for every slot.
 3. Select `Self-Use` through
    `select.garage_inverter_control_storage_mode`.
-4. Preserve the inverter-on state and physical protection thresholds.
-5. Set Battery Reserve and Peak Shaving to their validated fail-safe states.
-6. Verify that no slot remains enabled.
+4. Set Battery Reserve to its validated fail-safe state.
+5. Verify that no slot remains enabled.

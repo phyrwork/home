@@ -32,7 +32,7 @@ def test_slot_mapping_is_strict() -> None:
 
 def test_global_entity_duplicates_are_rejected() -> None:
     source = deployed()
-    source["solis"]["capability"]["max_export_power_entity_id"] = source["solis"]["capability"]["max_output_power_entity_id"]  # type: ignore[index]
+    source["solis"]["capability"]["battery_max_discharge_current_entity_id"] = source["solis"]["capability"]["battery_max_charge_current_entity_id"]  # type: ignore[index]
     with pytest.raises(ValueError, match="globally unique"):
         config.from_mapping(source)
 

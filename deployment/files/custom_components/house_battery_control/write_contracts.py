@@ -129,9 +129,6 @@ class DatetimeWriteRequest(WriteRequest):
         _aware(self.target, "datetime target")
 
 
-EntityWriteRequest = WriteRequest
-
-
 class WriteOutcome(str, Enum):
     NO_CHANGE = "no_change"
     APPLIED_HA_READBACK = "applied_ha_readback"
@@ -166,20 +163,6 @@ class WriteResult:
     def success(self) -> bool:
         return self.outcome in {WriteOutcome.NO_CHANGE, WriteOutcome.APPLIED_HA_READBACK}
 
-    @property
-    def device_verified(self) -> bool:
-        return False
-
-    @property
-    def status(self) -> WriteOutcome:
-        return self.outcome
-
-
-EntityWriteResult = WriteResult
-EntityWriteOutcome = WriteOutcome
-WriteStatus = WriteOutcome
-
-
 @dataclass(frozen=True, slots=True)
 class TransactionResult:
     """Ordered, non-atomic results from one writer transaction."""
@@ -188,24 +171,8 @@ class TransactionResult:
     status: TransactionStatus
     complete: bool = True
 
-    @property
-    def outcomes(self) -> tuple[WriteResult, ...]:
-        return self.results
-
-    @property
-    def incomplete(self) -> bool:
-        return not self.complete
-
-
-OrderedTransactionResult = TransactionResult
-TransactionStatusResult = TransactionStatus
-
-
 __all__ = [
     "DatetimeWriteRequest",
-    "EntityWriteRequest",
-    "EntityWriteResult",
-    "EntityWriteOutcome",
     "HAWriteDomain",
     "NumberWriteRequest",
     "SelectWriteRequest",
@@ -214,10 +181,7 @@ __all__ = [
     "TextWriteRequest",
     "TransactionResult",
     "TransactionStatus",
-    "TransactionStatusResult",
-    "OrderedTransactionResult",
     "WriteOutcome",
     "WriteRequest",
     "WriteResult",
-    "WriteStatus",
 ]

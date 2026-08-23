@@ -45,15 +45,6 @@ class SolisIssue:
     def critical(self) -> bool:
         return self.severity is IssueSeverity.CRITICAL
 
-    @property
-    def related_entity_id(self) -> str | None:
-        return self.entity_id
-
-    @property
-    def explanation(self) -> str:
-        return self.message
-
-
 @dataclass(frozen=True, slots=True)
 class SolisTelemetry:
     """Normalized telemetry; battery power is kW, positive while charging."""
@@ -66,15 +57,6 @@ class SolisTelemetry:
     soc_last_updated: datetime | None = None
     power_last_updated: datetime | None = None
 
-    @property
-    def soc_percent(self) -> Decimal:
-        return self.state_of_charge_percent
-
-    @property
-    def power_kw(self) -> Decimal:
-        return self.battery_power_kw
-
-
 @dataclass(frozen=True, slots=True)
 class SolisPersistentState:
     """Observed persistent and protection controls."""
@@ -82,12 +64,7 @@ class SolisPersistentState:
     storage_mode: str
     storage_mode_options: tuple[str, ...]
     allow_grid_charging: bool
-    inverter_on_off: bool
     inverter_time: datetime
-    over_discharge_soc: ObservedCapability
-    force_charge_soc: ObservedCapability
-    recovery_soc: ObservedCapability
-    maximum_charge_soc: ObservedCapability
     battery_reserve: bool
     battery_reserve_soc: ObservedCapability
 
@@ -150,11 +127,6 @@ class SolisStateReadResult:
     persistent: SolisPersistentState | None
     slots: tuple[SolisSlotState, ...]
     issues: tuple[SolisIssue, ...]
-
-    @property
-    def is_healthy(self) -> bool:
-        return self.health is ControllerHealth.HEALTHY
-
 
 __all__ = [
     "MAXIMUM_FUTURE_CLOCK_SKEW",

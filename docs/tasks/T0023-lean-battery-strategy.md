@@ -30,8 +30,9 @@ inputs and the current cycle state, select exactly one action:
 
 ## Boundaries
 
-- Do not edit coordinator, Home Assistant setup, Solis actuator, deployment YAML,
-  or configuration schemas.
+- The strategy itself is pure, but its implemented integration includes the
+  coordinator, configuration schema, deployment YAML and Solis actuator path.
+  Do not add another runtime/control path around that integration.
 - Do not add backwards compatibility for the uncommissioned command model.
 - Keep the public result to action, optional slot intent, next cycle state, and a
   concise reason.

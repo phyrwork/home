@@ -1,6 +1,6 @@
 # T0025 — Lean runtime cutover and legacy cleanup
 
-Status: MVP deployed with dynamic control disabled; reserve-export/cycling cutover in progress
+Status: Local cleanup complete; deployment and live verification pending
 
 ## Objective
 
@@ -22,8 +22,11 @@ consumer.
 - Add `dynamic_control_enabled`, defaulting to `false`.
 - Remove runtime commissioning services, records, fingerprints, and authority
   checks.
-- Retain live entity capability validation, serialized writes, disable-all before
-  direction changes, readback, and bounded fail-safe cleanup.
+- Retain the live runtime boundary: telemetry, storage mode, grid-charging
+  permission, inverter clock, Battery Reserve/reserve SOC, global charge and
+  discharge current capabilities, and all six charge/discharge slots. Keep
+  serialized writes, disable-all before direction changes, readback, and bounded
+  fail-safe cleanup.
 - Treat native SolisCloud Grid Peak Shaving (enabled at 100 W) as one-time
   commissioning; do not map or write its non-authoritative HA switch at runtime.
 - Preserve the energy diagnostics `House Battery Energy`, `House Battery Reserve
@@ -62,7 +65,11 @@ consumer.
 - The disabled experimental entities remain in Home Assistant's registry as
   restored `unavailable` entities; they are not active runtime dependencies.
 
-## Initial live verification — 2026-08-23
+## Previous live verification — 2026-08-23
+
+The following describes the prior deployed revision. The cleanup in this task
+is local only; deployment and live verification of the resulting revision are
+still pending.
 
 - Home Assistant OS 18.2 and Core 2026.8.3.
 - Full focused suite: 175 tests passed.

@@ -49,7 +49,6 @@ class SolisPersistentControlConfig:
 
     storage_mode_entity_id: str
     allow_grid_charging_entity_id: str
-    inverter_on_off_entity_id: str
     inverter_time_entity_id: str
 
 
@@ -57,10 +56,6 @@ class SolisPersistentControlConfig:
 class SolisProtectionControlConfig:
     """Battery protection and household-reserve controls."""
 
-    battery_over_discharge_soc_entity_id: str
-    battery_force_charge_soc_entity_id: str
-    battery_recovery_soc_entity_id: str
-    battery_max_charge_soc_entity_id: str
     battery_reserve_entity_id: str
     battery_reserve_soc_entity_id: str
 
@@ -71,8 +66,6 @@ class SolisCapabilityControlConfig:
 
     battery_max_charge_current_entity_id: str
     battery_max_discharge_current_entity_id: str
-    max_output_power_entity_id: str
-    max_export_power_entity_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,7 +175,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         {
             "storage_mode_entity_id",
             "allow_grid_charging_entity_id",
-            "inverter_on_off_entity_id",
             "inverter_time_entity_id",
         },
         "solis.persistent",
@@ -198,11 +190,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
             "solis.persistent.allow_grid_charging_entity_id",
             "switch",
         ),
-        inverter_on_off_entity_id=_entity(
-            persistent_source["inverter_on_off_entity_id"],
-            "solis.persistent.inverter_on_off_entity_id",
-            "switch",
-        ),
         inverter_time_entity_id=_entity(
             persistent_source["inverter_time_entity_id"],
             "solis.persistent.inverter_time_entity_id",
@@ -214,36 +201,12 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
     _require_keys(
         protection_source,
         {
-            "battery_over_discharge_soc_entity_id",
-            "battery_force_charge_soc_entity_id",
-            "battery_recovery_soc_entity_id",
-            "battery_max_charge_soc_entity_id",
             "battery_reserve_entity_id",
             "battery_reserve_soc_entity_id",
         },
         "solis.protection",
     )
     protection = SolisProtectionControlConfig(
-        battery_over_discharge_soc_entity_id=_entity(
-            protection_source["battery_over_discharge_soc_entity_id"],
-            "solis.protection.battery_over_discharge_soc_entity_id",
-            "number",
-        ),
-        battery_force_charge_soc_entity_id=_entity(
-            protection_source["battery_force_charge_soc_entity_id"],
-            "solis.protection.battery_force_charge_soc_entity_id",
-            "number",
-        ),
-        battery_recovery_soc_entity_id=_entity(
-            protection_source["battery_recovery_soc_entity_id"],
-            "solis.protection.battery_recovery_soc_entity_id",
-            "number",
-        ),
-        battery_max_charge_soc_entity_id=_entity(
-            protection_source["battery_max_charge_soc_entity_id"],
-            "solis.protection.battery_max_charge_soc_entity_id",
-            "number",
-        ),
         battery_reserve_entity_id=_entity(
             protection_source["battery_reserve_entity_id"],
             "solis.protection.battery_reserve_entity_id",
@@ -262,8 +225,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         {
             "battery_max_charge_current_entity_id",
             "battery_max_discharge_current_entity_id",
-            "max_output_power_entity_id",
-            "max_export_power_entity_id",
         },
         "solis.capability",
     )
@@ -276,16 +237,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         battery_max_discharge_current_entity_id=_entity(
             capability_source["battery_max_discharge_current_entity_id"],
             "solis.capability.battery_max_discharge_current_entity_id",
-            "number",
-        ),
-        max_output_power_entity_id=_entity(
-            capability_source["max_output_power_entity_id"],
-            "solis.capability.max_output_power_entity_id",
-            "number",
-        ),
-        max_export_power_entity_id=_entity(
-            capability_source["max_export_power_entity_id"],
-            "solis.capability.max_export_power_entity_id",
             "number",
         ),
     )

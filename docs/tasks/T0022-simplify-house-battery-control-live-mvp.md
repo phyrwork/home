@@ -42,7 +42,8 @@ integration is replaced, the operator repeats this procedure and updates IaC.
 
 - Real Solis entity configuration, reader, and normalized state.
 - Octopus cheap/dispatch-window input handling.
-- Reserve planning and pre-discharge calculations needed by the agreed strategy.
+- Reserve planning, reserve-export and full-SOC cycling calculations needed by
+  the agreed strategy.
 - Transactional, read-after-write Solis actuation and bounded fail-safe cleanup.
 - An independent heartbeat watchdog that restores the fail-safe configuration.
 - Safety constants and limits discovered from the installed entities.
@@ -63,6 +64,7 @@ integration is replaced, the operator repeats this procedure and updates IaC.
 Use only the state needed to suppress unnecessary toggling:
 
 - `IDLE`
+- `RESERVE_DISCHARGING`
 - `DISCHARGING`
 - `CHARGING`
 - `STOPPING`
@@ -72,12 +74,15 @@ Select one action per evaluation:
 - `FAIL_SAFE`
 - `STOP`
 - `CHEAP_CHARGE`
-- `PRE_DISCHARGE`
+- `RESERVE_DISCHARGE`
 - `CYCLE_DISCHARGE`
 - `IDLE`
 
 At most one charging or discharging direction may be active. A direction change
-must first disable and confirm all timed slots.
+must first disable and confirm all timed slots. Outside a trusted cheap window,
+`RESERVE_DISCHARGE` exports only down to the dynamic household reserve. During a
+profitable cheap window, `CYCLE_DISCHARGE` creates bounded full-SOC headroom and
+then returns to charging when enough time remains to recharge.
 
 ### Coordinator
 
