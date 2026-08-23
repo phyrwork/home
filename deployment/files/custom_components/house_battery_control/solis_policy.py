@@ -11,7 +11,6 @@ from .contracts import ControllerHealth, SlotIntent, StorageMode
 from .domain_constants import MINIMUM_SOC_PERCENT
 from .ha_writer import HomeAssistantWriter
 from .solis_actuator import (
-    DisableAllResult,
     ReentrantAsyncLock,
     SlotActuationResult,
     SlotActuationStatus,
@@ -203,11 +202,6 @@ class SolisPolicyActuator:
         if (target - minimum) % step != 0:
             return None, "reserve target is not aligned to the capability step"
         return target, None
-
-    async def async_disable_all_slots(self) -> DisableAllResult:
-        if not self._guard_on():
-            return DisableAllResult((), False)
-        return await self.slots.async_disable_all()
 
     def _guard_on(self) -> bool:
         try:

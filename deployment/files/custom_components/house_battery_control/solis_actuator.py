@@ -90,11 +90,6 @@ class DisableAllResult:
     results: tuple[WriteResult, ...]
     safe: bool
 
-    @property
-    def proven_off(self) -> bool:
-        return self.safe
-
-
 class SlotActuationStatus(str, Enum):
     """Outcome of one slot operation."""
 
@@ -116,11 +111,6 @@ class SlotActuationResult:
     @property
     def safe(self) -> bool:
         return self.status is SlotActuationStatus.FAILED_SAFE
-
-    @property
-    def ordered_results(self) -> tuple[WriteResult, ...]:
-        return self.results
-
 
 @dataclass(frozen=True, slots=True)
 class CancellationDiagnostic:

@@ -140,8 +140,6 @@ class HomeAssistantWriter:
         async with self.transaction() as transaction:
             return await transaction.async_write(request)
 
-    write = async_write
-
     def capture_precondition(self, entity_id: str) -> StatePrecondition:
         """Capture an immutable current HA revision for a later write."""
         state = self._get(entity_id)
@@ -152,9 +150,6 @@ class HomeAssistantWriter:
         if raw is None or raw in _UNKNOWN or updated is None:
             raise ValueError(f"entity state is unavailable or invalid: {entity_id}")
         return StatePrecondition(entity_id, raw, updated, _context_id(state))
-
-    current_precondition = capture_precondition
-    read_precondition = capture_precondition
 
     def _get(self, entity_id: str) -> object:
         getter = getattr(self.hass, "get_state", None)

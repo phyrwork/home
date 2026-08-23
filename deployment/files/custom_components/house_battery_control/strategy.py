@@ -254,6 +254,4 @@ def select_strategy(inputs: StrategyInputs | object) -> StrategyResult:
         return _result(StrategyAction.FAIL_SAFE, "invalid strategy input")
 
 
-plan_strategy = select_strategy
-
-__all__ = ["CycleState", "StrategyAction", "StrategyInputs", "StrategyResult", "plan_strategy", "select_strategy"]
+__all__ = ["CycleState", "StrategyAction", "StrategyInputs", "StrategyResult", "select_strategy"]
