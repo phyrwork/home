@@ -1,6 +1,6 @@
 # T0025 — Lean runtime cutover and legacy cleanup
 
-Status: Council approved
+Status: MVP deployed with dynamic control disabled; legacy cleanup pending
 
 ## Objective
 
@@ -45,3 +45,36 @@ consumer.
 - No executable import references deleted legacy modules.
 - Ansible deployment succeeds.
 - Live fail-safe verification succeeds before any bounded charge/discharge test.
+
+## Commissioned integration boundary
+
+- `Solis Inverter` v4.0.1 is telemetry-only. Its experimental control surface
+  was enabled and evaluated live, then disabled: it added 68 control entities,
+  delayed platform setup beyond 60 seconds, initially blocked telemetry, and
+  exposed optimistic grouped schedule writes without authoritative immediate
+  readback or explicit slot-enable entities.
+- `Solis Cloud Control` v2.21.0 remains the sole control integration for the
+  MVP. Keeping experimental controls disabled prevents both integrations from
+  polling and writing the same SolisCloud control surface concurrently.
+- The disabled experimental entities remain in Home Assistant's registry as
+  restored `unavailable` entities; they are not active runtime dependencies.
+
+## Initial live verification — 2026-08-23
+
+- Home Assistant OS 18.2 and Core 2026.8.3.
+- Full focused suite: 175 tests passed.
+- Ansible recap: `ok=139`, `changed=5`, `failed=0`, `unreachable=0`.
+- Post-deploy `ha core check` completed successfully.
+- Dynamic control remained disabled and the local disable guard remained on.
+- The coordinator converged to `healthy` / `STOP` with no last error.
+- Solis readback proved Self-Use, battery reserve off, and all 12 slot directions
+  off. Native SolisCloud commissioning remains EMS disabled and Grid Peak
+  Shaving enabled at 100 W.
+- Both fused Octopus sensors loaded with 96 current/next-day intervals.
+- The commissioned Solis telemetry cadence is five minutes. The controller
+  remained healthy with a device timestamp 813 seconds old, then telemetry
+  refreshed normally before the 15-minute boundary. This proves the new limit
+  avoids the former boundary oscillation while retaining fail-safe after three
+  missed poll intervals.
+- A second controlled restart produced no house-battery listener-removal error,
+  Solis experimental-platform timeout, or Solis Cloud Control retry error.
