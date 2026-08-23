@@ -108,10 +108,11 @@ still pending.
   off. Native SolisCloud commissioning remains EMS disabled and Grid Peak
   Shaving enabled at 100 W.
 - Both fused Octopus sensors loaded with 96 current/next-day intervals.
-- The commissioned Solis telemetry cadence is five minutes. The controller
-  remained healthy with a device timestamp 813 seconds old, then telemetry
-  refreshed normally before the 15-minute boundary. This proves the new limit
-  avoids the former boundary oscillation while retaining fail-safe after three
-  missed poll intervals.
+- The commissioned Solis telemetry cadence is five minutes. SolisCloud has also
+  returned successful polls with a device timestamp about 15 minutes old. The
+  runtime `MAXIMUM_TELEMETRY_AGE` is therefore 30 minutes: it tolerates the
+  observed delivery lag and scheduling jitter while retaining fail-safe for a
+  sustained device-timestamp outage. Device timestamp validity remains
+  authoritative and fail-closed.
 - A second controlled restart produced no house-battery listener-removal error,
   Solis experimental-platform timeout, or Solis Cloud Control retry error.

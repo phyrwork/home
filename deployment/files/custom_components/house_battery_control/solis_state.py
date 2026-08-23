@@ -18,10 +18,11 @@ from .contracts import (
 from .solis_config import SolisSlotOwner
 
 
-# Solis Inverter polls at five-minute intervals.  Allow three intervals so
-# ordinary scheduling jitter or one missed cloud response cannot oscillate the
-# controller into fail-safe; older device data still fails closed.
-MAXIMUM_TELEMETRY_AGE = timedelta(minutes=15)
+# Solis Inverter polls at five-minute intervals, but SolisCloud can return a
+# successful response whose device timestamp is already about 15 minutes old.
+# Allow six intervals for that observed delivery lag and additional scheduling
+# jitter; older device data still fails closed.
+MAXIMUM_TELEMETRY_AGE = timedelta(minutes=30)
 MAXIMUM_FUTURE_CLOCK_SKEW = timedelta(minutes=1)
 
 

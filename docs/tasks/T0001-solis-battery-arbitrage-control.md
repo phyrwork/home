@@ -401,6 +401,12 @@ Expose:
 - Last error and fail-safe reason.
 - Startup and shutdown reconciliation status.
 
+The runtime freshness budget is the named `MAXIMUM_TELEMETRY_AGE` constant. It
+is currently 30 minutes: SolisCloud has returned successful polls with device
+timestamps about 15 minutes old, so the budget allows delivery lag and
+scheduling jitter without accepting an indefinitely stale device observation.
+Device timestamp validity remains fail-closed.
+
 ## Implementation phases
 
 ### Phase 1 — Candidate configuration

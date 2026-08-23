@@ -23,15 +23,16 @@ Home Assistant access.
 Define hard, named limits:
 
 ```python
-MAXIMUM_TELEMETRY_AGE = timedelta(minutes=15)
+MAXIMUM_TELEMETRY_AGE = timedelta(minutes=30)
 MAXIMUM_FUTURE_CLOCK_SKEW = timedelta(minutes=1)
 ```
 
 `MAXIMUM_TELEMETRY_AGE` is a conservative safety limit based on the commissioned
-Solis Inverter cadence. The integration polls every five minutes; live history
-showed that a five-minute limit oscillated into fail-safe immediately before a
-normal successful poll. Three polling intervals tolerate scheduling jitter and
-one missed cloud response while still failing closed on a sustained outage.
+Solis Inverter cadence and observed SolisCloud delivery lag. The integration
+polls every five minutes, but a successful fetch has returned a device timestamp
+about 15 minutes old. Six polling intervals tolerate that lag and additional
+scheduling jitter while still failing closed on a sustained outage. Device time
+remains authoritative; this is not a Home Assistant timestamp fallback.
 
 ## Module boundary
 

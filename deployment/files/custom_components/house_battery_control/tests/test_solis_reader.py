@@ -14,6 +14,10 @@ from custom_components.house_battery_control.solis_state import MAXIMUM_TELEMETR
 NOW = datetime(2026, 8, 22, 12, tzinfo=timezone.utc)
 
 
+def test_telemetry_age_budget_allows_observed_cloud_delivery_lag() -> None:
+    assert MAXIMUM_TELEMETRY_AGE == timedelta(minutes=30)
+
+
 def deployed() -> dict[str, object]:
     value = yaml.safe_load((Path(__file__).parents[3] / "house_battery_control.yaml").read_text())
     assert isinstance(value, dict)
