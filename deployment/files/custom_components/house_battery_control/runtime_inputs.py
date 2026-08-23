@@ -35,6 +35,18 @@ from .solis_state import SolisStateReadResult, SolisStateSnapshot
 from .strategy import CycleState, StrategyInputs
 
 
+class RuntimeUnavailable(ValueError):
+    """A recoverable external input is temporarily unavailable."""
+
+    def __init__(self, message: str, *, solis: SolisStateReadResult | None = None) -> None:
+        super().__init__(message)
+        self.solis = solis
+
+
+class RuntimeInvariantError(ValueError):
+    """An input violates a structural or safety invariant."""
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeInputs:
     strategy: StrategyInputs
@@ -59,7 +71,10 @@ async def async_read_runtime_inputs(
     guard_off = guard.state == "off"
     solis = read_solis_state(config.solis, hass.states, now)
     if solis.health is not ControllerHealth.HEALTHY or solis.snapshot is None:
-        raise ValueError("Solis state is not healthy: " + ", ".join(issue.code for issue in solis.issues))
+        message = "Solis state is not healthy: " + ", ".join(issue.code for issue in solis.issues)
+        if _solis_failure_is_transient(hass, solis):
+            raise RuntimeUnavailable(message, solis=solis)
+        raise RuntimeInvariantError(message)
     snapshot = solis.snapshot
 
     import_state = _state(hass, config.tariff.import_rates_entity_id)
@@ -367,4 +382,34 @@ def _slot_start(now: datetime, window_start: datetime) -> datetime:
     return start
 
 
-__all__ = ["RuntimeInputs", "async_read_runtime_inputs"]
+def _solis_failure_is_transient(
+    hass: HomeAssistant,
+    result: SolisStateReadResult,
+) -> bool:
+    """Return whether every Solis issue is explained by external availability."""
+
+    transient_codes = {
+        "device_timestamp_stale",
+        "state_access_failed",
+        "state_access_unavailable",
+    }
+    if not result.issues:
+        return False
+    for issue in result.issues:
+        if issue.code in transient_codes:
+            continue
+        if issue.entity_id is None:
+            return False
+        state = hass.states.get(issue.entity_id)
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            continue
+        return False
+    return True
+
+
+__all__ = [
+    "RuntimeInputs",
+    "RuntimeInvariantError",
+    "RuntimeUnavailable",
+    "async_read_runtime_inputs",
+]

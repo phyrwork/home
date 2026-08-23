@@ -1,14 +1,11 @@
 - id: house_battery_independent_watchdog
   alias: "House battery independent watchdog"
   description: >-
-    Request the independent fail-safe whenever the controller is unavailable,
-    stale or guarded. Healthy operation is a no-op.
+    Latch the independent fail-safe for a hard controller failure or a dead
+    heartbeat. Fresh degraded operation remains recoverable.
   mode: single
   max_exceeded: silent
   trigger:
-    - platform: homeassistant
-      event: start
-      id: home_assistant_start
     - platform: time_pattern
       minutes: "/1"
       id: every_minute
@@ -16,39 +13,37 @@
       entity_id: sensor.house_battery_control_health
       id: controller_health_changed
     - platform: state
+      entity_id: sensor.house_battery_control_health
+      to: unavailable
+      for: "00:10:00"
+      id: controller_unavailable
+    - platform: state
+      entity_id: sensor.house_battery_control_health
+      to: unknown
+      for: "00:10:00"
+      id: controller_unknown
+    - platform: state
       entity_id: input_boolean.house_battery_control_disable
       id: control_disable_changed
   condition:
     - condition: template
       value_template: >-
         {% set heartbeat = as_timestamp(states('sensor.house_battery_control_heartbeat'), default=none) %}
-        {{ trigger.id == 'home_assistant_start'
-           or (trigger.id == 'control_disable_changed'
+        {% set health = states('sensor.house_battery_control_health') %}
+        {% set health_state = states.sensor.house_battery_control_health %}
+        {% set health_changed = as_timestamp(health_state.last_changed, default=none) %}
+        {{ (trigger.id == 'control_disable_changed'
                and states('input_boolean.house_battery_control_disable') != 'off')
-           or (trigger.id != 'control_disable_changed'
-               and (states('sensor.house_battery_control_health') != 'healthy'
-                    or heartbeat is none
-                    or (as_timestamp(now()) - heartbeat) > 180
+           or health == 'fail_safe'
+           or trigger.id in ['controller_unavailable', 'controller_unknown']
+           or (heartbeat is none
+               and health in ['unavailable', 'unknown']
+               and health_changed is not none
+               and (as_timestamp(now()) - health_changed) > 600)
+           or (heartbeat is not none
+               and ((as_timestamp(now()) - heartbeat) > 180
                     or (heartbeat - as_timestamp(now())) > 60)) }}
   action:
     - service: script.turn_on
       target:
         entity_id: script.house_battery_fail_safe
-
-- id: house_battery_independent_watchdog_shutdown
-  alias: "House battery independent watchdog shutdown"
-  description: "Assert the guard and request the independent fail-safe on shutdown."
-  mode: single
-  max_exceeded: silent
-  trigger:
-    - platform: homeassistant
-      event: shutdown
-  action:
-    - service: input_boolean.turn_on
-      target:
-        entity_id: input_boolean.house_battery_control_disable
-      continue_on_error: true
-    - service: script.turn_on
-      target:
-        entity_id: script.house_battery_fail_safe
-      continue_on_error: true

@@ -11,10 +11,15 @@ consumer.
 ## Runtime path
 
 1. Read the configured Solis, Octopus, forecast, and guard inputs.
-2. Fail safe when dynamic control is disabled or any critical input is invalid.
-3. Calculate reserve and select the T0023 strategy action.
-4. Apply the action through the existing verified Solis policy/actuator boundary.
-5. Publish heartbeat, health, current action, reserve, and last error.
+2. Apply the autonomous safe baseline and report `DEGRADED` for transient
+   Solis telemetry/control availability loss; recover automatically when those
+   inputs validate again.
+3. Report latched `FAIL_SAFE` for the manual guard, a hard safety/invariant
+   failure, an unavailable critical planning input, or an unproven safe
+   baseline.
+4. Calculate reserve and select the T0023 strategy action.
+5. Apply the action through the existing verified Solis policy/actuator boundary.
+6. Publish heartbeat, health, current action, reserve, and last error.
 
 ## Scope
 
@@ -53,14 +58,12 @@ consumer.
 - The explicit slot list is intentionally duplicated for safety independence;
   its coverage and reconciliation are tested.
 
-The independent watchdog deliberately uses minute polling plus health and guard
-state changes, rather than triggering on every heartbeat state update. Home
-Assistant can publish the heartbeat entity before the coordinator publishes its
-corresponding health state; a heartbeat-triggered run can therefore observe the
-previous `fail_safe` health and reassert the guard during an otherwise healthy
-activation. Minute polling still detects a stale or future heartbeat within the
-existing bounded watchdog interval, while the health trigger handles faults as
-soon as the health state is published.
+The independent watchdog deliberately ignores a fresh `DEGRADED` heartbeat so
+temporary Solis/API loss can recover passively. It asserts the existing guard
+for `FAIL_SAFE`, a stale/future heartbeat, or a health entity that remains
+unavailable/unknown beyond the startup grace period. Ordinary startup and
+shutdown do not latch the guard; the coordinator applies the same autonomous
+safe baseline during shutdown without changing the manual latch.
 
 ## Boundaries
 
@@ -112,13 +115,14 @@ soon as the health state is published.
   authoritative and fail-closed.
 - A second controlled restart produced no house-battery listener-removal error,
   Solis experimental-platform timeout, or Solis Cloud Control retry error.
-- Slot 2 forced discharge is live from 16:54–22:30 at 100 A with a 19% target;
-  runtime schedule boundaries are aware UTC instants, while Solis `HH:MM`
-  fields are converted to and interpreted in the configured inverter/site local
-  timezone. The coordinator currently supplies HA's configured
-  `Europe/London` timezone for that boundary.
-- Solis battery power −4917 W and Octopus current demand −4104 W confirmed
-  forced export. Grid Peak Shaving at 100 W is compatible; the actual blocker
-  was native Grid Feed in Power Limit at 0 W / 0 A, corrected to 9900 W / 52 A.
+- Native manual commissioning proved 100 A forced discharge: correcting the
+  test slot from an inactive UTC-looking `19:01–19:30` to inverter-local
+  `20:00–21:30` changed Octopus current demand from about +64 W import to
+  −4116 W export. Runtime schedule boundaries are aware UTC instants, while
+  Solis `HH:MM` fields are converted to and interpreted in the configured
+  inverter/site local timezone. The coordinator currently supplies HA's
+  configured `Europe/London` timezone for that boundary.
+- Grid Peak Shaving at 100 W is compatible with forced export. Cheap charging
+  still requires a bounded live re-test after the timezone fix is deployed.
 - The HA export/peak-shaving switches are non-authoritative/unavailable, so
   these persistent settings remain one-time SolisCloud commissioning.

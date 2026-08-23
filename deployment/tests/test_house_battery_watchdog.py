@@ -133,31 +133,36 @@ def test_fail_safe_skips_safe_controls_and_isolates_slot_failures() -> None:
     assert text.count("continue_on_error: true") >= 5
 
 
-def test_automation_has_startup_stale_health_guard_and_shutdown_triggers() -> None:
+def test_automation_latches_only_hard_or_stale_failures() -> None:
     automations = _load(AUTOMATION_PATH)
-    assert len(automations) == 2
-    normal, shutdown = automations
+    assert len(automations) == 1
+    normal = automations[0]
     trigger_ids = {trigger["id"] for trigger in normal["trigger"]}
     assert trigger_ids == {
-        "home_assistant_start",
         "every_minute",
         "controller_health_changed",
+        "controller_unavailable",
+        "controller_unknown",
         "control_disable_changed",
     }
     condition = normal["condition"][0]["value_template"]
     assert "heartbeat" in condition
-    assert "healthy" in condition
-    # The periodic trigger must retry a persistently unhealthy controller,
-    # not only the instant its health sensor changes state.
-    assert "states('sensor.house_battery_control_health') != 'healthy'" in condition
+    assert "health == 'fail_safe'" in condition
+    assert "controller_unavailable" in condition
+    assert "controller_unknown" in condition
     assert "180" in condition
-    # A healthy disabled controller emits a heartbeat every minute; that
-    # must not satisfy the failure branches on the periodic trigger.
+    assert "health_state.last_changed" in condition
+    assert "heartbeat is none" in condition
+    assert "> 600" in condition
+    assert "home_assistant_start" not in condition
+    assert "health != 'healthy'" not in condition
+    assert "health == 'degraded'" not in condition
     assert "trigger.id == 'control_disable_changed'" in condition
-    # A deliberate transition to guard-off must give the coordinator one
-    # evaluation opportunity; the next health/heartbeat/minute trigger still
-    # invokes fail-safe if it does not become healthy.
-    assert "trigger.id != 'control_disable_changed'" in condition
-    assert shutdown["trigger"][0]["event"] == "shutdown"
-    assert shutdown["action"][0]["service"] == "input_boolean.turn_on"
-    assert shutdown["action"][1]["service"] == "script.turn_on"
+    unavailable = next(
+        trigger for trigger in normal["trigger"] if trigger["id"] == "controller_unavailable"
+    )
+    unknown = next(
+        trigger for trigger in normal["trigger"] if trigger["id"] == "controller_unknown"
+    )
+    assert unavailable["for"] == "00:10:00"
+    assert unknown["for"] == "00:10:00"

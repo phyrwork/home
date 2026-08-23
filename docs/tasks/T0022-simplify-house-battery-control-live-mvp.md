@@ -96,7 +96,10 @@ Implement one explicit path:
 4. apply and verify the required Solis writes; and
 5. publish a small heartbeat, current action, and last-error surface.
 
-Missing, stale, or invalid critical inputs must select `FAIL_SAFE`.
+Transient missing or stale Solis telemetry/control inputs select recoverable
+`DEGRADED` with the autonomous safe baseline. Invalid safety invariants, other
+critical planning inputs, the manual guard, or failure to prove that baseline
+select latched `FAIL_SAFE`.
 
 ### Cleanup
 
@@ -114,13 +117,16 @@ Delete, rather than migrate or preserve:
 ## Safety invariants
 
 1. Dynamic control defaults to disabled.
-2. An unhealthy, stale, or incomplete input set selects the fail-safe action.
+2. A transient unavailable/stale Solis telemetry/control input selects
+   recoverable `DEGRADED` and the safe baseline; a hard invariant, unavailable
+   critical planning input, or unproven baseline selects `FAIL_SAFE`.
 3. No action enables charging and discharging at the same time.
 4. Direction changes begin from confirmed all-slots-off state.
 5. Every SOC target is clamped to the named absolute safety floor.
 6. A failed or cancelled write performs bounded cleanup to Self-Use with all
    timed slots off.
-7. Shutdown and watchdog recovery apply the same fail-safe configuration.
+7. Shutdown applies the safe baseline without latching the guard; the watchdog
+   latches only hard failure or a controller that remains dead beyond grace.
 8. Dynamic control is enabled only after explicit live verification and operator
    approval.
 

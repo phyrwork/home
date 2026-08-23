@@ -10,7 +10,12 @@ from custom_components.house_battery_control.octopus_windows import (
     RateSourceObservation,
     evaluate_trusted_import_rates,
 )
-from custom_components.house_battery_control.runtime_inputs import _cycle_duration, _runtime_powers, _slot_start
+from custom_components.house_battery_control.runtime_inputs import (
+    _cycle_duration,
+    _runtime_powers,
+    _slot_start,
+    _solis_failure_is_transient,
+)
 from custom_components.house_battery_control.solis_reader import read_solis_state
 from custom_components.house_battery_control.tests.test_solis_reader import NOW, fixture
 
@@ -57,6 +62,55 @@ def test_future_window_slot_start_is_not_rounded_earlier() -> None:
     future_start = datetime(2026, 8, 23, 19, 39, 9, 445999, tzinfo=timezone.utc)
 
     assert _slot_start(now, future_start) == datetime(2026, 8, 23, 19, 40, tzinfo=timezone.utc)
+
+
+def test_unavailable_solis_entity_is_a_transient_runtime_failure() -> None:
+    parsed, states = fixture()
+    entity_id = parsed.telemetry.state_of_charge_entity_id
+    states[entity_id]["state"] = "unavailable"
+    result = read_solis_state(parsed, states, NOW)
+    hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda requested: SimpleNamespace(state=states[requested]["state"])
+            if requested in states
+            else None
+        )
+    )
+
+    assert _solis_failure_is_transient(hass, result)
+
+
+def test_invalid_available_solis_value_is_a_runtime_invariant() -> None:
+    parsed, states = fixture()
+    entity_id = parsed.telemetry.state_of_charge_entity_id
+    states[entity_id]["state"] = "101"
+    result = read_solis_state(parsed, states, NOW)
+    hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda requested: SimpleNamespace(state=states[requested]["state"])
+            if requested in states
+            else None
+        )
+    )
+
+    assert not _solis_failure_is_transient(hass, result)
+
+
+def test_future_solis_device_timestamp_is_a_runtime_invariant() -> None:
+    parsed, states = fixture()
+    entity_id = parsed.telemetry.device_timestamp_entity_id
+    states[entity_id]["state"] = (NOW + timedelta(minutes=5)).isoformat()
+    result = read_solis_state(parsed, states, NOW)
+    hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda requested: SimpleNamespace(state=states[requested]["state"])
+            if requested in states
+            else None
+        )
+    )
+
+    assert any(issue.code == "device_timestamp_future" for issue in result.issues)
+    assert not _solis_failure_is_transient(hass, result)
 
 
 def test_stale_bonus_dispatch_is_not_usable_for_reserve() -> None:

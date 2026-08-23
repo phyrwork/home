@@ -19,7 +19,7 @@ from .contracts import ControllerHealth, StorageMode
 from .domain_constants import FULL_SOC_PERCENT
 from .ha_writer import HomeAssistantWriter
 from .reserve_planner import ReservePlanResult
-from .runtime_inputs import RuntimeInputs, async_read_runtime_inputs
+from .runtime_inputs import RuntimeInputs, RuntimeUnavailable, async_read_runtime_inputs
 from .solis_policy import PolicyActuationResult, SolisPolicyActuator
 from .solis_reader import read_solis_state
 from .strategy import CycleState, StrategyAction, select_strategy
@@ -62,10 +62,8 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         self._started = False
         self._stopping = False
         self._stop_task: asyncio.Task[None] | None = None
-        # A disabled controller still establishes the safe inverter baseline
-        # once at startup.  Remembering that result is important: the normal
-        # heartbeat must not re-issue cloud writes every minute while the MVP
-        # is intentionally disabled.
+        # Cache only proven baseline output for the current episode. Severity
+        # remains independent: DEGRADED can recover, while FAIL_SAFE is hard.
         self._safe_state_applied = False
         writer = HomeAssistantWriter.for_home_assistant(hass)
         zone = dt_util.get_time_zone(hass.config.time_zone)
@@ -110,7 +108,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         # Shutdown is an explicit safety boundary.  Do not use the cached
         # disabled result here: the independent watchdog may have observed a
         # state change since the last evaluation.
-        result = await self.policy_actuator.async_apply_fail_safe()
+        result = await self.policy_actuator.async_apply_safe_baseline()
         self._safe_state_applied = result.safe
         await self.async_shutdown()
 
@@ -169,6 +167,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                 )
             return await self._fail_safe_snapshot(now, "dynamic control is disabled")
         if not guard_off:
+            self._safe_state_applied = False
             return await self._fail_safe_snapshot(now, "control-disable guard is asserted or unavailable")
 
         runtime: RuntimeInputs | None = None
@@ -180,8 +179,24 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                 cycle_state=self._cycle_state,
                 cycle_deadline=self._cycle_deadline,
             )
+            if runtime.solis.health is ControllerHealth.DEGRADED:
+                return await self._degraded_snapshot(
+                    now,
+                    "Solis telemetry or control readback is temporarily unavailable",
+                    runtime=runtime,
+                    error=_issues_text(runtime.solis),
+                )
+            if runtime.solis.health is not ControllerHealth.HEALTHY:
+                self._safe_state_applied = False
+                return await self._fail_safe_snapshot(
+                    now,
+                    "Solis state violates a controller safety invariant",
+                    runtime=runtime,
+                    error=_issues_text(runtime.solis),
+                )
             decision = select_strategy(runtime.strategy)
             if decision.action is StrategyAction.FAIL_SAFE:
+                self._safe_state_applied = False
                 return await self._fail_safe_snapshot(now, decision.reason, runtime=runtime)
             intent = decision.slot if decision.action not in (StrategyAction.IDLE, StrategyAction.STOP) else None
             actuation = await self.policy_actuator.async_apply_healthy(
@@ -191,14 +206,12 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                 now=now,
             )
             if not actuation.success:
-                return self._snapshot(
+                self._safe_state_applied = actuation.safe
+                return await self._fail_safe_snapshot(
                     now,
-                    ControllerHealth.FAIL_SAFE if actuation.safe else ControllerHealth.DEGRADED,
-                    StrategyAction.FAIL_SAFE,
-                    decision.reason,
-                    runtime,
-                    last_error=actuation.message,
-                    actuation=actuation,
+                    "Solis actuation failed",
+                    runtime=runtime,
+                    error=actuation.message,
                 )
             self._safe_state_applied = False
             previous_cycle_state = self._cycle_state
@@ -218,14 +231,59 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             )
         except asyncio.CancelledError:
             raise
+        except RuntimeUnavailable as exc:
+            return await self._degraded_snapshot(
+                now,
+                "A required Solis input is temporarily unavailable",
+                runtime=runtime,
+                error=str(exc),
+            )
         except Exception as exc:
             _LOGGER.exception("House battery evaluation failed")
+            self._safe_state_applied = False
             return await self._fail_safe_snapshot(
                 now,
                 "critical input or coordinator failure",
                 runtime=runtime,
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+    async def _degraded_snapshot(
+        self,
+        now: datetime,
+        reason: str,
+        *,
+        runtime: RuntimeInputs | None = None,
+        error: str | None = None,
+    ) -> Snapshot:
+        """Stop dynamic output for a recoverable external-data failure."""
+
+        self._cycle_state = CycleState.IDLE
+        self._cycle_deadline = None
+        if self._safe_state_applied:
+            actuation = PolicyActuationResult(True, True, "safe baseline already proven")
+        else:
+            actuation = await self.policy_actuator.async_apply_safe_baseline()
+            self._safe_state_applied = actuation.safe
+        if not actuation.safe:
+            return self._snapshot(
+                now,
+                ControllerHealth.FAIL_SAFE,
+                StrategyAction.FAIL_SAFE,
+                "safe baseline could not be proven during degraded operation",
+                runtime,
+                last_error=actuation.message if error is None else error,
+                actuation=actuation,
+            )
+        return self._snapshot(
+            now,
+            ControllerHealth.DEGRADED,
+            StrategyAction.STOP,
+            reason,
+            runtime,
+            last_error=error,
+            actuation=actuation,
+        )
 
     async def _fail_safe_snapshot(
         self,
@@ -240,13 +298,13 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         if self._safe_state_applied:
             actuation = PolicyActuationResult(True, True, "fail-safe already applied")
         else:
-            actuation = await self.policy_actuator.async_apply_fail_safe()
+            actuation = await self.policy_actuator.async_apply_safe_baseline()
             self._safe_state_applied = actuation.safe
         if not actuation.success and error is None:
             error = actuation.message
         return self._snapshot(
             now,
-            ControllerHealth.FAIL_SAFE if actuation.safe else ControllerHealth.DEGRADED,
+            ControllerHealth.FAIL_SAFE,
             StrategyAction.FAIL_SAFE,
             reason,
             runtime,
