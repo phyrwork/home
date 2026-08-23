@@ -23,13 +23,15 @@ Home Assistant access.
 Define hard, named limits:
 
 ```python
-MAXIMUM_TELEMETRY_AGE = timedelta(minutes=5)
+MAXIMUM_TELEMETRY_AGE = timedelta(minutes=15)
 MAXIMUM_FUTURE_CLOCK_SKEW = timedelta(minutes=1)
 ```
 
-`MAXIMUM_TELEMETRY_AGE` is a conservative safety limit, not an inferred polling
-interval. Commissioning may make the controller less available if the actual
-telemetry cadence is slower; it must not silently relax this limit.
+`MAXIMUM_TELEMETRY_AGE` is a conservative safety limit based on the commissioned
+Solis Inverter cadence. The integration polls every five minutes; live history
+showed that a five-minute limit oscillated into fail-safe immediately before a
+normal successful poll. Three polling intervals tolerate scheduling jitter and
+one missed cloud response while still failing closed on a sustained outage.
 
 ## Module boundary
 

@@ -86,6 +86,17 @@ def test_stale_numeric_epoch_is_degraded() -> None:
     assert any(issue.code == "device_timestamp_stale" for issue in result.issues)
 
 
+def test_numeric_epoch_at_maximum_age_is_healthy() -> None:
+    parsed, states = fixture()
+    states[parsed.telemetry.device_timestamp_entity_id] = state(
+        str((NOW - MAXIMUM_TELEMETRY_AGE).timestamp())
+    )
+
+    result = read_solis_state(parsed, states, NOW)
+    assert result.health is ControllerHealth.HEALTHY
+    assert not any(issue.code == "device_timestamp_stale" for issue in result.issues)
+
+
 def test_unknown_power_unit_is_degraded() -> None:
     parsed, states = fixture()
     states[parsed.telemetry.battery_power_entity_id] = state("1", unit="MW")
