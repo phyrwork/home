@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 from pathlib import Path
 
 import yaml
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 
 from custom_components.house_battery_control import config as integration_config
@@ -16,7 +18,10 @@ from custom_components.house_battery_control.sensor import (
     ActionSensor,
     HealthSensor,
     HeartbeatSensor,
+    BatteryEnergySensor,
+    ReserveBalanceSensor,
     ReserveSensor,
+    ReserveTargetSensor,
     async_setup_platform,
 )
 from custom_components.house_battery_control.strategy import CycleState, StrategyAction
@@ -41,6 +46,9 @@ def snapshot() -> Snapshot:
         reason="dynamic control is disabled",
         cycle_state=CycleState.IDLE,
         reserve_soc_percent=Decimal("10"),
+        battery_energy_kwh=Decimal("17.68448"),
+        reserve_target_energy_kwh=Decimal("12.345678"),
+        reserve_balance_kwh=Decimal("5.338802"),
         state_of_charge_percent=Decimal("55"),
         battery_power_kw=Decimal("-0.2"),
         last_healthy_at=NOW,
@@ -60,6 +68,9 @@ async def test_platform_exposes_only_small_diagnostic_surface(hass: HomeAssistan
         HealthSensor,
         ActionSensor,
         ReserveSensor,
+        BatteryEnergySensor,
+        ReserveTargetSensor,
+        ReserveBalanceSensor,
     ]
 
 
@@ -73,6 +84,28 @@ def test_sensors_report_disabled_snapshot(hass: HomeAssistant) -> None:
     assert action.extra_state_attributes["battery_power_kw"] == -0.2
     assert ReserveSensor(instance).native_value == 10.0
 
+    energy = BatteryEnergySensor(instance)
+    reserve_target = ReserveTargetSensor(instance)
+    reserve_balance = ReserveBalanceSensor(instance)
+    assert energy.native_value == 17.68448
+    assert reserve_target.native_value == 12.345678
+    assert reserve_balance.native_value == 5.338802
+    assert [sensor.unique_id for sensor in (energy, reserve_target, reserve_balance)] == [
+        "house_battery_control_energy",
+        "house_battery_control_reserve_target",
+        "house_battery_control_reserve_balance",
+    ]
+    assert [sensor.name for sensor in (energy, reserve_target, reserve_balance)] == [
+        "House Battery Energy",
+        "House Battery Reserve Target",
+        "House Battery Reserve Balance",
+    ]
+    for sensor in (energy, reserve_target, reserve_balance):
+        assert sensor.device_class is SensorDeviceClass.ENERGY
+        assert sensor.native_unit_of_measurement is UnitOfEnergy.KILO_WATT_HOUR
+        assert sensor.state_class is SensorStateClass.MEASUREMENT
+        assert sensor.suggested_display_precision == 2
+
 
 def test_sensors_are_unavailable_without_data(hass: HomeAssistant) -> None:
     instance = coordinator(hass)
@@ -81,6 +114,9 @@ def test_sensors_are_unavailable_without_data(hass: HomeAssistant) -> None:
         HealthSensor(instance),
         ActionSensor(instance),
         ReserveSensor(instance),
+        BatteryEnergySensor(instance),
+        ReserveTargetSensor(instance),
+        ReserveBalanceSensor(instance),
     )
     assert all(not sensor.available for sensor in sensors)
     assert all(sensor.native_value is None for sensor in sensors)

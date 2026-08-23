@@ -26,6 +26,9 @@ consumer.
   direction changes, readback, and bounded fail-safe cleanup.
 - Treat native SolisCloud Grid Peak Shaving (enabled at 100 W) as one-time
   commissioning; do not map or write its non-authoritative HA switch at runtime.
+- Preserve the energy diagnostics `House Battery Energy`, `House Battery Reserve
+  Target`, and `House Battery Reserve Balance`; planner diagnostic failures make
+  only those sensors unavailable and do not weaken a proven disabled safe state.
 - Delete the fake Solis dependency, abstract legacy command model, superseded
   planner/input/simulation adapters and tests after cutover.
 - Remove obsolete Home Assistant helpers and configuration.

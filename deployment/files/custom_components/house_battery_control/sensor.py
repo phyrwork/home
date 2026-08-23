@@ -3,8 +3,8 @@
 from collections.abc import Mapping
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.const import PERCENTAGE
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.const import PERCENTAGE, UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -21,7 +21,17 @@ async def async_setup_platform(
 ) -> None:
     coordinator = hass.data.get(DOMAIN)
     if isinstance(coordinator, Coordinator):
-        async_add_entities((HeartbeatSensor(coordinator), HealthSensor(coordinator), ActionSensor(coordinator), ReserveSensor(coordinator)))
+        async_add_entities(
+            (
+                HeartbeatSensor(coordinator),
+                HealthSensor(coordinator),
+                ActionSensor(coordinator),
+                ReserveSensor(coordinator),
+                BatteryEnergySensor(coordinator),
+                ReserveTargetSensor(coordinator),
+                ReserveBalanceSensor(coordinator),
+            )
+        )
 
 
 class _SnapshotSensor(CoordinatorEntity[Coordinator], SensorEntity):
@@ -101,8 +111,62 @@ class ReserveSensor(_SnapshotSensor):
         return _float(self.coordinator.data.reserve_soc_percent) if self.coordinator.data is not None else None
 
 
+class _ReserveEnergySensor(_SnapshotSensor):
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+
+    def _value(self) -> object:
+        raise NotImplementedError
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._value() is not None
+
+    @property
+    def native_value(self):
+        return _float(self._value())
+
+
+class BatteryEnergySensor(_ReserveEnergySensor):
+    _attr_name = "House Battery Energy"
+    _attr_unique_id = f"{DOMAIN}_energy"
+
+    def _value(self) -> object:
+        data = self.coordinator.data
+        return None if data is None else data.battery_energy_kwh
+
+
+class ReserveTargetSensor(_ReserveEnergySensor):
+    _attr_name = "House Battery Reserve Target"
+    _attr_unique_id = f"{DOMAIN}_reserve_target"
+
+    def _value(self) -> object:
+        data = self.coordinator.data
+        return None if data is None else data.reserve_target_energy_kwh
+
+
+class ReserveBalanceSensor(_ReserveEnergySensor):
+    _attr_name = "House Battery Reserve Balance"
+    _attr_unique_id = f"{DOMAIN}_reserve_balance"
+
+    def _value(self) -> object:
+        data = self.coordinator.data
+        return None if data is None else data.reserve_balance_kwh
+
+
 def _float(value: object) -> float | None:
     return None if value is None else float(value)
 
 
-__all__ = ["ActionSensor", "HealthSensor", "HeartbeatSensor", "ReserveSensor", "async_setup_platform"]
+__all__ = [
+    "ActionSensor",
+    "BatteryEnergySensor",
+    "HealthSensor",
+    "HeartbeatSensor",
+    "ReserveBalanceSensor",
+    "ReserveSensor",
+    "ReserveTargetSensor",
+    "async_setup_platform",
+]

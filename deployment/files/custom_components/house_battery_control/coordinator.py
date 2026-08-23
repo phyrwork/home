@@ -16,7 +16,9 @@ from homeassistant.util import dt as dt_util
 from .config import Config
 from .const import DOMAIN
 from .contracts import ControllerHealth, StorageMode
+from .domain_constants import FULL_SOC_PERCENT
 from .ha_writer import HomeAssistantWriter
+from .reserve_planner import ReservePlanResult
 from .runtime_inputs import RuntimeInputs, async_read_runtime_inputs
 from .solis_policy import PolicyActuationResult, SolisPolicyActuator
 from .solis_reader import read_solis_state
@@ -34,6 +36,9 @@ class Snapshot:
     reason: str
     cycle_state: CycleState
     reserve_soc_percent: Decimal | None = None
+    battery_energy_kwh: Decimal | None = None
+    reserve_target_energy_kwh: Decimal | None = None
+    reserve_balance_kwh: Decimal | None = None
     state_of_charge_percent: Decimal | None = None
     battery_power_kw: Decimal | None = None
     current_cheap_window: str | None = None
@@ -142,6 +147,9 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                         error=_issues_text(observation),
                     )
                 telemetry = observation.telemetry
+                reserve_soc, battery_energy, reserve_target, reserve_balance = (
+                    await self._async_reserve_diagnostics(now, observation)
+                )
                 self._last_healthy_at = now
                 return Snapshot(
                     heartbeat_at=now,
@@ -149,6 +157,10 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                     action=StrategyAction.STOP,
                     reason="dynamic control is disabled",
                     cycle_state=CycleState.IDLE,
+                    reserve_soc_percent=reserve_soc,
+                    battery_energy_kwh=battery_energy,
+                    reserve_target_energy_kwh=reserve_target,
+                    reserve_balance_kwh=reserve_balance,
                     state_of_charge_percent=None if telemetry is None else telemetry.state_of_charge_percent,
                     battery_power_kw=None if telemetry is None else telemetry.battery_power_kw,
                     last_healthy_at=self._last_healthy_at,
@@ -233,6 +245,29 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             actuation=actuation,
         )
 
+    async def _async_reserve_diagnostics(
+        self,
+        now: datetime,
+        observation: object,
+    ) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
+        """Read planner diagnostics without making them a safety prerequisite."""
+
+        try:
+            runtime = await async_read_runtime_inputs(
+                self.hass,
+                self.config,
+                now=now,
+                cycle_state=self._cycle_state,
+            )
+        except Exception as exc:
+            _LOGGER.debug("Reserve diagnostics unavailable: %s", exc)
+            return self._reserve_diagnostic_values(observation, None, None)
+        return self._reserve_diagnostic_values(
+            observation,
+            runtime.reserve,
+            runtime.strategy.reserve_soc_percent,
+        )
+
     def _snapshot(
         self,
         now: datetime,
@@ -245,13 +280,21 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         actuation: PolicyActuationResult | None = None,
     ) -> Snapshot:
         telemetry = None if runtime is None or runtime.solis.snapshot is None else runtime.solis.snapshot.telemetry
+        reserve_soc, battery_energy, reserve_target, reserve_balance = self._reserve_diagnostic_values(
+            None if runtime is None else runtime.solis,
+            None if runtime is None else runtime.reserve,
+            None if runtime is None else runtime.strategy.reserve_soc_percent,
+        )
         return Snapshot(
             heartbeat_at=now,
             health=health,
             action=action,
             reason=reason,
             cycle_state=self._cycle_state,
-            reserve_soc_percent=None if runtime is None else runtime.strategy.reserve_soc_percent,
+            reserve_soc_percent=reserve_soc,
+            battery_energy_kwh=battery_energy,
+            reserve_target_energy_kwh=reserve_target,
+            reserve_balance_kwh=reserve_balance,
             state_of_charge_percent=None if telemetry is None else telemetry.state_of_charge_percent,
             battery_power_kw=None if telemetry is None else telemetry.battery_power_kw,
             current_cheap_window=_window_text(None if runtime is None else runtime.current_window),
@@ -260,6 +303,27 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             last_error=last_error,
             actuation_message=None if actuation is None else actuation.message,
         )
+
+    def _reserve_diagnostic_values(
+        self,
+        observation: object | None,
+        reserve: ReservePlanResult | None,
+        reserve_soc_percent: Decimal | None,
+    ) -> tuple[Decimal | None, Decimal | None, Decimal | None, Decimal | None]:
+        """Return exact energy diagnostics derived from one observed SOC."""
+
+        target = None if reserve is None else reserve.reserve_energy_kwh
+        snapshot = None if observation is None else getattr(observation, "snapshot", None)
+        telemetry = None if snapshot is None else getattr(snapshot, "telemetry", None)
+        if telemetry is None and observation is not None:
+            telemetry = getattr(observation, "telemetry", None)
+        soc = None if telemetry is None else getattr(telemetry, "state_of_charge_percent", None)
+        if not isinstance(soc, Decimal):
+            return reserve_soc_percent, None, target, None
+        actual = self.config.battery.capacity_kwh * soc / Decimal(FULL_SOC_PERCENT)
+        if target is None:
+            return reserve_soc_percent, actual, None, None
+        return reserve_soc_percent, actual, target, actual - target
 
     async def _async_source_changed(self, _event: Event[EventStateChangedData]) -> None:
         if self._stopping:

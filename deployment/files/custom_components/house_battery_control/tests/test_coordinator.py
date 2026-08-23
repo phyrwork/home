@@ -89,6 +89,64 @@ async def test_disabled_controller_applies_safe_state_once(hass: HomeAssistant) 
     actuator.async_apply_fail_safe.assert_awaited_once_with()
 
 
+async def test_disabled_healthy_snapshot_includes_exact_reserve_diagnostics(
+    hass: HomeAssistant,
+) -> None:
+    coordinator = Coordinator(hass, config())
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
+    actuator = policy(coordinator)
+    runtime = SimpleNamespace(
+        strategy=SimpleNamespace(reserve_soc_percent=Decimal("38")),
+        reserve=SimpleNamespace(reserve_energy_kwh=Decimal("12.345678")),
+    )
+    with (
+        patch(
+            "custom_components.house_battery_control.coordinator.read_solis_state",
+            return_value=observation(),
+        ),
+        patch(
+            "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
+            AsyncMock(return_value=runtime),
+        ),
+    ):
+        await coordinator._async_update_data()
+        result = await coordinator._async_update_data()
+
+    assert result.health is ControllerHealth.HEALTHY
+    assert result.reserve_soc_percent == Decimal("38")
+    assert result.battery_energy_kwh == Decimal("17.68448")
+    assert result.reserve_target_energy_kwh == Decimal("12.345678")
+    assert result.reserve_balance_kwh == Decimal("5.338802")
+    actuator.async_apply_fail_safe.assert_awaited_once_with()
+    actuator.async_apply_healthy.assert_not_awaited()
+
+
+async def test_disabled_diagnostic_failure_does_not_degrade_proven_safe_state(
+    hass: HomeAssistant,
+) -> None:
+    coordinator = Coordinator(hass, config())
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
+    actuator = policy(coordinator)
+    with (
+        patch(
+            "custom_components.house_battery_control.coordinator.read_solis_state",
+            return_value=observation(),
+        ),
+        patch(
+            "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
+            AsyncMock(side_effect=RuntimeError("forecast unavailable")),
+        ),
+    ):
+        await coordinator._async_update_data()
+        result = await coordinator._async_update_data()
+
+    assert result.health is ControllerHealth.HEALTHY
+    assert result.battery_energy_kwh == Decimal("17.68448")
+    assert result.reserve_target_energy_kwh is None
+    assert result.reserve_balance_kwh is None
+    actuator.async_apply_fail_safe.assert_awaited_once_with()
+
+
 async def test_disabled_controller_fault_reports_fail_safe_without_write_loop(
     hass: HomeAssistant,
 ) -> None:
