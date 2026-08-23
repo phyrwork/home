@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
@@ -52,15 +53,15 @@ class FakeHA:
             callback(entity_id, None, state)
 
 
-def _state(value, *, attributes=None):
-    return {"state": value, "attributes": attributes or {}, "last_updated": NOW, "context_id": "initial"}
+def _state(value, *, attributes=None, last_updated=NOW):
+    return {"state": value, "attributes": attributes or {}, "last_updated": last_updated, "context_id": "initial"}
 
 
 def _capability(value, unit, maximum="100"):
     return _state(value, attributes={"min": "0", "max": maximum, "step": "1", "unit_of_measurement": unit})
 
 
-def fixture():
+def fixture(*, now=NOW):
     source = yaml.safe_load((Path(__file__).parents[3] / "house_battery_control.yaml").read_text())
     source["solis"]["telemetry"].update(
         battery_power_entity_id="sensor.battery_power",
@@ -70,12 +71,12 @@ def fixture():
     )
     solis = config.from_mapping(source).solis
     states = {
-        solis.telemetry.state_of_charge_entity_id: _state("55", attributes={"unit_of_measurement": "%"}),
-        solis.telemetry.battery_power_entity_id: _state("0", attributes={"unit_of_measurement": "kW"}),
-        solis.telemetry.battery_voltage_entity_id: _state("52", attributes={"unit_of_measurement": "V"}),
-        solis.telemetry.device_timestamp_entity_id: _state(NOW.isoformat()),
+        solis.telemetry.state_of_charge_entity_id: _state("55", attributes={"unit_of_measurement": "%"}, last_updated=now),
+        solis.telemetry.battery_power_entity_id: _state("0", attributes={"unit_of_measurement": "kW"}, last_updated=now),
+        solis.telemetry.battery_voltage_entity_id: _state("52", attributes={"unit_of_measurement": "V"}, last_updated=now),
+        solis.telemetry.device_timestamp_entity_id: _state(now.isoformat(), last_updated=now),
         solis.persistent.storage_mode_entity_id: _state("Feed-In Priority", attributes={"options": ["Self-Use", "Feed-In Priority", "Off-Grid"]}),
-        solis.persistent.inverter_time_entity_id: _state(NOW.isoformat()),
+        solis.persistent.inverter_time_entity_id: _state(now.isoformat(), last_updated=now),
     }
     for entity_id in (
         solis.persistent.allow_grid_charging_entity_id,
@@ -96,7 +97,7 @@ def fixture():
             states[direction.target_soc_entity_id] = _capability("50", "%")
     guard = "input_boolean.house_battery_control_disable"
     states[guard] = _state("off")
-    observation = read_solis_state(solis, states, NOW)
+    observation = read_solis_state(solis, states, now)
     assert observation.snapshot is not None
     return solis, states, guard, observation
 
@@ -111,6 +112,21 @@ def intent(**changes):
         "current": Decimal("1"),
         "target_soc": Decimal("50"),
         "expiry": NOW + timedelta(hours=1),
+    }
+    values.update(changes)
+    return SlotIntent(**values)
+
+
+def intent_at(base: datetime, **changes):
+    values = {
+        "owner": SlotOwner.CHEAP_CHARGING,
+        "physical_slot": 1,
+        "direction": SlotDirection.CHARGE,
+        "start": base - timedelta(minutes=5),
+        "end": base + timedelta(minutes=55),
+        "current": Decimal("1"),
+        "target_soc": Decimal("50"),
+        "expiry": base + timedelta(hours=1),
     }
     values.update(changes)
     return SlotIntent(**values)
@@ -131,10 +147,10 @@ def reserve_intent(**changes):
     return SlotIntent(**values)
 
 
-def actuator():
-    solis, states, guard, observation = fixture()
+def actuator(*, now=NOW, inverter_timezone=timezone.utc):
+    solis, states, guard, observation = fixture(now=now)
     ha = FakeHA(states)
-    return SolisSlotActuator(solis, HomeAssistantWriter(ha), control_disable_guard_entity_id=guard, inverter_timezone=timezone.utc), ha, observation
+    return SolisSlotActuator(solis, HomeAssistantWriter(ha), control_disable_guard_entity_id=guard, inverter_timezone=inverter_timezone), ha, observation
 
 
 def enable_ids(controller):
@@ -165,6 +181,21 @@ async def test_success_disables_before_configuring_and_enables_one_slot():
     off_index = next(i for i, call in enumerate(ha.calls) if call[1] == "turn_off" and call[2]["entity_id"] == other)
     config_index = next(i for i, call in enumerate(ha.calls) if call[0] in {"text", "number"})
     assert off_index < config_index
+
+
+@pytest.mark.asyncio
+async def test_schedule_uses_authoritative_inverter_clock_timezone():
+    summer_now = datetime(2026, 8, 23, 16, 35, tzinfo=timezone.utc)
+    controller, _ha, observation = actuator(
+        now=summer_now,
+        inverter_timezone=ZoneInfo("Europe/London"),
+    )
+    preflight = controller._preflight(
+        intent_at(summer_now), observation, summer_now
+    )
+
+    assert not isinstance(preflight, str)
+    assert preflight[2] == "16:30-17:30"
 
 
 @pytest.mark.asyncio
