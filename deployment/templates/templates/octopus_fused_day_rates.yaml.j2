@@ -1,3 +1,4 @@
+#jinja2: trim_blocks: False, lstrip_blocks: False
 {% set import_base = ("octopus_energy_electricity_" ~ electricity_meter_serial_number ~ "_" ~ electricity_meter_mpan_import) | lower %}
 {% set export_meter_base = ("octopus_energy_electricity_" ~ electricity_meter_serial_number ~ "_" ~ electricity_meter_mpan_export) | lower %}
 {% set export_base = export_meter_base ~ "_export" %}

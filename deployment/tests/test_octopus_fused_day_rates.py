@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
-from jinja2 import Environment, Template
+from jinja2 import Environment
 import pytest
 import yaml
 
@@ -49,13 +49,36 @@ class _States:
 
 
 def _outer_render():
-    rendered = Template(TEMPLATE.read_text()).render(
+    source = TEMPLATE.read_text()
+    # Ansible defaults to trim_blocks=True.  Honor the template's Jinja2
+    # directive exactly as the Ansible template action does before parsing.
+    trim_blocks = True
+    lstrip_blocks = False
+    first_line, _, body = source.partition("\n")
+    if first_line.startswith("#jinja2:"):
+        options = {
+            key.strip(): value.strip().lower() == "true"
+            for item in first_line.removeprefix("#jinja2:").split(",")
+            for key, value in [item.split(":", 1)]
+        }
+        trim_blocks = options.get("trim_blocks", trim_blocks)
+        lstrip_blocks = options.get("lstrip_blocks", lstrip_blocks)
+        source = body
+    rendered = Environment(trim_blocks=trim_blocks, lstrip_blocks=lstrip_blocks).from_string(source).render(
         electricity_meter_serial_number=SERIAL,
         electricity_meter_mpan_import=IMPORT_MPAN,
         electricity_meter_mpan_export=EXPORT_MPAN,
         ev_charger_device_id=DEVICE,
     )
     return rendered, yaml.safe_load(rendered)
+
+
+def test_outer_render_keeps_state_and_attributes_as_distinct_sensor_keys() -> None:
+    _rendered, config = _outer_render()
+    import_sensor, export_sensor = config["sensor"]
+    assert import_sensor["state"] != export_sensor["state"]
+    assert "attributes" in import_sensor
+    assert "attributes" in export_sensor
 
 
 def _rate(start, end, value, **extra):
