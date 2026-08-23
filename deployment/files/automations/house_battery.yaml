@@ -28,10 +28,11 @@
         {{ trigger.id == 'home_assistant_start'
            or (trigger.id == 'control_disable_changed'
                and states('input_boolean.house_battery_control_disable') != 'off')
-           or states('sensor.house_battery_control_health') != 'healthy'
-           or heartbeat is none
-           or (as_timestamp(now()) - heartbeat) > 180
-           or (heartbeat - as_timestamp(now())) > 60 }}
+           or (trigger.id != 'control_disable_changed'
+               and (states('sensor.house_battery_control_health') != 'healthy'
+                    or heartbeat is none
+                    or (as_timestamp(now()) - heartbeat) > 180
+                    or (heartbeat - as_timestamp(now())) > 60)) }}
   action:
     - service: script.turn_on
       target:
