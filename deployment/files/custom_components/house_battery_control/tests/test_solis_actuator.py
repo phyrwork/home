@@ -217,7 +217,7 @@ async def test_changed_intent_still_replaces_existing_slot_transactionally():
     assert result.status is SlotActuationStatus.APPLIED
     assert any(call[1] == "turn_off" for call in ha.calls)
     target = controller.config.slots[0].charge
-    assert ha.states[target.current_entity_id]["state"] == "2"
+    assert Decimal(ha.states[target.current_entity_id]["state"]) == Decimal("2")
     assert ha.states[target.enable_entity_id]["state"] == "on"
 
 

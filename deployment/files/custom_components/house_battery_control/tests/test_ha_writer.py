@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import json
 from types import MappingProxyType, SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -148,7 +149,12 @@ async def test_number_capability_metadata_and_exact_step() -> None:
     ha.on_call = lambda *_: ha.set_state("number.a", "2.5", updated=NOW + timedelta(seconds=1), context_id="service", attributes={"min": "0", "max": "10", "step": "0.5", "unit_of_measurement": "A"})
     result = await HomeAssistantWriter(ha).async_write(request)
     assert result.outcome is WriteOutcome.APPLIED_HA_READBACK
-    assert ha.calls[0][2]["value"] == Decimal("2.5")
+    assert ha.calls[0][2]["value"] == 2.5
+    # The payload is sent through HA and must not contain Decimal, which the
+    # recorder cannot JSON encode.
+    json.dumps(ha.calls[0][2])
+    assert result.service_data is not None
+    assert result.service_data["value"] == 2.5
 
     fresh_capability = ObservedCapability(Decimal("2.5"), Decimal("0"), Decimal("10"), Decimal("0.5"), "A")
     bad = NumberWriteRequest(precondition(ha, "number.a"), Decimal("2.6"), capability=fresh_capability)

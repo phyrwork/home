@@ -281,7 +281,11 @@ class HomeAssistantWriter:
                 return WriteResult(request.entity_id, WriteOutcome.REJECTED, "number target is outside capability bounds")
             if (target - live.minimum) % live.step != 0:
                 return WriteResult(request.entity_id, WriteOutcome.REJECTED, "number target is not aligned to capability step")
-            return str(target), "set_value", {"entity_id": request.entity_id, "value": target}
+            # Home Assistant service data is persisted by the recorder and
+            # therefore must contain JSON-native values.  Keep Decimal in the
+            # domain contract for exact capability/step validation, but pass a
+            # float across the HA service boundary.
+            return str(target), "set_value", {"entity_id": request.entity_id, "value": float(target)}
         return WriteResult(request.entity_id, WriteOutcome.REJECTED, "unsupported domain")
 
     @staticmethod
