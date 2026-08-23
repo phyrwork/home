@@ -329,12 +329,49 @@ class SolisSlotActuator:
             return False
         if target is None or target is not target_state or not target.enabled:
             return False
+        observed_schedule_is_active = target.time_text == schedule
+        if not observed_schedule_is_active:
+            try:
+                observed_start, observed_end = (
+                    datetime.strptime(value, "%H:%M").time()
+                    for value in target.time_text.split("-")
+                )
+                desired_end = schedule.split("-")[1]
+                desired_end_time = datetime.strptime(desired_end, "%H:%M").time()
+                local_now = snapshot.persistent.inverter_time.astimezone(self.inverter_timezone).time()
+                observed_start_minutes = observed_start.hour * 60 + observed_start.minute
+                observed_end_minutes = observed_end.hour * 60 + observed_end.minute
+                now_minutes = local_now.hour * 60 + local_now.minute
+                active = (
+                    (observed_start_minutes <= now_minutes < observed_end_minutes)
+                    if observed_start_minutes < observed_end_minutes
+                    else (now_minutes >= observed_start_minutes or now_minutes < observed_end_minutes)
+                )
+                observed_schedule_is_active = active and observed_end == desired_end_time
+            except (TypeError, ValueError):
+                observed_schedule_is_active = False
         return (
-            target.time_text == schedule
+            observed_schedule_is_active
             and target.current.current_value == intent.current
             and target.target_soc.current_value == intent.target_soc
             and self._guard_off()
         )
+
+    @staticmethod
+    def _only_target_is_enabled(
+        snapshot: SolisStateSnapshot,
+        physical_slot: int,
+        direction: SlotDirection,
+    ) -> bool:
+        """Return whether the target is already the sole active direction."""
+
+        enabled = [
+            (slot.physical_slot, state.direction)
+            for slot in snapshot.slots
+            for state in (slot.charge, slot.discharge)
+            if state.enabled
+        ]
+        return enabled == [(physical_slot, direction)]
 
     async def _write_recorded(
         self,
@@ -512,10 +549,17 @@ class SolisSlotActuator:
                     message="slot already enabled and Home Assistant readback verified",
                 )
             async with self.writer.transaction() as transaction:
+                preserve_target = (
+                    observation.snapshot is not None
+                    and target_state.enabled
+                    and self._only_target_is_enabled(
+                        observation.snapshot, intent.physical_slot, intent.direction
+                    )
+                )
                 # All twelve switch preconditions are captured immediately
                 # before their individual CAS writes.
                 result_count = len(results)
-                proven = await self._disable_all_locked(transaction, results)
+                proven = preserve_target or await self._disable_all_locked(transaction, results)
                 disable_results = results[result_count:]
                 if not proven or not all(result.success for result in disable_results):
                     raise RuntimeError("all Solis slot directions were not proven disabled")
@@ -534,20 +578,26 @@ class SolisSlotActuator:
                     intent.target_soc,
                     capability=target_state.target_soc,
                 )
-                for request in (time_request, current_request, soc_request):
+                for request, current in (
+                    (time_request, target_state.time_text),
+                    (current_request, target_state.current.current_value),
+                    (soc_request, target_state.target_soc.current_value),
+                ):
+                    if current == request.target:
+                        continue
                     write_result = await self._write_recorded(transaction, request, results)
                     if not write_result.success:
                         raise RuntimeError(f"configuration write failed: {write_result.message}")
-                if not self._prove_all_off():
+                if not preserve_target and not self._prove_all_off():
                     raise RuntimeError("slot direction changed while target configuration was written")
                 if not self._guard_off():
                     raise RuntimeError("control-disable guard asserted before slot enable")
-                enable_request = SwitchWriteRequest(
-                    self._require_verified_precondition(target_config.enable_entity_id), True
-                )
-                write_result = await self._write_recorded(transaction, enable_request, results)
-                if not write_result.success:
-                    raise RuntimeError(f"slot enable failed: {write_result.message}")
+                enable_precondition = self._require_verified_precondition(target_config.enable_entity_id)
+                if enable_precondition.state != "on":
+                    enable_request = SwitchWriteRequest(enable_precondition, True)
+                    write_result = await self._write_recorded(transaction, enable_request, results)
+                    if not write_result.success:
+                        raise RuntimeError(f"slot enable failed: {write_result.message}")
                 if not self._guard_off():
                     raise RuntimeError("control-disable guard asserted after slot enable")
                 if not self._prove_exact_target(target_config.enable_entity_id):

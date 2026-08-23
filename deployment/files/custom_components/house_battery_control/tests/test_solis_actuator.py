@@ -116,6 +116,21 @@ def intent(**changes):
     return SlotIntent(**values)
 
 
+def reserve_intent(**changes):
+    values = {
+        "owner": SlotOwner.RESERVE_EXPORT,
+        "physical_slot": 2,
+        "direction": SlotDirection.DISCHARGE,
+        "start": NOW - timedelta(minutes=5),
+        "end": NOW + timedelta(minutes=55),
+        "current": Decimal("1"),
+        "target_soc": Decimal("50"),
+        "expiry": NOW + timedelta(hours=1),
+    }
+    values.update(changes)
+    return SlotIntent(**values)
+
+
 def actuator():
     solis, states, guard, observation = fixture()
     ha = FakeHA(states)
@@ -202,6 +217,52 @@ async def test_repeated_identical_heartbeat_is_a_verified_noop():
 
 
 @pytest.mark.asyncio
+async def test_repeated_reserve_discharge_does_not_replay_slot_enable():
+    controller, ha, observation = actuator()
+    first = await controller.async_apply_intent(reserve_intent(), observation, now=NOW)
+    assert first.status is SlotActuationStatus.APPLIED
+    ha.calls.clear()
+
+    current_observation = read_solis_state(
+        controller.config, ha.states, NOW + timedelta(seconds=30)
+    )
+    second = await controller.async_apply_intent(
+        reserve_intent(), current_observation, now=NOW + timedelta(seconds=30)
+    )
+
+    assert second.status is SlotActuationStatus.APPLIED
+    assert second.results == ()
+    assert ha.calls == []
+
+
+@pytest.mark.asyncio
+async def test_active_reserve_schedule_with_earlier_start_is_a_noop():
+    controller, ha, observation = actuator()
+    first = await controller.async_apply_intent(reserve_intent(), observation, now=NOW)
+    assert first.status is SlotActuationStatus.APPLIED
+    ha.calls.clear()
+    ha.states[controller.config.persistent.inverter_time_entity_id]["state"] = (
+        NOW + timedelta(minutes=5)
+    ).isoformat()
+    current_observation = read_solis_state(
+        controller.config, ha.states, NOW + timedelta(minutes=5)
+    )
+
+    second = await controller.async_apply_intent(
+        reserve_intent(
+            start=NOW + timedelta(minutes=5),
+            end=NOW + timedelta(minutes=55),
+        ),
+        current_observation,
+        now=NOW + timedelta(minutes=5),
+    )
+
+    assert second.status is SlotActuationStatus.APPLIED
+    assert second.results == ()
+    assert ha.calls == []
+
+
+@pytest.mark.asyncio
 async def test_changed_intent_still_replaces_existing_slot_transactionally():
     controller, ha, observation = actuator()
     await controller.async_apply_intent(intent(), observation, now=NOW)
@@ -215,7 +276,8 @@ async def test_changed_intent_still_replaces_existing_slot_transactionally():
     )
 
     assert result.status is SlotActuationStatus.APPLIED
-    assert any(call[1] == "turn_off" for call in ha.calls)
+    assert not any(call[1] in {"turn_on", "turn_off"} for call in ha.calls)
+    assert [call[0:2] for call in ha.calls] == [("number", "set_value")]
     target = controller.config.slots[0].charge
     assert Decimal(ha.states[target.current_entity_id]["state"]) == Decimal("2")
     assert ha.states[target.enable_entity_id]["state"] == "on"
