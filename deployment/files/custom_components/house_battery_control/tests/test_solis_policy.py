@@ -175,6 +175,22 @@ async def test_healthy_baseline_selects_feed_in_priority_and_proves_no_slots():
 
 
 @pytest.mark.asyncio
+async def test_healthy_actuation_with_asserted_guard_is_not_reported_successful():
+    actuator, _ha, observation = policy(guard_state="on")
+
+    result = await actuator.async_apply_healthy(
+        observation=observation,
+        reserve_soc_percent=10,
+        intent=None,
+        now=NOW,
+    )
+
+    assert not result.success
+    assert result.safe
+    assert "guard" in result.message
+
+
+@pytest.mark.asyncio
 async def test_guard_assertion_during_healthy_write_falls_back_to_safe_baseline():
     actuator, ha, observation = policy()
     original_call = ha.async_call

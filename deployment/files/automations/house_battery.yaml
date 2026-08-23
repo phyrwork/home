@@ -41,6 +41,9 @@
                and health_changed is not none
                and (as_timestamp(now()) - health_changed) > 600)
            or (heartbeat is not none
+               and not (health in ['unavailable', 'unknown']
+                        and health_changed is not none
+                        and (as_timestamp(now()) - health_changed) <= 600)
                and ((as_timestamp(now()) - heartbeat) > 180
                     or (heartbeat - as_timestamp(now())) > 60)) }}
   action:

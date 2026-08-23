@@ -259,6 +259,67 @@ async def test_enabled_controller_recovers_from_fresh_degraded_telemetry(
     actuator.async_apply_healthy.assert_awaited_once()
 
 
+async def test_degraded_runtime_reconciles_again_when_cached_baseline_drifts(
+    hass: HomeAssistant,
+) -> None:
+    source = yaml.safe_load(
+        (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
+    )
+    source["dynamic_control_enabled"] = True
+    coordinator = Coordinator(hass, integration_config.from_mapping(source))
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
+    actuator = policy(coordinator)
+    safe = observation()
+    drifted = observation(storage_mode="Feed-In Priority")
+    with patch(
+        "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
+        AsyncMock(
+            side_effect=(
+                RuntimeUnavailable("telemetry unavailable", solis=safe),
+                RuntimeUnavailable("telemetry unavailable", solis=drifted),
+            )
+        ),
+    ):
+        first = await coordinator._async_update_data()
+        repeated = await coordinator._async_update_data()
+
+    assert first.health is ControllerHealth.DEGRADED
+    assert repeated.health is ControllerHealth.DEGRADED
+    assert actuator.async_apply_safe_baseline.await_count == 2
+
+
+def test_source_listener_covers_all_configured_solis_runtime_entities(
+    hass: HomeAssistant,
+) -> None:
+    coordinator = Coordinator(hass, config())
+    solis = coordinator.config.solis
+    expected = {
+        solis.telemetry.state_of_charge_entity_id,
+        solis.telemetry.battery_power_entity_id,
+        solis.telemetry.battery_voltage_entity_id,
+        solis.telemetry.device_timestamp_entity_id,
+        solis.persistent.storage_mode_entity_id,
+        solis.persistent.allow_grid_charging_entity_id,
+        solis.persistent.inverter_time_entity_id,
+        solis.protection.battery_reserve_entity_id,
+        solis.protection.battery_reserve_soc_entity_id,
+        solis.capability.battery_max_charge_current_entity_id,
+        solis.capability.battery_max_discharge_current_entity_id,
+    }
+    for slot in solis.slots:
+        for direction in (slot.charge, slot.discharge):
+            expected.update(
+                (
+                    direction.enable_entity_id,
+                    direction.time_entity_id,
+                    direction.current_entity_id,
+                    direction.target_soc_entity_id,
+                )
+            )
+
+    assert expected.issubset(set(coordinator._source_entity_ids()))
+
+
 async def test_degraded_baseline_failure_escalates_to_fail_safe(
     hass: HomeAssistant,
 ) -> None:

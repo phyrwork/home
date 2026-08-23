@@ -269,8 +269,14 @@ class SolisPolicyActuator:
             results: list[WriteResult] = []
             try:
                 if not self._guard_off():
-                    return await self._apply_safe_baseline_attempts_locked(
+                    fallback = await self._apply_safe_baseline_attempts_locked(
                         deadline=deadline
+                    )
+                    return PolicyActuationResult(
+                        False,
+                        fallback.safe,
+                        "healthy actuation rejected: control-disable guard is asserted or unavailable",
+                        fallback.results,
                     )
                 if observation.health is not ControllerHealth.HEALTHY or observation.snapshot is None:
                     return await self._apply_safe_baseline_attempts_locked(

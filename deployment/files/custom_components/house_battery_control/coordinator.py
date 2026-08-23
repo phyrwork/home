@@ -184,6 +184,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                     now,
                     "Solis telemetry or control readback is temporarily unavailable",
                     runtime=runtime,
+                    observation=runtime.solis,
                     error=_issues_text(runtime.solis),
                 )
             if runtime.solis.health is not ControllerHealth.HEALTHY:
@@ -235,6 +236,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             return await self._degraded_snapshot(
                 now,
                 "A required Solis input is temporarily unavailable",
+                observation=exc.solis,
                 runtime=runtime,
                 error=str(exc),
             )
@@ -254,13 +256,14 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         reason: str,
         *,
         runtime: RuntimeInputs | None = None,
+        observation: object | None = None,
         error: str | None = None,
     ) -> Snapshot:
         """Stop dynamic output for a recoverable external-data failure."""
 
         self._cycle_state = CycleState.IDLE
         self._cycle_deadline = None
-        if self._safe_state_applied:
+        if self._safe_state_applied and self._is_safe_state_proven(observation):
             actuation = PolicyActuationResult(True, True, "safe baseline already proven")
         else:
             actuation = await self.policy_actuator.async_apply_safe_baseline()
@@ -403,13 +406,21 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         """Return whether a healthy snapshot proves the disabled baseline."""
 
         snapshot = getattr(observation, "snapshot", None)
-        if snapshot is None:
-            return False
         try:
-            persistent = snapshot.persistent
-            slots = snapshot.slots
+            persistent = (
+                getattr(snapshot, "persistent", None)
+                if snapshot is not None
+                else getattr(observation, "persistent", None)
+            )
+            slots = (
+                getattr(snapshot, "slots", None)
+                if snapshot is not None
+                else getattr(observation, "slots", None)
+            )
             if (
-                persistent.storage_mode != StorageMode.SELF_USE.value
+                persistent is None
+                or slots is None
+                or persistent.storage_mode != StorageMode.SELF_USE.value
                 or persistent.battery_reserve is not False
                 or len(slots) != len(self.config.solis.slots)
             ):
@@ -424,7 +435,10 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
 
     def _source_entity_ids(self) -> tuple[str, ...]:
         telemetry = self.config.solis.telemetry
-        return (
+        persistent = self.config.solis.persistent
+        protection = self.config.solis.protection
+        capability = self.config.solis.capability
+        entity_ids = [
             self.config.control_disable_guard_entity_id,
             self.config.tariff.import_rates_entity_id,
             self.config.tariff.export_rates_entity_id,
@@ -433,7 +447,25 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             telemetry.battery_power_entity_id,
             telemetry.battery_voltage_entity_id,
             telemetry.device_timestamp_entity_id,
-        )
+            persistent.storage_mode_entity_id,
+            persistent.allow_grid_charging_entity_id,
+            persistent.inverter_time_entity_id,
+            protection.battery_reserve_entity_id,
+            protection.battery_reserve_soc_entity_id,
+            capability.battery_max_charge_current_entity_id,
+            capability.battery_max_discharge_current_entity_id,
+        ]
+        for slot in self.config.solis.slots:
+            for direction in (slot.charge, slot.discharge):
+                entity_ids.extend(
+                    (
+                        direction.enable_entity_id,
+                        direction.time_entity_id,
+                        direction.current_entity_id,
+                        direction.target_soc_entity_id,
+                    )
+                )
+        return tuple(dict.fromkeys(entity_ids))
 
 
 def _window_text(window: object) -> str | None:

@@ -154,6 +154,8 @@ def test_automation_latches_only_hard_or_stale_failures() -> None:
     assert "health_state.last_changed" in condition
     assert "heartbeat is none" in condition
     assert "> 600" in condition
+    assert "not (health in ['unavailable', 'unknown']" in condition
+    assert "<= 600" in condition
     assert "home_assistant_start" not in condition
     assert "health != 'healthy'" not in condition
     assert "health == 'degraded'" not in condition
