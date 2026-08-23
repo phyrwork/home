@@ -133,9 +133,7 @@ async def async_read_runtime_inputs(
     cycle_intent = None
 
     if current_window is not None:
-        start = _minute_floor(now)
-        if start < current_window.start:
-            start = current_window.start
+        start = _slot_start(now, current_window.start)
         cheap_intent = SlotIntent(
             SlotOwner.CHEAP_CHARGING,
             1,
@@ -356,6 +354,17 @@ def _soc_ceiling(energy: Decimal, capacity: Decimal) -> Decimal:
 
 def _minute_floor(value: datetime) -> datetime:
     return value.replace(second=0, microsecond=0)
+
+
+def _slot_start(now: datetime, window_start: datetime) -> datetime:
+    """Choose an exact-minute slot start without entering a future window early."""
+
+    start = _minute_floor(now)
+    if window_start > now:
+        start = _minute_floor(window_start)
+        if start < window_start:
+            start += timedelta(minutes=1)
+    return start
 
 
 __all__ = ["RuntimeInputs", "async_read_runtime_inputs"]
