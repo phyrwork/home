@@ -21,7 +21,7 @@ def test_deployed_mapping_is_strict_and_decimal() -> None:
     assert parsed.battery.capacity_kwh == Decimal("32.1536")
     assert parsed.battery.minimum_soc_percent == Decimal("10")
     assert parsed.battery.minimum_energy_kwh == Decimal("3.21536")
-    assert parsed.dynamic_control_enabled is False
+    assert parsed.dynamic_control_enabled is True
     assert parsed.solis.telemetry.battery_power_entity_id.endswith("battery_power")
 
 

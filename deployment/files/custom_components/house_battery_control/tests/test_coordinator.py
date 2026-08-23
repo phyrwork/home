@@ -27,7 +27,9 @@ def config() -> integration_config.Config:
     from pathlib import Path
 
     path = Path(__file__).parents[3] / "house_battery_control.yaml"
-    return integration_config.from_mapping(yaml.safe_load(path.read_text()))
+    source = yaml.safe_load(path.read_text())
+    source["dynamic_control_enabled"] = False
+    return integration_config.from_mapping(source)
 
 
 def policy(coordinator: Coordinator, *, safe: bool = True) -> MagicMock:

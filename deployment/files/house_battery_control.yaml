@@ -1,6 +1,6 @@
 # One-time SolisCloud commissioning is complete: EMS is disabled for this plant
 # so cloud dispatch cannot overwrite Home Assistant inverter controls.
-dynamic_control_enabled: false
+dynamic_control_enabled: true
 
 battery:
   capacity_kwh: 32.1536

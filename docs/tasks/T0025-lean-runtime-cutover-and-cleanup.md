@@ -1,6 +1,6 @@
 # T0025 — Lean runtime cutover and legacy cleanup
 
-Status: Local cleanup complete; deployment and live verification pending
+Status: Disabled deployment verified; guarded dynamic activation pending
 
 ## Objective
 
@@ -52,7 +52,9 @@ consumer.
   thread after T0023 and T0024 land.
 - Do not add journals, leases, bootstrap tokens, persisted commissioning state,
   general simulation, or legacy parsers.
-- Keep dynamic control disabled through deployment and initial live verification.
+- Keep dynamic control disabled through the initial deployment and live
+  fail-safe verification. Enable it only after explicit operator approval, and
+  keep the external guard asserted throughout the guarded activation deploy.
 
 ## Completion criteria
 
