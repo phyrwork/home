@@ -16,6 +16,7 @@ from custom_components.house_battery_control.coordinator import (
     HEARTBEAT_INTERVAL,
     Coordinator,
 )
+from custom_components.house_battery_control.octopus_windows import CoverageStatus
 from custom_components.house_battery_control.solis_policy import PolicyActuationResult
 from custom_components.house_battery_control.runtime_inputs import RuntimeUnavailable
 from custom_components.house_battery_control.strategy import CycleState, StrategyAction, StrategyResult
@@ -284,6 +285,42 @@ async def test_degraded_baseline_failure_escalates_to_fail_safe(
     assert result.health is ControllerHealth.FAIL_SAFE
     assert result.action is StrategyAction.FAIL_SAFE
     assert "could not be proven" in result.reason
+    assert actuator.async_apply_safe_baseline.await_count == 2
+
+
+async def test_degraded_baseline_retries_once_before_escalating(
+    hass: HomeAssistant,
+) -> None:
+    source = yaml.safe_load(
+        (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
+    )
+    source["dynamic_control_enabled"] = True
+    coordinator = Coordinator(hass, integration_config.from_mapping(source))
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
+    actuator = policy(coordinator)
+    actuator.async_apply_safe_baseline = AsyncMock(
+        side_effect=(
+            PolicyActuationResult(False, False, "first readback incomplete"),
+            PolicyActuationResult(True, True, "retry proven"),
+        )
+    )
+    degraded = SimpleNamespace(
+        solis=observation(ControllerHealth.DEGRADED),
+        strategy=SimpleNamespace(reserve_soc_percent=Decimal("20")),
+        reserve=None,
+        current_window=None,
+        next_window=None,
+    )
+    with patch(
+        "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
+        AsyncMock(return_value=degraded),
+    ):
+        result = await coordinator._async_update_data()
+
+    assert result.health is ControllerHealth.DEGRADED
+    assert result.action is StrategyAction.STOP
+    assert result.actuation_message == "retry proven"
+    assert actuator.async_apply_safe_baseline.await_count == 2
 
 
 async def test_runtime_unavailable_exception_is_recoverable_degraded(
@@ -305,6 +342,156 @@ async def test_runtime_unavailable_exception_is_recoverable_degraded(
     assert result.health is ControllerHealth.DEGRADED
     assert result.action is StrategyAction.STOP
     assert result.last_error == "Solis telemetry is unavailable"
+    actuator.async_apply_safe_baseline.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize(
+    "issue",
+    (
+        "import rate source revision is in the future",
+        "export rate retrieval is in the future",
+        "export rate interval provenance is stale",
+    ),
+)
+async def test_future_or_interval_provenance_fault_fails_safe(
+    hass: HomeAssistant,
+    issue: str,
+) -> None:
+    source = yaml.safe_load(
+        (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
+    )
+    source["dynamic_control_enabled"] = True
+    coordinator = Coordinator(hass, integration_config.from_mapping(source))
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
+    actuator = policy(coordinator)
+    rates = (SimpleNamespace(end=NOW + timedelta(hours=1)),)
+    state = SimpleNamespace(state="10", attributes={})
+
+    with (
+        patch.object(Coordinator, "_now", return_value=NOW),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs.read_solis_state",
+            return_value=observation(),
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs._state",
+            return_value=state,
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs._attribute",
+            side_effect=(rates, rates),
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs.parse_fused_import_rates",
+            return_value=rates,
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs.parse_fused_export_rates",
+            return_value=rates,
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs._rate_source",
+            return_value=SimpleNamespace(),
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs._dispatch_source",
+            return_value=SimpleNamespace(),
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs.evaluate_cheap_windows",
+            return_value=SimpleNamespace(
+                coverage_status=CoverageStatus.UNAVAILABLE,
+                issues=(issue,),
+                windows=(),
+            ),
+        ),
+    ):
+        result = await coordinator._async_update_data()
+
+    assert result.health is ControllerHealth.FAIL_SAFE
+    assert result.action is StrategyAction.FAIL_SAFE
+    assert issue in (result.last_error or "")
+    actuator.async_apply_safe_baseline.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    (
+        ("rates", None),
+        ("rates", "unavailable"),
+        ("dispatch_source_last_retrieved", None),
+        ("dispatch_source_last_retrieved", "unknown"),
+    ),
+)
+async def test_missing_or_unavailable_tariff_attribute_is_degraded(
+    hass: HomeAssistant,
+    attribute: str,
+    value: object,
+) -> None:
+    source = yaml.safe_load(
+        (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
+    )
+    source["dynamic_control_enabled"] = True
+    coordinator = Coordinator(hass, integration_config.from_mapping(source))
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
+    actuator = policy(coordinator)
+    rates = (SimpleNamespace(end=NOW + timedelta(hours=1)),)
+    import_attributes = {
+        "rates": (),
+        "rate_source_last_retrieved": NOW.isoformat(),
+        "rate_source_entity_id": "sensor.import",
+        "dispatch_source_last_retrieved": NOW.isoformat(),
+        "dispatch_source_entity_id": "sensor.dispatch",
+    }
+    import_attributes[attribute] = value
+    export_attributes = {
+        "rates": (),
+        "rate_source_last_retrieved": NOW.isoformat(),
+        "rate_source_entity_id": "sensor.export",
+    }
+    states = (
+        SimpleNamespace(state="off", entity_id=coordinator.config.control_disable_guard_entity_id, attributes={}),
+        SimpleNamespace(
+            state="available",
+            entity_id=coordinator.config.tariff.import_rates_entity_id,
+            attributes=import_attributes,
+        ),
+        SimpleNamespace(
+            state="available",
+            entity_id=coordinator.config.tariff.export_rates_entity_id,
+            attributes=export_attributes,
+        ),
+        SimpleNamespace(
+            state="10",
+            entity_id=coordinator.config.cycle_discharge_duration_entity_id,
+            attributes={},
+        ),
+    )
+
+    with (
+        patch.object(Coordinator, "_now", return_value=NOW),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs.read_solis_state",
+            return_value=observation(),
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs._state",
+            side_effect=states,
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs.parse_fused_import_rates",
+            return_value=rates,
+        ),
+        patch(
+            "custom_components.house_battery_control.runtime_inputs.parse_fused_export_rates",
+            return_value=rates,
+        ),
+    ):
+        result = await coordinator._async_update_data()
+
+    assert result.health is ControllerHealth.DEGRADED
+    assert result.action is StrategyAction.STOP
+    assert "has no usable" in (result.last_error or "")
     actuator.async_apply_safe_baseline.assert_awaited_once_with()
 
 

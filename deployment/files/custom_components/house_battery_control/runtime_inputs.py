@@ -47,6 +47,18 @@ class RuntimeInvariantError(ValueError):
     """An input violates a structural or safety invariant."""
 
 
+_RECOVERABLE_COVERAGE_ISSUES = frozenset(
+    {
+        "dispatch source observation unavailable",
+        "dispatch source observation is stale",
+        "export rate source observation unavailable",
+        "export rate source observation is stale",
+        "import rate source observation unavailable",
+        "import rate source observation is stale",
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeInputs:
     strategy: StrategyInputs
@@ -77,8 +89,11 @@ async def async_read_runtime_inputs(
         raise RuntimeInvariantError(message)
     snapshot = solis.snapshot
 
-    import_state = _state(hass, config.tariff.import_rates_entity_id)
-    export_state = _state(hass, config.tariff.export_rates_entity_id)
+    try:
+        import_state = _state(hass, config.tariff.import_rates_entity_id)
+        export_state = _state(hass, config.tariff.export_rates_entity_id)
+    except ValueError as exc:
+        raise RuntimeUnavailable(str(exc), solis=solis) from exc
     cycle_duration = _cycle_duration(_state(hass, config.cycle_discharge_duration_entity_id))
     import_rates = parse_fused_import_rates(_attribute(import_state, "rates"))
     export_rates = parse_fused_export_rates(_attribute(export_state, "rates"))
@@ -97,6 +112,11 @@ async def async_read_runtime_inputs(
         charge_efficiency=config.battery.charge_efficiency,
         discharge_efficiency=config.battery.discharge_efficiency,
     )
+    if _coverage_is_recoverable(windows_result.coverage_status, windows_result.issues):
+        raise RuntimeUnavailable(
+            "tariff window input is temporarily unavailable: " + "; ".join(windows_result.issues),
+            solis=solis,
+        )
     if windows_result.coverage_status not in (CoverageStatus.COMPLETE, CoverageStatus.TRUSTED_EMPTY):
         raise ValueError("tariff window input is not trusted: " + "; ".join(windows_result.issues))
     windows = windows_result.windows
@@ -118,6 +138,11 @@ async def async_read_runtime_inputs(
         import_source=_rate_source(import_state, "rate_source_entity_id", "rate_source_last_retrieved"),
         dispatch_source=_dispatch_source(import_state),
     )
+    if _coverage_is_recoverable(trusted_import.coverage_status, trusted_import.issues):
+        raise RuntimeUnavailable(
+            "reserve tariff input is temporarily unavailable: " + "; ".join(trusted_import.issues),
+            solis=solis,
+        )
     if trusted_import.coverage_status is not CoverageStatus.COMPLETE:
         raise ValueError("reserve tariff input is not trusted: " + "; ".join(trusted_import.issues))
 
@@ -234,8 +259,18 @@ def _state(hass: HomeAssistant, entity_id: str) -> State:
 def _attribute(state: State, name: str) -> Any:
     value = state.attributes.get(name)
     if value in (None, "", STATE_UNKNOWN, STATE_UNAVAILABLE):
-        raise ValueError(f"{state.entity_id} has no usable {name} attribute")
+        raise RuntimeUnavailable(f"{state.entity_id} has no usable {name} attribute")
     return value
+
+
+def _coverage_is_recoverable(status: CoverageStatus, issues: Sequence[str]) -> bool:
+    """Accept only explicit external absence or stale-source observations."""
+
+    return (
+        status is CoverageStatus.UNAVAILABLE
+        and bool(issues)
+        and all(issue in _RECOVERABLE_COVERAGE_ISSUES for issue in issues)
+    )
 
 
 def _parse_datetime(value: object) -> datetime:

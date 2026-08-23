@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
 
 from custom_components.house_battery_control.octopus_windows import (
     AdjustedRateInterval,
@@ -11,10 +14,12 @@ from custom_components.house_battery_control.octopus_windows import (
     evaluate_trusted_import_rates,
 )
 from custom_components.house_battery_control.runtime_inputs import (
+    RuntimeUnavailable,
     _cycle_duration,
     _runtime_powers,
     _slot_start,
     _solis_failure_is_transient,
+    async_read_runtime_inputs,
 )
 from custom_components.house_battery_control.solis_reader import read_solis_state
 from custom_components.house_battery_control.tests.test_solis_reader import NOW, fixture
@@ -130,3 +135,46 @@ def test_stale_bonus_dispatch_is_not_usable_for_reserve() -> None:
         dispatch_source=DispatchSourceObservation(NOW - timedelta(hours=1), "sensor.dispatch"),
     )
     assert result.coverage_status is CoverageStatus.UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_stale_dispatch_window_is_a_recoverable_runtime_failure(hass) -> None:
+    from pathlib import Path
+    import yaml
+
+    from custom_components.house_battery_control.config import from_mapping
+    from custom_components.house_battery_control.strategy import CycleState
+
+    source = yaml.safe_load((Path(__file__).parents[3] / "house_battery_control.yaml").read_text())
+    source["dynamic_control_enabled"] = True
+    config = from_mapping(source)
+    hass.states.async_set(config.control_disable_guard_entity_id, "off")
+
+    state = SimpleNamespace(state="10", attributes={})
+    import_rates = (SimpleNamespace(end=NOW + timedelta(hours=1)),)
+    export_rates = (SimpleNamespace(end=NOW + timedelta(hours=1)),)
+    solis = SimpleNamespace(health=__import__(
+        "custom_components.house_battery_control.contracts", fromlist=["ControllerHealth"]
+    ).ControllerHealth.HEALTHY, snapshot=SimpleNamespace())
+
+    with (
+        patch("custom_components.house_battery_control.runtime_inputs.read_solis_state", return_value=solis),
+        patch("custom_components.house_battery_control.runtime_inputs._state", return_value=state),
+        patch("custom_components.house_battery_control.runtime_inputs._attribute", side_effect=(import_rates, export_rates)),
+        patch("custom_components.house_battery_control.runtime_inputs.parse_fused_import_rates", return_value=import_rates),
+        patch("custom_components.house_battery_control.runtime_inputs.parse_fused_export_rates", return_value=export_rates),
+        patch("custom_components.house_battery_control.runtime_inputs._rate_source", return_value=SimpleNamespace()),
+        patch("custom_components.house_battery_control.runtime_inputs._dispatch_source", return_value=SimpleNamespace()),
+        patch("custom_components.house_battery_control.runtime_inputs.evaluate_cheap_windows", return_value=SimpleNamespace(
+            coverage_status=CoverageStatus.UNAVAILABLE,
+            issues=("dispatch source observation is stale",),
+            windows=(),
+        )),
+    ):
+        with pytest.raises(RuntimeUnavailable, match="dispatch source observation is stale"):
+            await async_read_runtime_inputs(
+                hass,
+                config,
+                now=NOW,
+                cycle_state=CycleState.IDLE,
+            )
