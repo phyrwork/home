@@ -25,7 +25,6 @@ from .solis_state import (
     IssueSeverity,
     SolisIssue,
     SolisPersistentState,
-    SolisSlotCapability,
     SolisSlotDirectionState,
     SolisSlotState,
     SolisStateReadResult,
@@ -153,12 +152,11 @@ class SolisStateReader:
             self._critical("battery_voltage_invalid", voltage_id, "battery voltage must be positive")
             voltage = None
 
-        soc_last_updated = self._observation_timestamp(soc_state, soc_id, "SOC")
-        power_last_updated = (
+        # Observation timestamps remain part of the safety validation boundary,
+        # even though they are not retained in the normalized telemetry value.
+        self._observation_timestamp(soc_state, soc_id, "SOC")
+        if power_id is not None:
             self._observation_timestamp(power_state, power_id, "battery power")
-            if power_id is not None
-            else None
-        )
         device_timestamp: datetime | None = None
         timestamp_id = config.telemetry.device_timestamp_entity_id
         timestamp_state = self._state(timestamp_id)
@@ -184,9 +182,6 @@ class SolisStateReader:
             battery_power_kw=power,
             battery_voltage_v=voltage,
             device_timestamp=device_timestamp,
-            home_assistant_last_updated=soc_last_updated,
-            soc_last_updated=soc_last_updated,
-            power_last_updated=power_last_updated,
         )
 
     def _read_persistent(self, config: SolisConfig) -> SolisPersistentState | None:
@@ -219,8 +214,10 @@ class SolisStateReader:
                 "storage mode is unavailable or not advertised",
             )
 
-        switch_values: dict[str, bool | None] = {}
-        switch_values["allow_grid_charging"] = self._switch(persistent.allow_grid_charging_entity_id)
+        # The permission switch is still read and validated because an
+        # unavailable permission observation must fail closed; its value is
+        # consumed by the policy through the configured entity directly.
+        allow_grid_charging = self._switch(persistent.allow_grid_charging_entity_id)
 
         inverter_time_id = persistent.inverter_time_entity_id
         inverter_time_state = self._state(inverter_time_id)
@@ -247,7 +244,7 @@ class SolisStateReader:
         reserve_soc = self._capability(protection.battery_reserve_soc_entity_id, "%", "battery_reserve_soc")
 
         if (
-            switch_values["allow_grid_charging"] is None
+            allow_grid_charging is None
             or inverter_time is None
             or any(
                 value is None
@@ -261,8 +258,6 @@ class SolisStateReader:
             return None
         return SolisPersistentState(
             storage_mode=storage_mode,
-            storage_mode_options=options,
-            allow_grid_charging=switch_values["allow_grid_charging"],  # type: ignore[arg-type]
             inverter_time=inverter_time,
             battery_reserve=battery_reserve,  # type: ignore[arg-type]
             battery_reserve_soc=reserve_soc,  # type: ignore[arg-type]
@@ -308,14 +303,7 @@ class SolisStateReader:
                     )
             if charge is None or discharge is None:
                 continue
-            capability = SolisSlotCapability(
-                physical_slot=slot.physical_slot,
-                charge_current=charge.current,
-                charge_target_soc=charge.target_soc,
-                discharge_current=discharge.current,
-                discharge_target_soc=discharge.target_soc,
-            )
-            result.append(SolisSlotState(slot.physical_slot, charge, discharge, capability))
+            result.append(SolisSlotState(slot.physical_slot, charge, discharge))
 
         if len(enabled_directions) > 1:
             self._critical(
@@ -353,10 +341,10 @@ class SolisStateReader:
             )
             time_text = ""
             start = end = None
-            crosses_midnight = False
+            _crosses_midnight = False
         else:
             time_text = time_value
-            start, end, crosses_midnight = self._parse_slot_time(
+            start, end, _crosses_midnight = self._parse_slot_time(
                 time_text, bool(enabled), config.time_entity_id
             )
         current = self._capability(
@@ -375,9 +363,6 @@ class SolisStateReader:
             owner=config.owner,
             enabled=enabled,
             time_text=time_text,
-            start=start,
-            end=end,
-            crosses_midnight=crosses_midnight,
             current=current,
             target_soc=target_soc,
         ), enabled

@@ -5,7 +5,7 @@ state into these immutable values and records unsafe observations as issues.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 
@@ -54,31 +54,15 @@ class SolisTelemetry:
     battery_power_kw: Decimal
     battery_voltage_v: Decimal
     device_timestamp: datetime | None
-    home_assistant_last_updated: datetime | None
-    soc_last_updated: datetime | None = None
-    power_last_updated: datetime | None = None
 
 @dataclass(frozen=True, slots=True)
 class SolisPersistentState:
     """Observed persistent and protection controls."""
 
     storage_mode: str
-    storage_mode_options: tuple[str, ...]
-    allow_grid_charging: bool
     inverter_time: datetime
     battery_reserve: bool
     battery_reserve_soc: ObservedCapability
-
-
-@dataclass(frozen=True, slots=True)
-class SolisSlotCapability:
-    """Capabilities for both directions of one physical Solis slot."""
-
-    physical_slot: int
-    charge_current: ObservedCapability
-    charge_target_soc: ObservedCapability
-    discharge_current: ObservedCapability
-    discharge_target_soc: ObservedCapability
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,9 +74,6 @@ class SolisSlotDirectionState:
     owner: SolisSlotOwner
     enabled: bool
     time_text: str
-    start: time | None
-    end: time | None
-    crosses_midnight: bool
     current: ObservedCapability
     target_soc: ObservedCapability
 
@@ -104,7 +85,6 @@ class SolisSlotState:
     physical_slot: int
     charge: SolisSlotDirectionState
     discharge: SolisSlotDirectionState
-    capability: SolisSlotCapability
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +115,6 @@ __all__ = [
     "IssueSeverity",
     "SolisIssue",
     "SolisPersistentState",
-    "SolisSlotCapability",
     "SolisSlotDirectionState",
     "SolisSlotState",
     "SolisStateReadResult",
