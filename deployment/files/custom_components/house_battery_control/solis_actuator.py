@@ -245,7 +245,11 @@ class SolisSlotActuator:
         if not _capability_accepts(direction_state.target_soc, intent.target_soc):
             return "target SOC is outside the observed capability"
         try:
-            schedule = encode_schedule(intent.start, intent.end, snapshot.persistent.inverter_time.tzinfo)
+            # Intent times are aware instants (UTC in the runtime model).  The
+            # inverter datetime entity is an observation of the device clock,
+            # not the timezone boundary for serialisation: Solis expects the
+            # configured inverter wall-clock timezone.
+            schedule = encode_schedule(intent.start, intent.end, self.inverter_timezone)
         except ValueError as exc:
             return str(exc)
         effective_end = min(intent.end, intent.expiry)
@@ -329,7 +333,7 @@ class SolisSlotActuator:
                 desired_end = schedule.split("-")[1]
                 desired_end_time = datetime.strptime(desired_end, "%H:%M").time()
                 local_now = snapshot.persistent.inverter_time.astimezone(
-                    snapshot.persistent.inverter_time.tzinfo
+                    self.inverter_timezone
                 ).time()
                 observed_start_minutes = observed_start.hour * 60 + observed_start.minute
                 observed_end_minutes = observed_end.hour * 60 + observed_end.minute

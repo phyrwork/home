@@ -113,7 +113,10 @@ soon as the health state is published.
 - A second controlled restart produced no house-battery listener-removal error,
   Solis experimental-platform timeout, or Solis Cloud Control retry error.
 - Slot 2 forced discharge is live from 16:54–22:30 at 100 A with a 19% target;
-  schedule times use the inverter's authoritative UTC datetime.
+  runtime schedule boundaries are aware UTC instants, while Solis `HH:MM`
+  fields are converted to and interpreted in the configured inverter/site local
+  timezone. The coordinator currently supplies HA's configured
+  `Europe/London` timezone for that boundary.
 - Solis battery power −4917 W and Octopus current demand −4104 W confirmed
   forced export. Grid Peak Shaving at 100 W is compatible; the actual blocker
   was native Grid Feed in Power Limit at 0 W / 0 A, corrected to 9900 W / 52 A.

@@ -166,7 +166,10 @@ present.
 - Grid Peak Shaving at 100 W is compatible with forced export. The native Grid
   Feed in Power Limit had been enabled at 0 W / 0 A; commissioning it to
   9900 W / 52 A restored export. EMS is disabled and output power is 100%.
-- Schedule times follow the inverter's authoritative UTC datetime. Using HA's
-  Europe/London timezone caused a one-hour offset.
+- Runtime schedule boundaries are aware UTC instants. Solis `HH:MM` fields are
+  converted to and interpreted in the configured inverter local timezone. The
+  coordinator currently supplies HA's configured timezone and therefore assumes
+  HA and the inverter share the site timezone (`Europe/London`). The earlier
+  one-hour offset came from serialising UTC wall-clock fields at this boundary.
 - HA export and peak-shaving switch entities are non-authoritative/unavailable;
   persistent settings remain one-time SolisCloud commissioning.

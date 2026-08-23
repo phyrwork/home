@@ -122,8 +122,10 @@ nonexistent across a daylight-saving transition. Do not guess a fold.
 
 ## Schedule encoding
 
-Convert the active aware interval to the configured inverter local timezone and
-encode exact `HH:MM-HH:MM` text.
+The runtime represents intent boundaries as aware UTC instants. At the Solis
+API boundary, convert the interval to the explicitly configured inverter IANA
+timezone and encode exact `HH:MM-HH:MM` wall-clock text. The inverter datetime
+entity is readback evidence for clock skew, not a replacement timezone source.
 
 - Preserve a valid cross-midnight interval with an end earlier than its start.
 - Never encode an active start equal to end.

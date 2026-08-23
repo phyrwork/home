@@ -112,8 +112,11 @@ are not runtime writes:
 - Maximum feed-in power: unlimited within the DNO-approved export limit (one-time commissioned).
 - All charge and discharge slots were initially disabled. The runtime owns and
   changes them dynamically; live verification used Slot 2 at 16:54–22:30,
-  100 A and a 19% target. Schedule encoding uses the inverter's authoritative
-  UTC datetime because HA Europe/London introduced a one-hour offset.
+  100 A and a 19% target. Runtime schedule boundaries are aware UTC instants;
+  at the Solis boundary, `HH:MM` fields are converted to and interpreted in the
+  configured inverter local timezone. The coordinator currently supplies HA's
+  configured timezone for this boundary, which assumes HA and the inverter use
+  the same site timezone (`Europe/London`).
 
 Maximum grid power means the maximum power that may be drawn from the grid.
 Maximum feed-in power means the maximum power that may be exported.

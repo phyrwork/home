@@ -184,7 +184,7 @@ async def test_success_disables_before_configuring_and_enables_one_slot():
 
 
 @pytest.mark.asyncio
-async def test_schedule_uses_authoritative_inverter_clock_timezone():
+async def test_cheap_charge_schedule_uses_configured_inverter_timezone_in_bst():
     summer_now = datetime(2026, 8, 23, 16, 35, tzinfo=timezone.utc)
     controller, _ha, observation = actuator(
         now=summer_now,
@@ -195,7 +195,69 @@ async def test_schedule_uses_authoritative_inverter_clock_timezone():
     )
 
     assert not isinstance(preflight, str)
-    assert preflight[2] == "16:30-17:30"
+    assert preflight[2] == "17:30-18:30"
+
+
+@pytest.mark.asyncio
+async def test_reserve_discharge_schedule_uses_configured_inverter_timezone_in_bst():
+    summer_now = datetime(2026, 8, 23, 19, 35, tzinfo=timezone.utc)
+    controller, _ha, observation = actuator(
+        now=summer_now,
+        inverter_timezone=ZoneInfo("Europe/London"),
+    )
+    preflight = controller._preflight(
+        reserve_intent(
+            start=summer_now - timedelta(minutes=5),
+            end=summer_now + timedelta(minutes=55),
+            expiry=summer_now + timedelta(hours=1),
+        ),
+        observation,
+        summer_now,
+    )
+
+    assert not isinstance(preflight, str)
+    assert preflight[2] == "20:30-21:30"
+
+
+@pytest.mark.asyncio
+async def test_schedule_uses_configured_inverter_timezone_in_winter():
+    winter_now = datetime(2026, 1, 1, 19, 35, tzinfo=timezone.utc)
+    controller, _ha, observation = actuator(
+        now=winter_now,
+        inverter_timezone=ZoneInfo("Europe/London"),
+    )
+    preflight = controller._preflight(
+        intent_at(winter_now), observation, winter_now
+    )
+
+    assert not isinstance(preflight, str)
+    assert preflight[2] == "19:30-20:30"
+
+
+@pytest.mark.asyncio
+async def test_utc_aware_inverter_readback_is_interpreted_in_configured_timezone():
+    summer_now = datetime(2026, 8, 23, 19, 35, tzinfo=timezone.utc)
+    controller, ha, observation = actuator(
+        now=summer_now,
+        inverter_timezone=ZoneInfo("Europe/London"),
+    )
+    first = await controller.async_apply_intent(
+        intent_at(summer_now), observation, now=summer_now
+    )
+    assert first.status is SlotActuationStatus.APPLIED
+    ha.calls.clear()
+
+    current_observation = read_solis_state(
+        controller.config, ha.states, summer_now + timedelta(seconds=30)
+    )
+    second = await controller.async_apply_intent(
+        intent_at(summer_now), current_observation,
+        now=summer_now + timedelta(seconds=30),
+    )
+
+    assert second.status is SlotActuationStatus.APPLIED
+    assert second.results == ()
+    assert ha.calls == []
 
 
 @pytest.mark.asyncio

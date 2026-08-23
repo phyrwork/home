@@ -49,8 +49,8 @@ solis:
   # its maximum grid power is 100 W (0.1 kW). Grid Feed in Power Limit is
   # enabled at the native maxima (9900 W / 52 A). The HA switches for these
   # shared settings are non-authoritative/unavailable and are intentionally not
-  # runtime-managed. The inverter datetime is authoritative for slot timezone;
-  # do not use HA's Europe/London timezone when applying schedules.
+  # runtime-managed. Runtime intent times are UTC instants; the configured
+  # inverter IANA timezone is authoritative at the Solis schedule boundary.
 
   # Every physical slot is mapped for reconciliation and cleanup.  Reserved
   # directions are intentionally not enabled by the MVP controller.
