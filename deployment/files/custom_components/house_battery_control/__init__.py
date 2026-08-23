@@ -1,5 +1,6 @@
 """Control the Garage battery from tariff and forecast inputs."""
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import voluptuous as vol
@@ -27,21 +28,36 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     hass.data[DOMAIN] = coordinator
     await async_load_platform(hass, "sensor", DOMAIN, {}, config)
 
+    listeners: list[Callable[[], None]] = []
+
+    def listen_once(
+        event_type: str,
+        listener: Callable[[Event[Any]], Awaitable[None]],
+    ) -> None:
+        remove: Callable[[], None] | None = None
+
+        async def wrapped(event: Event[Any]) -> None:
+            if remove is not None:
+                try:
+                    listeners.remove(remove)
+                except ValueError:
+                    pass
+            await listener(event)
+
+        remove = hass.bus.async_listen_once(event_type, wrapped)
+        listeners.append(remove)
+
     async def async_start(_event: Event[dict[str, object]] | None = None) -> None:
         await coordinator.async_start()
 
     async def async_stop(_event: Event[dict[str, object]]) -> None:
         await _async_teardown(hass, coordinator)
 
-    stop_listener = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, async_stop)
-    listeners = [stop_listener]
-    hass.data[f"{DOMAIN}.stop_listener"] = stop_listener
+    listen_once(EVENT_HOMEASSISTANT_STOP, async_stop)
     if hass.state is CoreState.running:
         await async_start()
     else:
-        started_listener = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, async_start)
-        listeners.append(started_listener)
-        hass.data[f"{DOMAIN}.started_listener"] = started_listener
+        listen_once(EVENT_HOMEASSISTANT_STARTED, async_start)
     hass.data[f"{DOMAIN}.listeners"] = listeners
     return True
 
@@ -55,8 +71,6 @@ async def _async_teardown(hass: HomeAssistant, coordinator: Coordinator) -> None
     await coordinator.async_stop()
     if hass.data.get(DOMAIN) is coordinator:
         hass.data.pop(DOMAIN, None)
-        hass.data.pop(f"{DOMAIN}.stop_listener", None)
-        hass.data.pop(f"{DOMAIN}.started_listener", None)
 
 
 __all__ = ["CONFIG_SCHEMA", "async_setup"]

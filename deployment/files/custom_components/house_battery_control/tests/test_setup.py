@@ -26,6 +26,34 @@ def coordinator() -> MagicMock:
     return instance
 
 
+def strict_one_shot_remove_check(hass: HomeAssistant, monkeypatch) -> list[str]:
+    """Record teardown attempts to remove an already-fired one-shot listener."""
+
+    original_listen_once = hass.bus.async_listen_once
+    removed_after_fire: list[str] = []
+
+    def listen_once(event_bus, event_type, listener):
+        fired = False
+
+        async def tracked_listener(event):
+            nonlocal fired
+            fired = True
+            await listener(event)
+
+        remove = original_listen_once(event_type, tracked_listener)
+
+        def strict_remove() -> None:
+            if fired:
+                removed_after_fire.append(event_type)
+                return
+            remove()
+
+        return strict_remove
+
+    monkeypatch.setattr(type(hass.bus), "async_listen_once", listen_once)
+    return removed_after_fire
+
+
 async def test_running_home_assistant_starts_coordinator(hass: HomeAssistant) -> None:
     instance = coordinator()
     with (
@@ -51,6 +79,48 @@ async def test_start_is_deferred_until_home_assistant_started(hass: HomeAssistan
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
     await hass.async_block_till_done()
     instance.async_start.assert_awaited_once_with()
+
+
+async def test_started_then_stop_does_not_remove_fired_one_shot_listeners(
+    hass: HomeAssistant,
+    monkeypatch,
+) -> None:
+    hass.set_state(CoreState.starting)
+    instance = coordinator()
+    removed_after_fire = strict_one_shot_remove_check(hass, monkeypatch)
+    with (
+        patch("custom_components.house_battery_control.Coordinator", return_value=instance),
+        patch("custom_components.house_battery_control.async_load_platform", AsyncMock()),
+    ):
+        assert await async_setup(hass, {DOMAIN: config()})
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+
+    assert removed_after_fire == []
+    instance.async_start.assert_awaited_once_with()
+    instance.async_stop.assert_awaited_once_with()
+
+
+async def test_running_stop_does_not_remove_fired_one_shot_listener(
+    hass: HomeAssistant,
+    monkeypatch,
+) -> None:
+    instance = coordinator()
+    removed_after_fire = strict_one_shot_remove_check(hass, monkeypatch)
+    with (
+        patch("custom_components.house_battery_control.Coordinator", return_value=instance),
+        patch("custom_components.house_battery_control.async_load_platform", AsyncMock()),
+    ):
+        assert await async_setup(hass, {DOMAIN: config()})
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+
+    assert removed_after_fire == []
+    instance.async_stop.assert_awaited_once_with()
 
 
 async def test_stop_unsubscribes_and_removes_coordinator(hass: HomeAssistant) -> None:
