@@ -468,7 +468,7 @@ class SolisSlotActuator:
         )
 
     async def async_disable_all(self) -> DisableAllResult:
-        """Disable every direction, independently of health or commissioning."""
+        """Disable every direction, independently of controller health."""
 
         async with self.orchestration_lock:
             self.last_cancellation_result = None

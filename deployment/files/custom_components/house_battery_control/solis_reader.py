@@ -2,7 +2,7 @@
 
 The adapter deliberately has no Home Assistant imports.  Home Assistant's
 state registry (or a deterministic fake in tests) is supplied by the caller,
-which keeps this boundary usable during offline commissioning and testing.
+which keeps this boundary independently testable.
 """
 
 from collections.abc import Mapping
