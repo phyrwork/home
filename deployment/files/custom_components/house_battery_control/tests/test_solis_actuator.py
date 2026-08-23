@@ -1,5 +1,6 @@
 """Focused tests for the live Solis slot safety boundary."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -11,7 +12,7 @@ import yaml
 from custom_components.house_battery_control import config
 from custom_components.house_battery_control.contracts import SlotDirection, SlotIntent, SlotOwner
 from custom_components.house_battery_control.ha_writer import HomeAssistantWriter
-from custom_components.house_battery_control.solis_actuator import SlotActuationStatus, SolisSlotActuator, encode_schedule
+from custom_components.house_battery_control.solis_actuator import DisableAllResult, SlotActuationStatus, SolisSlotActuator, encode_schedule
 from custom_components.house_battery_control.solis_reader import read_solis_state
 
 
@@ -166,6 +167,49 @@ async def test_disable_all_turns_off_every_enabled_direction():
     assert result.safe
     assert len([call for call in ha.calls if call[1] == "turn_off"]) == 12
     assert all(ha.states[entity_id]["state"] == "off" for entity_id in enable_ids(controller))
+
+
+@pytest.mark.asyncio
+async def test_cancelled_disable_cleanup_has_a_hard_deadline(monkeypatch):
+    controller, _ha, _observation = actuator()
+    first_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    calls = 0
+
+    async def disable_all(results, *, deadline=None):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            await asyncio.Event().wait()
+        cleanup_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # Simulate a service awaitable which does not cooperate with
+            # cancellation.  The caller still has to respect its deadline.
+            await release_cleanup.wait()
+        return DisableAllResult(tuple(results), False)
+
+    controller._disable_all_once = disable_all
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.solis_actuator.CANCELLATION_CLEANUP_TIMEOUT",
+        timedelta(seconds=0.02),
+    )
+    task = asyncio.create_task(controller.async_disable_all())
+    await first_started.wait()
+    task.cancel("original")
+    await cleanup_started.wait()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(asyncio.shield(task), timeout=0.2)
+
+    assert controller.last_cancellation_result is not None
+    assert not controller.last_cancellation_result.all_directions_proven_off
+    assert not controller.orchestration_lock._lock.locked()
+    release_cleanup.set()
+    await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio

@@ -501,6 +501,148 @@ async def test_cancellation_shields_bounded_async_listener_cleanup() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("awaitable_kind", ("future", "task"))
+async def test_listener_cleanup_accepts_future_or_task_awaitable(
+    awaitable_kind,
+) -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    original_listen = ha.async_listen_state_change
+    if awaitable_kind == "future":
+        completed = asyncio.get_running_loop().create_future()
+        completed.set_result(None)
+    else:
+        completed = asyncio.create_task(asyncio.sleep(0))
+
+    def listen(entity_id, callback):
+        remove_sync = original_listen(entity_id, callback)
+
+        def remove():
+            remove_sync()
+            return completed
+
+        return remove
+
+    ha.async_listen_state_change = listen
+    ha.on_call = lambda _d, _s, _data: ha.set_state(
+        "switch.a", "on", updated=NOW + timedelta(seconds=1), context_id="service"
+    )
+
+    result = await HomeAssistantWriter(ha).async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True)
+    )
+
+    assert result.outcome is WriteOutcome.APPLIED_HA_READBACK
+    assert ha.listeners["switch.a"] == []
+
+
+@pytest.mark.asyncio
+async def test_synchronous_listener_cleanup_contains_base_exception() -> None:
+    class CleanupAbort(BaseException):
+        pass
+
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    original_listen = ha.async_listen_state_change
+
+    def listen(entity_id, callback):
+        remove_sync = original_listen(entity_id, callback)
+
+        def remove():
+            remove_sync()
+            raise CleanupAbort
+
+        return remove
+
+    ha.async_listen_state_change = listen
+    ha.on_call = lambda _d, _s, _data: ha.set_state(
+        "switch.a", "on", updated=NOW + timedelta(seconds=1), context_id="service"
+    )
+
+    result = await HomeAssistantWriter(ha).async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True)
+    )
+
+    assert result.outcome is WriteOutcome.APPLIED_HA_READBACK
+    assert ha.listeners["switch.a"] == []
+
+
+@pytest.mark.asyncio
+async def test_synchronous_listener_cleanup_preserves_cancelled_error() -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    original_listen = ha.async_listen_state_change
+    original = asyncio.CancelledError("synchronous cleanup cancellation")
+
+    def listen(entity_id, callback):
+        remove_sync = original_listen(entity_id, callback)
+
+        def remove():
+            remove_sync()
+            raise original
+
+        return remove
+
+    ha.async_listen_state_change = listen
+    ha.on_call = lambda _d, _s, _data: ha.set_state(
+        "switch.a", "on", updated=NOW + timedelta(seconds=1), context_id="service"
+    )
+    writer = HomeAssistantWriter(ha)
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await writer.async_write(
+            SwitchWriteRequest(precondition(ha, "switch.a"), True)
+        )
+
+    assert caught.value is original
+    assert ha.listeners["switch.a"] == []
+    assert not writer._lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_noncooperative_service_cannot_extend_timeout(
+    monkeypatch,
+) -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def noncooperative_call(*_args, **_kwargs):
+        ha.calls.append(("switch", "turn_on", {"entity_id": "switch.a"}))
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            await release.wait()
+
+    ha.async_call = noncooperative_call
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_CALL_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_TIMEOUT_CONFIRMATION",
+        timedelta(seconds=0.01),
+    )
+    writer = HomeAssistantWriter(ha)
+
+    result = await asyncio.wait_for(
+        writer.async_write(
+            SwitchWriteRequest(precondition(ha, "switch.a"), True)
+        ),
+        timeout=0.2,
+    )
+
+    assert result.outcome is WriteOutcome.SERVICE_TIMEOUT
+    assert cancellation_seen.is_set()
+    assert ha.listeners["switch.a"] == []
+    assert not writer._lock.locked()
+    release.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
 async def test_cancellation_during_service_timeout_reconciliation_is_bounded(
     monkeypatch,
 ) -> None:

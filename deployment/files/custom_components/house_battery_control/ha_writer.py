@@ -205,7 +205,29 @@ class HomeAssistantWriter:
         result = call(request.domain, service, data, blocking=True)
         if not inspect.isawaitable(result):
             raise TypeError("Home Assistant service call must return an awaitable")
-        await asyncio.wait_for(result, timeout)
+        service_future = asyncio.ensure_future(result)
+        try:
+            done, _pending = await asyncio.wait((service_future,), timeout=timeout)
+        except asyncio.CancelledError:
+            if service_future.done():
+                try:
+                    service_future.result()
+                except asyncio.CancelledError as service_cancellation:
+                    raise service_cancellation
+                except BaseException:
+                    pass
+            service_future.cancel()
+            service_future.add_done_callback(_consume_future)
+            raise
+        if not done:
+            # ``wait_for`` waits for cancellation to finish and can therefore
+            # exceed its timeout when an awaitable suppresses cancellation.
+            # The service call is ambiguous after this point: cancel it, but
+            # detach it so the writer's absolute deadline remains hard.
+            service_future.cancel()
+            service_future.add_done_callback(_consume_future)
+            raise asyncio.TimeoutError
+        service_future.result()
 
     def _listen(self, entity_id: str, callback: Callable[..., object]) -> Callable[[], object]:
         listen = getattr(self.hass, "async_listen_state_change", None)
@@ -476,19 +498,14 @@ async def _cleanup_listener(
 
     try:
         result = remove()
-    except Exception:
+    except asyncio.CancelledError as exc:
+        return exc
+    except BaseException:
         return None
     if not inspect.isawaitable(result):
         return None
-    cleanup_task = asyncio.create_task(result)
-
-    def consume(task: asyncio.Task[object]) -> None:
-        try:
-            task.result()
-        except BaseException:
-            pass
-
-    cleanup_task.add_done_callback(consume)
+    cleanup_task = asyncio.ensure_future(result)
+    cleanup_task.add_done_callback(_consume_future)
     loop = asyncio.get_running_loop()
     cleanup_deadline = loop.time() + HA_LISTENER_CLEANUP_TIMEOUT.total_seconds()
     if deadline is not None:
@@ -500,19 +517,29 @@ async def _cleanup_listener(
             cleanup_task.cancel()
             break
         try:
-            await asyncio.wait_for(asyncio.shield(cleanup_task), remaining)
+            done, _pending = await asyncio.wait((cleanup_task,), timeout=remaining)
+            if not done:
+                cleanup_task.cancel()
+                break
         except asyncio.CancelledError as exc:
             cancellation = cancellation or exc
             current = asyncio.current_task()
             if current is not None:
                 while current.cancelling():
                     current.uncancel()
-        except asyncio.TimeoutError:
+        except BaseException:
             cleanup_task.cancel()
             break
-        except Exception:
-            break
     return cancellation
+
+
+def _consume_future(future: asyncio.Future[object]) -> None:
+    """Consume a detached service or cleanup future."""
+
+    try:
+        future.result()
+    except BaseException:
+        pass
 
 
 class WriteTransaction:

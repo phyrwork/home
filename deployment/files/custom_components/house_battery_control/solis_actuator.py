@@ -36,6 +36,7 @@ def _remaining_deadline(deadline: float) -> float:
 
 
 MAXIMUM_INVERTER_CLOCK_SKEW = timedelta(minutes=1)
+CANCELLATION_CLEANUP_TIMEOUT = timedelta(seconds=60)
 
 _TIME_TEXT = re.compile(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
 
@@ -489,13 +490,19 @@ class SolisSlotActuator:
         actuation_results: list[WriteResult],
     ) -> None:
         cleanup_results: list[WriteResult] = []
-        cleanup_task = asyncio.create_task(self._disable_all_once(cleanup_results))
-        cleanup = await _await_cleanup(cleanup_task)
+        deadline = (
+            asyncio.get_running_loop().time()
+            + CANCELLATION_CLEANUP_TIMEOUT.total_seconds()
+        )
+        cleanup_task = asyncio.create_task(
+            self._disable_all_once(cleanup_results, deadline=deadline)
+        )
+        cleanup = await _await_cleanup(cleanup_task, deadline=deadline)
         self.last_cancellation_result = CancellationDiagnostic(
             original_exception=original,
             actuation_results=tuple(actuation_results),
             cleanup_results=tuple(cleanup_results),
-            all_directions_proven_off=cleanup.safe,
+            all_directions_proven_off=cleanup is not None and cleanup.safe,
         )
 
     async def async_apply_intent(
@@ -620,18 +627,41 @@ class SolisSlotActuator:
         return observed
 
 
-async def _await_cleanup(task: asyncio.Task[object]) -> object:
-    """Shield cleanup through repeated cancellation delivery."""
+async def _await_cleanup(
+    task: asyncio.Task[DisableAllResult], *, deadline: float
+) -> DisableAllResult | None:
+    """Wait through repeated cancellation, but never past the hard deadline."""
 
     current = asyncio.current_task()
     while not task.done():
+        remaining = _remaining_deadline(deadline)
+        if remaining <= 0:
+            break
         try:
-            await asyncio.shield(task)
+            done, _pending = await asyncio.wait((task,), timeout=remaining)
+            if not done:
+                break
         except asyncio.CancelledError:
             if current is not None:
-                current.uncancel()
-            continue
-    return await task
+                while current.cancelling():
+                    current.uncancel()
+    if not task.done():
+        task.cancel()
+        task.add_done_callback(_consume_cleanup_task)
+        return None
+    try:
+        return task.result()
+    except BaseException:
+        return None
+
+
+def _consume_cleanup_task(task: asyncio.Task[DisableAllResult]) -> None:
+    """Consume a cleanup task detached at its hard deadline."""
+
+    try:
+        task.result()
+    except BaseException:
+        pass
 
 
 __all__ = [
