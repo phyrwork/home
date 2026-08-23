@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 from pathlib import Path
 
 import yaml
-from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 
@@ -103,7 +103,7 @@ def test_sensors_report_disabled_snapshot(hass: HomeAssistant) -> None:
     for sensor in (energy, reserve_target, reserve_balance):
         assert sensor.device_class is SensorDeviceClass.ENERGY
         assert sensor.native_unit_of_measurement is UnitOfEnergy.KILO_WATT_HOUR
-        assert sensor.state_class is SensorStateClass.MEASUREMENT
+        assert sensor.state_class is None
         assert sensor.suggested_display_precision == 2
 
 

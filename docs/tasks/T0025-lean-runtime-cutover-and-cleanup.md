@@ -37,6 +37,15 @@ consumer.
 - Remove obsolete Home Assistant helpers and configuration.
 - Keep diagnostics to heartbeat, health, current action, reserve, and last error.
 
+## Helper ownership
+
+- External IaC owns the control-disable guard.
+- The cycle-duration helper, watchdog/script, and fused Octopus sensors remain
+  external inputs.
+- Coordinator diagnostics remain owned by this integration.
+- The explicit slot list is intentionally duplicated for safety independence;
+  its coverage and reconciliation are tested.
+
 ## Boundaries
 
 - This is the serialized integration hotspot and is integrated only in the main
