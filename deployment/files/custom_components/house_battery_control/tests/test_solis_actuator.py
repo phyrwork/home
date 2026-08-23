@@ -241,9 +241,10 @@ async def test_active_reserve_schedule_with_earlier_start_is_a_noop():
     first = await controller.async_apply_intent(reserve_intent(), observation, now=NOW)
     assert first.status is SlotActuationStatus.APPLIED
     ha.calls.clear()
-    ha.states[controller.config.persistent.inverter_time_entity_id]["state"] = (
-        NOW + timedelta(minutes=5)
-    ).isoformat()
+    ha.states[controller.config.persistent.inverter_time_entity_id].update(
+        state=(NOW + timedelta(minutes=5)).isoformat(),
+        last_updated=NOW + timedelta(minutes=5),
+    )
     current_observation = read_solis_state(
         controller.config, ha.states, NOW + timedelta(minutes=5)
     )
