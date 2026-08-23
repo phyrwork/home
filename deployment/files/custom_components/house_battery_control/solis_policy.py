@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import datetime, timedelta, tzinfo
 from decimal import Decimal, ROUND_CEILING
 
 from .contracts import ControllerHealth, SlotIntent, StorageMode
@@ -18,11 +18,26 @@ from .solis_actuator import (
 )
 from .solis_config import SolisConfig
 from .solis_state import SolisStateReadResult
-from .write_contracts import NumberWriteRequest, SelectWriteRequest, SwitchWriteRequest, WriteResult
+from .write_contracts import (
+    NumberWriteRequest,
+    SelectWriteRequest,
+    SwitchWriteRequest,
+    WriteOutcome,
+    WriteResult,
+)
+
+
+SAFE_BASELINE_TIMEOUT = timedelta(seconds=60)
+SAFE_BASELINE_RETRY_DELAY_SECONDS = 0.25
+_RETRYABLE_BASELINE_OUTCOMES = frozenset(
+    (WriteOutcome.SERVICE_TIMEOUT, WriteOutcome.READBACK_TIMEOUT)
+)
 
 
 @dataclass(frozen=True, slots=True)
 class PolicyActuationResult:
+    """Policy outcome; ``safe`` is HA readback proof, never device proof."""
+
     success: bool
     safe: bool
     message: str
@@ -53,30 +68,50 @@ class SolisPolicyActuator:
             orchestration_lock=self._lock,
         )
 
-    async def _apply_safe_baseline_locked(self, *, deadline: datetime | None = None) -> PolicyActuationResult:
-        """Apply the autonomous safe baseline while this task owns the lock.
+    @staticmethod
+    def _new_safe_deadline() -> float:
+        return (
+            asyncio.get_running_loop().time()
+            + SAFE_BASELINE_TIMEOUT.total_seconds()
+        )
 
-        The slot actuator shares this orchestration lock.  Calling its public
-        cancellation wrapper from a second task would therefore deadlock while
-        the cancelled task still owns the lock.
-        """
+    @staticmethod
+    def _remaining(deadline: float) -> float:
+        return max(0.0, deadline - asyncio.get_running_loop().time())
 
-        del deadline  # Writes are individually bounded by HomeAssistantWriter.
+    async def _apply_safe_baseline_once_locked(
+        self, *, deadline: float
+    ) -> PolicyActuationResult:
+        """Run one complete HA-only baseline attempt under the policy lock."""
+
         results: list[WriteResult] = []
         try:
-            disabled = await self.slots._disable_all_once(results)
+            disabled = await self.slots._disable_all_once(
+                results, deadline=deadline
+            )
             persistent = self.config.persistent
             protection = self.config.protection
-            async with self.writer.transaction() as transaction:
+            async with self.writer.transaction(deadline=deadline) as transaction:
                 for request in (
                     SelectWriteRequest(self.writer.capture_precondition(persistent.storage_mode_entity_id), StorageMode.SELF_USE.value),
                     SwitchWriteRequest(self.writer.capture_precondition(protection.battery_reserve_entity_id), False),
                 ):
                     # Continue through every persistent control after a normal
                     # rejection so the returned proof includes all controls.
-                    results.append(await transaction.async_write(request))
+                    results.append(
+                        await transaction.async_write(request, deadline=deadline)
+                    )
             safe = disabled.safe and all(result.success for result in results)
-            return PolicyActuationResult(safe, safe, "safe baseline applied" if safe else "safe baseline readback incomplete", tuple(results))
+            return PolicyActuationResult(
+                safe,
+                safe,
+                (
+                    "safe baseline proven by Home Assistant state"
+                    if safe
+                    else "safe baseline HA readback incomplete"
+                ),
+                tuple(results),
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -89,25 +124,100 @@ class SolisPolicyActuator:
             while task.cancelling():
                 task.uncancel()
 
-    async def _finish_safe_baseline_after_cancellation(self, *, deadline: datetime | None = None) -> PolicyActuationResult:
-        """Finish cleanup despite repeated cancellation delivery."""
+    @staticmethod
+    def _baseline_retryable(result: PolicyActuationResult) -> bool:
+        failures = tuple(item for item in result.results if not item.success)
+        return bool(failures) and all(
+            item.outcome in _RETRYABLE_BASELINE_OUTCOMES for item in failures
+        )
+
+    async def _apply_safe_baseline_attempts_locked(
+        self, *, deadline: float
+    ) -> PolicyActuationResult:
+        first = await self._apply_safe_baseline_once_locked(deadline=deadline)
+        if first.safe or not self._baseline_retryable(first):
+            return first
+        if self._remaining(deadline) <= SAFE_BASELINE_RETRY_DELAY_SECONDS:
+            return first
+        await asyncio.sleep(SAFE_BASELINE_RETRY_DELAY_SECONDS)
+        if self._remaining(deadline) <= 0:
+            return first
+        second = await self._apply_safe_baseline_once_locked(deadline=deadline)
+        return PolicyActuationResult(
+            second.success,
+            second.safe,
+            (
+                "safe baseline proven by HA state after one timeout retry"
+                if second.safe
+                else "safe baseline HA readback incomplete after one timeout retry"
+            ),
+            first.results + second.results,
+            second.slot_result,
+        )
+
+    async def _apply_safe_baseline_with_lock(
+        self, *, deadline: float
+    ) -> PolicyActuationResult:
+        acquired = False
+        try:
+            await self._lock.acquire(deadline=deadline)
+            acquired = True
+            return await self._apply_safe_baseline_attempts_locked(
+                deadline=deadline
+            )
+        finally:
+            if acquired:
+                self._lock.release()
+
+    async def _finish_safe_baseline_after_cancellation(
+        self, *, deadline: float
+    ) -> PolicyActuationResult:
+        """Finish one bounded cleanup while preserving the first cancellation."""
 
         self._clear_cancellation()
-        while True:
+        cleanup = asyncio.create_task(
+            self._apply_safe_baseline_with_lock(deadline=deadline)
+        )
+        while not cleanup.done():
+            remaining = self._remaining(deadline)
+            if remaining <= 0:
+                cleanup.cancel()
+                break
             try:
-                return await self._apply_safe_baseline_locked(deadline=deadline)
+                await asyncio.wait_for(asyncio.shield(cleanup), remaining)
             except asyncio.CancelledError:
                 self._clear_cancellation()
+            except asyncio.TimeoutError:
+                cleanup.cancel()
+                break
+        if not cleanup.done():
+            cleanup.cancel()
+        try:
+            return await cleanup
+        except asyncio.CancelledError:
+            return PolicyActuationResult(
+                False, False, "safe baseline cleanup deadline exhausted"
+            )
+        except Exception as exc:
+            return PolicyActuationResult(
+                False, False, f"safe baseline cleanup failed: {exc}"
+            )
 
-    async def async_apply_safe_baseline(self, *, deadline: datetime | None = None) -> PolicyActuationResult:
-        """Disable every slot and restore autonomous Self-Use operation."""
+    async def async_apply_safe_baseline(self) -> PolicyActuationResult:
+        """Apply at most two HA-proven baseline attempts within one minute."""
 
-        async with self._lock:
-            try:
-                return await self._apply_safe_baseline_locked(deadline=deadline)
-            except asyncio.CancelledError as original:
-                await self._finish_safe_baseline_after_cancellation(deadline=deadline)
-                raise original
+        deadline = self._new_safe_deadline()
+        try:
+            return await self._apply_safe_baseline_with_lock(deadline=deadline)
+        except asyncio.CancelledError as original:
+            await self._finish_safe_baseline_after_cancellation(
+                deadline=deadline
+            )
+            raise original
+        except Exception as exc:
+            return PolicyActuationResult(
+                False, False, f"safe baseline failed: {exc}"
+            )
 
     async def async_apply_healthy(
         self,
@@ -119,18 +229,25 @@ class SolisPolicyActuator:
     ) -> PolicyActuationResult:
         """Apply Feed-In Priority, dynamic reserve and zero or one slot."""
 
-        async with self._lock:
+        try:
+            await self._lock.acquire()
             results: list[WriteResult] = []
             try:
                 if not self._guard_off():
-                    return await self._apply_safe_baseline_locked()
+                    return await self._apply_safe_baseline_attempts_locked(
+                        deadline=self._new_safe_deadline()
+                    )
                 if observation.health is not ControllerHealth.HEALTHY or observation.snapshot is None:
-                    return await self._apply_safe_baseline_locked()
+                    return await self._apply_safe_baseline_attempts_locked(
+                        deadline=self._new_safe_deadline()
+                    )
                 snapshot = observation.snapshot
                 reserve_capability = snapshot.persistent.battery_reserve_soc
                 reserve, reserve_error = self._reserve_target(reserve_soc_percent, reserve_capability)
                 if reserve is None:
-                    fallback = await self._apply_safe_baseline_locked()
+                    fallback = await self._apply_safe_baseline_attempts_locked(
+                        deadline=self._new_safe_deadline()
+                    )
                     return PolicyActuationResult(
                         False,
                         fallback.safe,
@@ -173,12 +290,22 @@ class SolisPolicyActuator:
                 if slot_result.status is not SlotActuationStatus.APPLIED:
                     raise RuntimeError(slot_result.message or "slot actuation failed")
                 return PolicyActuationResult(True, False, "healthy baseline and slot applied", tuple(results), slot_result)
-            except asyncio.CancelledError as original:
-                await self._finish_safe_baseline_after_cancellation()
-                raise original
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                fallback = await self._apply_safe_baseline_locked()
+                # Never replay an ambiguous healthy mutation.  Move directly
+                # to the independently retryable safe baseline.
+                fallback = await self._apply_safe_baseline_attempts_locked(
+                    deadline=self._new_safe_deadline()
+                )
                 return PolicyActuationResult(False, fallback.safe, f"healthy actuation failed: {exc}", tuple(results) + fallback.results)
+            finally:
+                self._lock.release()
+        except asyncio.CancelledError as original:
+            await self._finish_safe_baseline_after_cancellation(
+                deadline=self._new_safe_deadline()
+            )
+            raise original
 
     @staticmethod
     def _reserve_target(reserve_soc_percent: Decimal, capability: object) -> tuple[Decimal | None, str | None]:

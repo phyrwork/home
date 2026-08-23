@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
@@ -10,8 +11,15 @@ import yaml
 from custom_components.house_battery_control import config
 from custom_components.house_battery_control.contracts import StorageMode
 from custom_components.house_battery_control.ha_writer import HomeAssistantWriter
-from custom_components.house_battery_control.solis_policy import SolisPolicyActuator
+from custom_components.house_battery_control.solis_policy import (
+    PolicyActuationResult,
+    SolisPolicyActuator,
+)
 from custom_components.house_battery_control.solis_reader import read_solis_state
+from custom_components.house_battery_control.write_contracts import (
+    WriteOutcome,
+    WriteResult,
+)
 
 
 NOW = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
@@ -293,3 +301,240 @@ async def test_healthy_rejects_reserve_below_required_capability():
     assert "cannot represent" in result.message
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
     assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
+
+
+def _policy_result(outcome: WriteOutcome, label: str) -> PolicyActuationResult:
+    result = WriteResult(f"switch.{label}", outcome, label)
+    return PolicyActuationResult(
+        result.success,
+        result.success,
+        label,
+        (result,),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "timeout_outcome",
+    (WriteOutcome.SERVICE_TIMEOUT, WriteOutcome.READBACK_TIMEOUT),
+)
+async def test_safe_baseline_retries_one_timeout_and_preserves_ordered_evidence(
+    timeout_outcome,
+) -> None:
+    actuator, _ha, _observation = policy()
+    first = _policy_result(timeout_outcome, "first")
+    second = _policy_result(WriteOutcome.NO_CHANGE, "second")
+    attempt = AsyncMock(side_effect=(first, second))
+    actuator._apply_safe_baseline_once_locked = attempt
+
+    with patch(
+        "custom_components.house_battery_control.solis_policy.asyncio.sleep",
+        AsyncMock(),
+    ) as sleep:
+        result = await actuator.async_apply_safe_baseline()
+
+    assert result.success and result.safe
+    assert [item.entity_id for item in result.results] == [
+        "switch.first",
+        "switch.second",
+    ]
+    assert attempt.await_count == 2
+    sleep.assert_awaited_once_with(0.25)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    (
+        WriteOutcome.CONFLICT,
+        WriteOutcome.REJECTED,
+        WriteOutcome.SERVICE_ERROR,
+    ),
+)
+async def test_safe_baseline_does_not_retry_non_timeout_failures(
+    outcome,
+) -> None:
+    actuator, _ha, _observation = policy()
+    attempt = AsyncMock(return_value=_policy_result(outcome, "hard"))
+    actuator._apply_safe_baseline_once_locked = attempt
+
+    with patch(
+        "custom_components.house_battery_control.solis_policy.asyncio.sleep",
+        AsyncMock(),
+    ) as sleep:
+        result = await actuator.async_apply_safe_baseline()
+
+    assert not result.safe
+    attempt.assert_awaited_once()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_safe_baseline_does_not_retry_mixed_timeout_and_rejection() -> None:
+    actuator, _ha, _observation = policy()
+    first = PolicyActuationResult(
+        False,
+        False,
+        "mixed",
+        (
+            WriteResult(
+                "switch.timeout", WriteOutcome.SERVICE_TIMEOUT, "timeout"
+            ),
+            WriteResult(
+                "switch.rejected", WriteOutcome.REJECTED, "rejected"
+            ),
+        ),
+    )
+    attempt = AsyncMock(return_value=first)
+    actuator._apply_safe_baseline_once_locked = attempt
+
+    result = await actuator.async_apply_safe_baseline()
+
+    assert not result.safe
+    attempt.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_safe_baseline_deadline_expiry_prevents_timeout_retry(
+    monkeypatch,
+) -> None:
+    actuator, _ha, _observation = policy()
+
+    async def slow_first(*, deadline):
+        await asyncio.sleep(0.02)
+        return _policy_result(WriteOutcome.SERVICE_TIMEOUT, "timeout")
+
+    attempt = AsyncMock(side_effect=slow_first)
+    actuator._apply_safe_baseline_once_locked = attempt
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.solis_policy.SAFE_BASELINE_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+
+    result = await actuator.async_apply_safe_baseline()
+
+    assert not result.safe
+    attempt.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_safe_baseline_deadline_bounds_orchestration_lock() -> None:
+    actuator, _ha, _observation = policy()
+    acquired = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_lock() -> None:
+        async with actuator._lock:
+            acquired.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold_lock())
+    await acquired.wait()
+    with patch(
+        "custom_components.house_battery_control.solis_policy.SAFE_BASELINE_TIMEOUT",
+        timedelta(seconds=0.01),
+    ):
+        result = await actuator.async_apply_safe_baseline()
+    release.set()
+    await holder
+
+    assert not result.safe
+    assert "deadline" in result.message
+    assert not actuator._lock._lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_healthy_service_timeout_is_not_replayed_before_safe_cleanup(
+    monkeypatch,
+) -> None:
+    actuator, ha, observation = policy()
+    storage_mode_id = actuator.config.persistent.storage_mode_entity_id
+    original_call = ha.async_call
+    never = asyncio.Event()
+
+    async def timeout_healthy_mode(domain, service, data, *, blocking=True):
+        if (
+            data["entity_id"] == storage_mode_id
+            and data.get("option") == StorageMode.FEED_IN_PRIORITY.value
+        ):
+            ha.calls.append((domain, service, data))
+            await never.wait()
+            return
+        await original_call(domain, service, data, blocking=blocking)
+
+    ha.async_call = timeout_healthy_mode
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_CALL_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_TIMEOUT_CONFIRMATION",
+        timedelta(seconds=0.01),
+    )
+
+    result = await actuator.async_apply_healthy(
+        observation=observation,
+        reserve_soc_percent=10,
+        intent=None,
+        now=NOW,
+    )
+
+    feed_in_calls = [
+        call
+        for call in ha.calls
+        if call[2]["entity_id"] == storage_mode_id
+        and call[2].get("option") == StorageMode.FEED_IN_PRIORITY.value
+    ]
+    assert len(feed_in_calls) == 1
+    assert not result.success
+    assert result.safe
+    assert ha.states[storage_mode_id]["state"] == StorageMode.SELF_USE.value
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_cannot_reset_safe_cleanup_deadline(
+    monkeypatch,
+) -> None:
+    actuator, ha, _observation = policy()
+    never = asyncio.Event()
+
+    async def blocked_call(domain, service, data, *, blocking=True):
+        ha.calls.append((domain, service, data))
+        await never.wait()
+
+    ha.async_call = blocked_call
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.solis_policy.SAFE_BASELINE_TIMEOUT",
+        timedelta(seconds=0.05),
+    )
+    task = asyncio.create_task(actuator.async_apply_safe_baseline())
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if ha.calls:
+            break
+    assert ha.calls
+    task.cancel("original")
+    await asyncio.sleep(0)
+    task.cancel("repeat")
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(asyncio.shield(task), 0.2)
+
+    assert not actuator._lock._lock.locked()
+    assert not actuator.writer._lock.locked()
+    assert all(not callbacks for callbacks in ha.listeners.values())
+
+
+@pytest.mark.asyncio
+async def test_safe_baseline_reraises_original_cancelled_error_instance() -> None:
+    actuator, _ha, _observation = policy()
+    original = asyncio.CancelledError("original")
+    actuator._apply_safe_baseline_with_lock = AsyncMock(side_effect=original)
+    actuator._finish_safe_baseline_after_cancellation = AsyncMock(
+        return_value=PolicyActuationResult(False, False, "cleanup")
+    )
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await actuator.async_apply_safe_baseline()
+
+    assert cancelled.value is original

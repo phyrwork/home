@@ -264,14 +264,6 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             actuation = PolicyActuationResult(True, True, "safe baseline already proven")
         else:
             actuation = await self.policy_actuator.async_apply_safe_baseline()
-            if not actuation.safe:
-                # A transient readback race should not immediately escalate a
-                # recoverable input outage into FAIL_SAFE.  Reconcile once,
-                # bounded by this evaluation, before treating the baseline as
-                # unprovable.
-                retry = await self.policy_actuator.async_apply_safe_baseline()
-                if retry.safe:
-                    actuation = retry
             self._safe_state_applied = actuation.safe
         if not actuation.safe:
             return self._snapshot(

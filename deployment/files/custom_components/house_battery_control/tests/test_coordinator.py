@@ -285,10 +285,10 @@ async def test_degraded_baseline_failure_escalates_to_fail_safe(
     assert result.health is ControllerHealth.FAIL_SAFE
     assert result.action is StrategyAction.FAIL_SAFE
     assert "could not be proven" in result.reason
-    assert actuator.async_apply_safe_baseline.await_count == 2
+    actuator.async_apply_safe_baseline.assert_awaited_once_with()
 
 
-async def test_degraded_baseline_retries_once_before_escalating(
+async def test_degraded_coordinator_delegates_retry_to_policy(
     hass: HomeAssistant,
 ) -> None:
     source = yaml.safe_load(
@@ -299,10 +299,7 @@ async def test_degraded_baseline_retries_once_before_escalating(
     hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     actuator.async_apply_safe_baseline = AsyncMock(
-        side_effect=(
-            PolicyActuationResult(False, False, "first readback incomplete"),
-            PolicyActuationResult(True, True, "retry proven"),
-        )
+        return_value=PolicyActuationResult(True, True, "retry proven")
     )
     degraded = SimpleNamespace(
         solis=observation(ControllerHealth.DEGRADED),
@@ -320,7 +317,7 @@ async def test_degraded_baseline_retries_once_before_escalating(
     assert result.health is ControllerHealth.DEGRADED
     assert result.action is StrategyAction.STOP
     assert result.actuation_message == "retry proven"
-    assert actuator.async_apply_safe_baseline.await_count == 2
+    actuator.async_apply_safe_baseline.assert_awaited_once_with()
 
 
 async def test_runtime_unavailable_exception_is_recoverable_degraded(

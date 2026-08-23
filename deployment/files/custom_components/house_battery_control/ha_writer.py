@@ -24,9 +24,26 @@ from .write_contracts import (
 
 
 HA_SERVICE_CALL_TIMEOUT = timedelta(seconds=10)
+HA_SERVICE_TIMEOUT_CONFIRMATION = timedelta(seconds=5)
 HA_READBACK_TIMEOUT = timedelta(seconds=15)
 HA_LISTENER_CLEANUP_TIMEOUT = timedelta(seconds=5)
 _UNKNOWN = frozenset(("unknown", "unavailable"))
+
+
+def _remaining(deadline: float | None) -> float | None:
+    if deadline is None:
+        return None
+    return max(0.0, deadline - asyncio.get_running_loop().time())
+
+
+def _phase_timeout(local: timedelta, deadline: float | None) -> float:
+    local_seconds = local.total_seconds()
+    remaining = _remaining(deadline)
+    if remaining is None:
+        return local_seconds
+    if remaining <= 0:
+        raise TimeoutError("operation deadline exhausted")
+    return min(local_seconds, remaining)
 
 
 class HomeAssistantAccess(Protocol):
@@ -130,14 +147,16 @@ class HomeAssistantWriter:
         """Construct a production writer with the real HA event adapter."""
         return cls(hass, adapter=HomeAssistantEventAdapter(hass), timezone=timezone)
 
-    def transaction(self) -> "WriteTransaction":
-        return WriteTransaction(self)
+    def transaction(self, *, deadline: float | None = None) -> "WriteTransaction":
+        return WriteTransaction(self, deadline=deadline)
 
-    async def async_write(self, request: WriteRequest) -> WriteResult:
+    async def async_write(
+        self, request: WriteRequest, *, deadline: float | None = None
+    ) -> WriteResult:
         """Write one request, acquiring the writer lock unless already owned."""
         if self._owner is asyncio.current_task():
             raise RuntimeError("writer.async_write cannot be re-entered inside a transaction; use transaction.async_write")
-        async with self.transaction() as transaction:
+        async with self.transaction(deadline=deadline) as transaction:
             return await transaction.async_write(request)
 
     def capture_precondition(self, entity_id: str) -> StatePrecondition:
@@ -166,7 +185,14 @@ class HomeAssistantWriter:
             return getter(entity_id)
         raise TypeError("Home Assistant access must provide get_state or get")
 
-    async def _call_service(self, request: WriteRequest, service: str, data: dict[str, object]) -> None:
+    async def _call_service(
+        self,
+        request: WriteRequest,
+        service: str,
+        data: dict[str, object],
+        *,
+        deadline: float | None,
+    ) -> None:
         call = getattr(self.hass, "async_call", None)
         if not callable(call):
             call = getattr(self.hass, "call_service", None)
@@ -175,10 +201,11 @@ class HomeAssistantWriter:
             call = getattr(services, "async_call", None)
         if not callable(call):
             raise TypeError("Home Assistant access must provide async_call")
+        timeout = _phase_timeout(HA_SERVICE_CALL_TIMEOUT, deadline)
         result = call(request.domain, service, data, blocking=True)
         if not inspect.isawaitable(result):
             raise TypeError("Home Assistant service call must return an awaitable")
-        await asyncio.wait_for(result, HA_SERVICE_CALL_TIMEOUT.total_seconds())
+        await asyncio.wait_for(result, timeout)
 
     def _listen(self, entity_id: str, callback: Callable[..., object]) -> Callable[[], object]:
         listen = getattr(self.hass, "async_listen_state_change", None)
@@ -306,7 +333,44 @@ class HomeAssistantWriter:
             updated is not None and updated > precondition.last_updated
         ) or _context_id(state) != precondition.context_id
 
-    async def _write_locked(self, request: WriteRequest) -> WriteResult:
+    async def _wait_for_matching_revision(
+        self,
+        request: WriteRequest,
+        normalized: str,
+        event: asyncio.Event,
+        *,
+        local_timeout: timedelta,
+        deadline: float | None,
+    ) -> bool:
+        """Wait for a matching new HA revision; this is not device proof."""
+
+        loop = asyncio.get_running_loop()
+        end = loop.time() + local_timeout.total_seconds()
+        if deadline is not None:
+            end = min(end, deadline)
+        while True:
+            # Clear before the read so an event racing with the read remains
+            # armed for the subsequent wait.
+            event.clear()
+            current = self._get(request.entity_id)
+            if self._matches(request, current, normalized) and self._new_revision(
+                current, request.precondition
+            ):
+                return True
+            remaining = end - loop.time()
+            if remaining <= 0:
+                return False
+            try:
+                await asyncio.wait_for(event.wait(), remaining)
+            except asyncio.TimeoutError:
+                current = self._get(request.entity_id)
+                return self._matches(
+                    request, current, normalized
+                ) and self._new_revision(current, request.precondition)
+
+    async def _write_locked(
+        self, request: WriteRequest, *, deadline: float | None = None
+    ) -> WriteResult:
         state = self._get(request.entity_id)
         rejected = self._precondition(request, state)
         if rejected is not None:
@@ -339,44 +403,64 @@ class HomeAssistantWriter:
             if self._matches(request, latest, normalized):
                 return WriteResult(request.entity_id, WriteOutcome.NO_CHANGE, "Home Assistant already has target", service, service_data)
             try:
-                await self._call_service(request, service, service_data)
+                await self._call_service(
+                    request, service, service_data, deadline=deadline
+                )
             except asyncio.TimeoutError:
-                return WriteResult(request.entity_id, WriteOutcome.SERVICE_TIMEOUT, "Home Assistant service call timed out", f"{request.domain}.{service}", service_data)
+                confirmed = await self._wait_for_matching_revision(
+                    request,
+                    normalized,
+                    event,
+                    local_timeout=HA_SERVICE_TIMEOUT_CONFIRMATION,
+                    deadline=deadline,
+                )
+                if confirmed:
+                    return WriteResult(
+                        request.entity_id,
+                        WriteOutcome.APPLIED_HA_READBACK,
+                        "A new matching Home Assistant revision appeared after the service timeout; device state remains unproven",
+                        f"{request.domain}.{service}",
+                        service_data,
+                    )
+                return WriteResult(request.entity_id, WriteOutcome.SERVICE_TIMEOUT, "Home Assistant service call timed out without a new matching HA revision", f"{request.domain}.{service}", service_data)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 return WriteResult(request.entity_id, WriteOutcome.SERVICE_ERROR, f"Home Assistant service call failed: {exc}", f"{request.domain}.{service}", service_data)
 
-            after = self._get(request.entity_id)
-            if self._matches(request, after, normalized) and self._new_revision(after, request.precondition):
-                return WriteResult(request.entity_id, WriteOutcome.APPLIED_HA_READBACK, "Home Assistant state revision confirms the requested value", f"{request.domain}.{service}", service_data)
-            deadline = asyncio.get_running_loop().time() + HA_READBACK_TIMEOUT.total_seconds()
-            while True:
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    return WriteResult(request.entity_id, WriteOutcome.READBACK_TIMEOUT, "Home Assistant did not confirm a new matching state revision", f"{request.domain}.{service}", service_data)
-                try:
-                    await asyncio.wait_for(event.wait(), remaining)
-                except asyncio.TimeoutError:
-                    return WriteResult(request.entity_id, WriteOutcome.READBACK_TIMEOUT, "Home Assistant did not confirm a new matching state revision", f"{request.domain}.{service}", service_data)
-                event.clear()
-                after = self._get(request.entity_id)
-                if self._matches(request, after, normalized) and self._new_revision(after, request.precondition):
-                    return WriteResult(request.entity_id, WriteOutcome.APPLIED_HA_READBACK, "Home Assistant state event and revision confirm the requested value", f"{request.domain}.{service}", service_data)
+            confirmed = await self._wait_for_matching_revision(
+                request,
+                normalized,
+                event,
+                local_timeout=HA_READBACK_TIMEOUT,
+                deadline=deadline,
+            )
+            if confirmed:
+                return WriteResult(
+                    request.entity_id,
+                    WriteOutcome.APPLIED_HA_READBACK,
+                    "A new matching Home Assistant revision confirms the requested value; device state remains unproven",
+                    f"{request.domain}.{service}",
+                    service_data,
+                )
+            return WriteResult(request.entity_id, WriteOutcome.READBACK_TIMEOUT, "Home Assistant did not confirm a new matching state revision", f"{request.domain}.{service}", service_data)
         finally:
             if remove is not None:
-                await _cleanup_listener(remove)
+                await _cleanup_listener(remove, deadline=deadline)
 
 
-async def _cleanup_listener(remove: Callable[[], object]) -> None:
+async def _cleanup_listener(
+    remove: Callable[[], object], *, deadline: float | None = None
+) -> None:
     """Remove a listener through a bounded shield, preserving cancellation."""
 
-    async def invoke() -> None:
+    try:
         result = remove()
-        if inspect.isawaitable(result):
-            await result
-
-    cleanup_task = asyncio.create_task(invoke())
+    except Exception:
+        return
+    if not inspect.isawaitable(result):
+        return
+    cleanup_task = asyncio.create_task(result)
 
     def consume(task: asyncio.Task[object]) -> None:
         try:
@@ -385,33 +469,41 @@ async def _cleanup_listener(remove: Callable[[], object]) -> None:
             pass
 
     cleanup_task.add_done_callback(consume)
+    loop = asyncio.get_running_loop()
+    cleanup_deadline = loop.time() + HA_LISTENER_CLEANUP_TIMEOUT.total_seconds()
+    if deadline is not None:
+        cleanup_deadline = min(cleanup_deadline, deadline)
     cancellation: asyncio.CancelledError | None = None
-    try:
-        await asyncio.wait_for(asyncio.shield(cleanup_task), HA_LISTENER_CLEANUP_TIMEOUT.total_seconds())
-    except asyncio.CancelledError as exc:
-        cancellation = exc
-        current = asyncio.current_task()
-        if current is not None:
-            current.uncancel()
+    while not cleanup_task.done():
+        remaining = cleanup_deadline - loop.time()
+        if remaining <= 0:
+            cleanup_task.cancel()
+            break
         try:
-            await asyncio.wait_for(asyncio.shield(cleanup_task), HA_LISTENER_CLEANUP_TIMEOUT.total_seconds())
+            await asyncio.wait_for(asyncio.shield(cleanup_task), remaining)
+        except asyncio.CancelledError as exc:
+            cancellation = cancellation or exc
+            current = asyncio.current_task()
+            if current is not None:
+                while current.cancelling():
+                    current.uncancel()
         except asyncio.TimeoutError:
             cleanup_task.cancel()
-    except asyncio.TimeoutError:
-        cleanup_task.cancel()
-    except Exception:
-        # Listener removal is cleanup; preserve the primary write outcome.
-        pass
-    finally:
-        if cancellation is not None:
-            raise cancellation
+            break
+        except Exception:
+            break
+    if cancellation is not None:
+        raise cancellation
 
 
 class WriteTransaction:
     """Async context holding one writer lock across ordered requests."""
 
-    def __init__(self, writer: HomeAssistantWriter) -> None:
+    def __init__(
+        self, writer: HomeAssistantWriter, *, deadline: float | None = None
+    ) -> None:
         self.writer = writer
+        self.deadline = deadline
         self.results: list[WriteResult] = []
         self.complete = True
         self._entered = False
@@ -425,7 +517,18 @@ class WriteTransaction:
             raise RuntimeError("transaction is closed and cannot be re-entered")
         if self.writer._owner is asyncio.current_task():
             raise RuntimeError("nested transactions are not supported")
-        await self.writer._lock.acquire()
+        remaining = _remaining(self.deadline)
+        if remaining is None:
+            await self.writer._lock.acquire()
+        elif remaining <= 0:
+            raise TimeoutError("writer transaction deadline exhausted")
+        else:
+            try:
+                await asyncio.wait_for(self.writer._lock.acquire(), remaining)
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    "writer transaction deadline exhausted"
+                ) from None
         self.writer._owner = asyncio.current_task()
         self._entered = True
         self._task = asyncio.current_task()
@@ -446,10 +549,21 @@ class WriteTransaction:
         self._task = None
         return False
 
-    async def async_write(self, request: WriteRequest) -> WriteResult:
+    async def async_write(
+        self, request: WriteRequest, *, deadline: float | None = None
+    ) -> WriteResult:
         self._assert_owner()
+        effective_deadline = self.deadline
+        if deadline is not None:
+            effective_deadline = (
+                deadline
+                if effective_deadline is None
+                else min(deadline, effective_deadline)
+            )
         try:
-            result = await self.writer._write_locked(request)
+            result = await self.writer._write_locked(
+                request, deadline=effective_deadline
+            )
         except asyncio.CancelledError:
             self.complete = False
             raise
@@ -486,6 +600,7 @@ __all__ = [
     "HA_LISTENER_CLEANUP_TIMEOUT",
     "HA_READBACK_TIMEOUT",
     "HA_SERVICE_CALL_TIMEOUT",
+    "HA_SERVICE_TIMEOUT_CONFIRMATION",
     "HomeAssistantAccess",
     "HomeAssistantEventAdapter",
     "HomeAssistantWriter",

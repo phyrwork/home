@@ -9,7 +9,6 @@ against Home Assistant state before the next step is attempted.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
@@ -30,18 +29,10 @@ from .write_contracts import (
 )
 
 
-def _remaining_deadline(
-    deadline: datetime,
-    clock: Callable[[], datetime] | None = None,
-) -> float:
-    """Return remaining seconds for an absolute, timezone-aware deadline."""
+def _remaining_deadline(deadline: float) -> float:
+    """Return seconds remaining on an absolute monotonic deadline."""
 
-    now = clock() if clock is not None else datetime.now(timezone.utc)
-    if deadline.tzinfo is None or deadline.utcoffset() is None:
-        raise ValueError("fail-safe deadline must be timezone-aware")
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("fail-safe clock must be timezone-aware")
-    return max(0.0, (deadline - now).total_seconds())
+    return max(0.0, deadline - asyncio.get_running_loop().time())
 
 
 MAXIMUM_INVERTER_CLOCK_SKEW = timedelta(minutes=1)
@@ -57,12 +48,23 @@ class ReentrantAsyncLock:
         self._owner: asyncio.Task[object] | None = None
         self._depth = 0
 
-    async def acquire(self) -> bool:
+    async def acquire(self, *, deadline: float | None = None) -> bool:
         task = asyncio.current_task()
         if task is not None and task is self._owner:
             self._depth += 1
             return True
-        await self._lock.acquire()
+        if deadline is None:
+            await self._lock.acquire()
+        else:
+            remaining = _remaining_deadline(deadline)
+            if remaining <= 0:
+                raise TimeoutError("Solis orchestration deadline exhausted")
+            try:
+                await asyncio.wait_for(self._lock.acquire(), remaining)
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    "Solis orchestration deadline exhausted"
+                ) from None
         self._owner = task
         self._depth = 1
         return True
@@ -375,8 +377,7 @@ class SolisSlotActuator:
         request: SwitchWriteRequest | TextWriteRequest | NumberWriteRequest,
         results: list[WriteResult],
         *,
-        deadline: datetime | None = None,
-        clock: Callable[[], datetime] | None = None,
+        deadline: float | None = None,
     ) -> WriteResult:
         """Retain an ordered uncertain marker if cancellation interrupts a write."""
 
@@ -390,22 +391,19 @@ class SolisSlotActuator:
         if deadline is None:
             result = await transaction.async_write(request)
         else:
-            remaining = _remaining_deadline(deadline, clock)
+            remaining = _remaining_deadline(deadline)
             if remaining <= 0:
                 raise TimeoutError("fail-safe deadline exhausted")
-            result = await asyncio.wait_for(
-                transaction.async_write(request), remaining
-            )
+            result = await transaction.async_write(request, deadline=deadline)
         results[index] = result
         return result
 
     async def _disable_all_locked(
         self, transaction: WriteTransaction, results: list[WriteResult],
-        deadline: datetime | None = None,
-        clock: Callable[[], datetime] | None = None,
+        deadline: float | None = None,
     ) -> bool:
         for direction, _physical_slot, _kind in self._directions():
-            if deadline is not None and _remaining_deadline(deadline, clock) <= 0:
+            if deadline is not None and _remaining_deadline(deadline) <= 0:
                 results.append(_result_failure(direction.enable_entity_id, "fail-safe deadline exhausted"))
                 return False
             observed = self._verified_precondition(direction.enable_entity_id)
@@ -420,7 +418,6 @@ class SolisSlotActuator:
                         request,
                         results,
                         deadline=deadline,
-                        clock=clock,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -437,26 +434,23 @@ class SolisSlotActuator:
     async def _disable_all_once(
         self,
         results: list[WriteResult] | None = None,
-        deadline: datetime | None = None,
-        clock: Callable[[], datetime] | None = None,
+        deadline: float | None = None,
     ) -> DisableAllResult:
         sink = results if results is not None else []
         attempt_start = len(sink)
         proven = False
-        transaction = self.writer.transaction()
+        transaction = self.writer.transaction(deadline=deadline)
         entered = False
         try:
             if deadline is None:
                 await transaction.__aenter__()
             else:
-                remaining = _remaining_deadline(deadline, clock)
+                remaining = _remaining_deadline(deadline)
                 if remaining <= 0:
                     raise TimeoutError("fail-safe deadline exhausted before writer transaction")
-                await asyncio.wait_for(transaction.__aenter__(), remaining)
+                await transaction.__aenter__()
             entered = True
-            proven = await self._disable_all_locked(
-                transaction, sink, deadline, clock
-            )
+            proven = await self._disable_all_locked(transaction, sink, deadline)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

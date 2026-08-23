@@ -245,11 +245,159 @@ async def test_service_error_and_service_timeout_are_distinct(monkeypatch) -> No
     seed(ha, "switch.a", "off")
     ha.service_wait = asyncio.Event()
     monkeypatch.setattr("custom_components.house_battery_control.ha_writer.HA_SERVICE_CALL_TIMEOUT", timedelta(seconds=0.01))
+    monkeypatch.setattr("custom_components.house_battery_control.ha_writer.HA_SERVICE_TIMEOUT_CONFIRMATION", timedelta(seconds=0.01))
     timeout = await HomeAssistantWriter(ha).async_write(
         SwitchWriteRequest(precondition(ha, "switch.a"), True)
     )
     assert timeout.outcome is WriteOutcome.SERVICE_TIMEOUT
     assert ha.listeners["switch.a"] == []
+
+
+@pytest.mark.asyncio
+async def test_service_timeout_accepts_late_new_ha_revision_without_replay(
+    monkeypatch,
+) -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    ha.service_wait = asyncio.Event()
+
+    def publish_late(_domain, _service, _data):
+        asyncio.get_running_loop().call_later(
+            0.02,
+            lambda: ha.set_state(
+                "switch.a",
+                "on",
+                updated=NOW + timedelta(seconds=1),
+                context_id="late-ha",
+            ),
+        )
+
+    ha.on_call = publish_late
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_CALL_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_TIMEOUT_CONFIRMATION",
+        timedelta(seconds=0.1),
+    )
+
+    result = await HomeAssistantWriter(ha).async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True)
+    )
+
+    assert result.outcome is WriteOutcome.APPLIED_HA_READBACK
+    assert "device state remains unproven" in result.message
+    assert len(ha.calls) == 1
+    assert ha.listeners["switch.a"] == []
+
+
+@pytest.mark.asyncio
+async def test_service_timeout_checks_current_revision_before_waiting(
+    monkeypatch,
+) -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    ha.service_wait = asyncio.Event()
+    ha.on_call = lambda *_: ha.set_state(
+        "switch.a",
+        "on",
+        updated=NOW + timedelta(seconds=1),
+        context_id="new-ha",
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_CALL_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+
+    result = await HomeAssistantWriter(ha).async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True)
+    )
+
+    assert result.outcome is WriteOutcome.APPLIED_HA_READBACK
+    assert len(ha.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("value", "updated", "context_id"),
+    (
+        ("on", NOW, "old"),
+        ("off", NOW + timedelta(seconds=1), "other"),
+    ),
+)
+async def test_service_timeout_rejects_unproven_or_mismatched_revision(
+    monkeypatch, value, updated, context_id
+) -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    ha.service_wait = asyncio.Event()
+    ha.on_call = lambda *_: ha.set_state(
+        "switch.a", value, updated=updated, context_id=context_id
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_CALL_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_TIMEOUT_CONFIRMATION",
+        timedelta(seconds=0.01),
+    )
+
+    result = await HomeAssistantWriter(ha).async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True)
+    )
+
+    assert result.outcome is WriteOutcome.SERVICE_TIMEOUT
+    assert len(ha.calls) == 1
+    assert ha.listeners["switch.a"] == []
+
+
+@pytest.mark.asyncio
+async def test_absolute_deadline_bounds_service_and_confirmation_waits() -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    ha.service_wait = asyncio.Event()
+    writer = HomeAssistantWriter(ha)
+    loop = asyncio.get_running_loop()
+
+    result = await writer.async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True),
+        deadline=loop.time() + 0.02,
+    )
+
+    assert result.outcome is WriteOutcome.SERVICE_TIMEOUT
+    assert len(ha.calls) == 1
+    assert ha.listeners["switch.a"] == []
+
+
+@pytest.mark.asyncio
+async def test_absolute_deadline_bounds_writer_lock_acquisition() -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    writer = HomeAssistantWriter(ha)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_lock() -> None:
+        async with writer.transaction():
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold_lock())
+    await entered.wait()
+    try:
+        with pytest.raises(TimeoutError, match="deadline"):
+            await writer.async_write(
+                SwitchWriteRequest(precondition(ha, "switch.a"), True),
+                deadline=asyncio.get_running_loop().time() + 0.01,
+            )
+    finally:
+        release.set()
+        await holder
+
+    assert ha.calls == []
+    assert not writer._lock.locked()
 
 
 @pytest.mark.asyncio
