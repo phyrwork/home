@@ -1,5 +1,8 @@
 # One-time SolisCloud commissioning is complete: EMS is disabled for this plant
-# so cloud dispatch cannot overwrite Home Assistant inverter controls.
+# so cloud dispatch cannot overwrite Home Assistant inverter controls. Native
+# Grid Peak Shaving remains enabled at 100 W; it is compatible with scheduled
+# forced discharge/export. Native Grid Feed in Power Limit is commissioned to
+# 9900 W / 52 A (the inverter maxima), otherwise a 0 W / 0 A limit blocks export.
 dynamic_control_enabled: true
 
 battery:
@@ -43,8 +46,11 @@ solis:
     battery_max_discharge_current_entity_id: number.garage_inverter_control_battery_max_discharge_current
 
   # One-time native SolisCloud commissioning: Grid Peak Shaving is enabled and
-  # its maximum grid power is 100 W (0.1 kW). The HA switch is not authoritative
-  # for this shared native setting and is intentionally not runtime-managed.
+  # its maximum grid power is 100 W (0.1 kW). Grid Feed in Power Limit is
+  # enabled at the native maxima (9900 W / 52 A). The HA switches for these
+  # shared settings are non-authoritative/unavailable and are intentionally not
+  # runtime-managed. The inverter datetime is authoritative for slot timezone;
+  # do not use HA's Europe/London timezone when applying schedules.
 
   # Every physical slot is mapped for reconciliation and cleanup.  Reserved
   # directions are intentionally not enabled by the MVP controller.
@@ -75,6 +81,7 @@ solis:
         current_entity_id: number.garage_inverter_control_slot2_discharge_current
         target_soc_entity_id: number.garage_inverter_control_slot2_discharge_soc
         owner: reserve_export
+        # Live commissioning: active 16:54-22:30, 100 A, target 19%.
     - physical_slot: 3
       charge:
         enable_entity_id: switch.garage_inverter_control_slot3_charge

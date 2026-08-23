@@ -1,6 +1,6 @@
 # T0025 — Lean runtime cutover and legacy cleanup
 
-Status: Disabled deployment verified; guarded dynamic activation pending
+Status: Live cutover verified; dynamic control healthy
 
 ## Objective
 
@@ -69,8 +69,8 @@ soon as the health state is published.
 - Do not add journals, leases, bootstrap tokens, persisted commissioning state,
   general simulation, or legacy parsers.
 - Keep dynamic control disabled through the initial deployment and live
-  fail-safe verification. Enable it only after explicit operator approval, and
-  keep the external guard asserted throughout the guarded activation deploy.
+  fail-safe verification. It is now enabled after explicit operator approval;
+  the controller is live and healthy in `RESERVE_DISCHARGE`.
 
 ## Completion criteria
 
@@ -92,18 +92,14 @@ soon as the health state is published.
 - The disabled experimental entities remain in Home Assistant's registry as
   restored `unavailable` entities; they are not active runtime dependencies.
 
-## Previous live verification — 2026-08-23
-
-The following describes the prior deployed revision. The cleanup in this task
-is local only; deployment and live verification of the resulting revision are
-still pending.
+## Live verification — 2026-08-23
 
 - Home Assistant OS 18.2 and Core 2026.8.3.
 - Full focused suite: 175 tests passed.
 - Ansible recap: `ok=139`, `changed=5`, `failed=0`, `unreachable=0`.
 - Post-deploy `ha core check` completed successfully.
-- Dynamic control remained disabled and the local disable guard remained on.
-- The coordinator converged to `healthy` / `STOP` with no last error.
+- Dynamic control is enabled and the coordinator is healthy in
+  `RESERVE_DISCHARGE` with no last error.
 - Solis readback proved Self-Use, battery reserve off, and all 12 slot directions
   off. Native SolisCloud commissioning remains EMS disabled and Grid Peak
   Shaving enabled at 100 W.
@@ -116,3 +112,10 @@ still pending.
   authoritative and fail-closed.
 - A second controlled restart produced no house-battery listener-removal error,
   Solis experimental-platform timeout, or Solis Cloud Control retry error.
+- Slot 2 forced discharge is live from 16:54–22:30 at 100 A with a 19% target;
+  schedule times use the inverter's authoritative UTC datetime.
+- Solis battery power −4917 W and Octopus current demand −4104 W confirmed
+  forced export. Grid Peak Shaving at 100 W is compatible; the actual blocker
+  was native Grid Feed in Power Limit at 0 W / 0 A, corrected to 9900 W / 52 A.
+- The HA export/peak-shaving switches are non-authoritative/unavailable, so
+  these persistent settings remain one-time SolisCloud commissioning.

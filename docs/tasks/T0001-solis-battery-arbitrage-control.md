@@ -1,6 +1,6 @@
 # T0001 — Solis battery arbitrage control
 
-Status: Proposed
+Status: Live verified
 
 ## Objective
 
@@ -42,9 +42,8 @@ MAXIMUM_GRID_IMPORT_POWER_KW = 0.1
 ```
 
 The cycle duration is the live Home Assistant entity
-`input_number.house_battery_cycle_discharge_duration_minutes`; it is currently
-not yet live commissioned. Deployment will set it to 10 minutes; it remains
-configurable from 1 to 60.
+`input_number.house_battery_cycle_discharge_duration_minutes`; it remains
+configurable from 1 to 60 minutes.
 
 ### One-time commissioned facts
 
@@ -54,7 +53,10 @@ that the runtime writes Self-Use when applying fail-safe:
 - EMS is disabled for this plant.
 - Self-Use is the fail-safe storage mode and is the one commissioned setting
   deliberately written by the runtime during fail-safe.
-- Native Grid Peak Shaving is enabled with a 100 W maximum grid-import setting.
+- Native Grid Peak Shaving is enabled with a 100 W maximum grid-import setting;
+  live testing confirmed it is compatible with forced discharge/export.
+- Native Grid Feed in Power Limit is enabled at the inverter maxima: 9900 W and
+  52 A. A 0 W / 0 A setting was the export blocker.
 - The protective force-charge safety threshold is 7% (`FORCE_CHARGE_SOC_PERCENT`).
 - The absolute minimum SOC is 10%; the already-recorded over-discharge and
   recovery settings use that floor.
@@ -108,7 +110,9 @@ are not runtime writes:
 - Maximum discharge current: inverter-supported maximum or unlimited.
 - Maximum output power: installed maximum (100%, one-time commissioned).
 - Maximum feed-in power: unlimited within the DNO-approved export limit (one-time commissioned).
-- All charge and discharge slots initially disabled.
+- Slot 2 forced discharge is commissioned live for 16:54–22:30, 100 A, target
+  19%. The active schedule uses the inverter's authoritative UTC datetime;
+  HA Europe/London introduced a one-hour offset.
 
 Maximum grid power means the maximum power that may be drawn from the grid.
 Maximum feed-in power means the maximum power that may be exported.
@@ -118,7 +122,10 @@ inverters, so no lower software feed-in limit is required.
 
 The runtime deployment validates interactions among the already-commissioned
 Feed-In Priority, Peak Shaving, protective thresholds, forced discharge and
-timed slots without taking ownership of the one-time native settings.
+timed slots without taking ownership of the one-time native settings. The
+Solis control integration's HA export/peak-shaving switch entities are
+non-authoritative/unavailable; these settings remain one-time SolisCloud
+commissioning facts.
 
 ## Core operating policy
 
@@ -135,8 +142,13 @@ While the controller is healthy:
 - Never discharge below the dynamic household reserve.
 - Never calculate a household reserve below `MINIMUM_SOC_PERCENT`.
 
-Feed-In Priority with the separate PV inverter is considered validated. The
-candidate deployment will validate its interaction with the remaining controls.
+Feed-In Priority with the separate PV inverter and the commissioned Peak
+Shaving/forced-export combination are live verified.
+
+Live verification of forced export showed Solis battery power −4917 W and
+Octopus current demand −4104 W. Disabling Grid Peak Shaving left only
+load-following (about −299 W, with no export); restoring the 100 W setting
+restored forced export. EMS remains disabled and inverter output power is 100%.
 
 ### Fail-safe operation
 
@@ -512,7 +524,7 @@ The physical discharge floor, 7% force-charge threshold, 10% recovery setting,
 export setting are one-time commissioned facts recorded above; the runtime does
 not map them.
 
-The candidate deployment must establish whether Battery Reserve:
+The live runtime must continue to monitor whether Battery Reserve:
 
 - Prevents Peak Shaving from discharging below the dynamic reserve.
 - Causes unwanted grid charging when the battery is below the reserve.

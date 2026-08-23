@@ -1,6 +1,6 @@
 # T0022 — Simplify house-battery control to a live-verified MVP
 
-Status: Approved
+Status: Live verified
 
 ## Objective
 
@@ -25,8 +25,9 @@ Commissioning is a one-time operator activity, not a runtime subsystem.
   configuration.
 - Do not create commissioning services, tokens, evidence records, fingerprints,
   authority objects, or a persisted commissioning state machine.
-- Dynamic control remains disabled until the deployed candidate has passed live
-  verification.
+- Dynamic control is enabled only after live verification and explicit operator
+  approval; the commissioned system is now live and healthy in
+  `RESERVE_DISCHARGE`.
 
 The documented configuration is the source of truth. If the inverter or
 integration is replaced, the operator repeats this procedure and updates IaC.
@@ -36,7 +37,8 @@ integration is replaced, the operator repeats this procedure and updates IaC.
 - EMS is disabled for the plant so SolisCloud does not dispatch or overwrite
   inverter controls.
 - Maximum inverter output is set to the installed entity's maximum value.
-- Native charge and discharge slots are disabled before controller deployment.
+- Native charge and discharge slots are commissioned through SolisCloud; live
+  Slot 2 is 16:54–22:30, 100 A, target 19%.
 
 ## Keep
 
@@ -134,8 +136,9 @@ present.
   operator confirms conditions are safe.
 - Confirm direction changes pass through all-slots-off.
 - Confirm stale/missing-input and watchdog recovery return to fail-safe.
-- Leave dynamic control disabled unless the operator explicitly approves
-  enabling it.
+- Leave dynamic control enabled only after the operator explicitly approves it
+  and the live checks below pass. The current approved state is enabled and
+  healthy in `RESERVE_DISCHARGE`.
 
 ## Non-goals
 
@@ -154,3 +157,16 @@ present.
 - Live fail-safe and selected action verification passes.
 - IaC documents the actual persistent Solis settings and entity mapping.
 - The system is left in the operator-approved state.
+
+## Live verification — 2026-08-23
+
+- Dynamic control is live and healthy in `RESERVE_DISCHARGE`.
+- Forced export was verified with Solis battery power −4917 W and Octopus
+  current demand −4104 W.
+- Grid Peak Shaving at 100 W is compatible with forced export. The native Grid
+  Feed in Power Limit had been enabled at 0 W / 0 A; commissioning it to
+  9900 W / 52 A restored export. EMS is disabled and output power is 100%.
+- Schedule times follow the inverter's authoritative UTC datetime. Using HA's
+  Europe/London timezone caused a one-hour offset.
+- HA export and peak-shaving switch entities are non-authoritative/unavailable;
+  persistent settings remain one-time SolisCloud commissioning.
