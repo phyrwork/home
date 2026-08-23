@@ -28,7 +28,7 @@ class SolisSlotOwner(str, Enum):
 
     CHEAP_CHARGING = "cheap_charging"
     FULL_SOC_CYCLING = "full_soc_cycling"
-    PRE_DISCHARGE = "pre_discharge"
+    RESERVE_EXPORT = "reserve_export"
     RESERVED = "reserved"
 
 
@@ -112,7 +112,7 @@ _EXPECTED_SLOT_OWNERS = {
     (1, "charge"): SolisSlotOwner.CHEAP_CHARGING,
     (1, "discharge"): SolisSlotOwner.FULL_SOC_CYCLING,
     (2, "charge"): SolisSlotOwner.RESERVED,
-    (2, "discharge"): SolisSlotOwner.PRE_DISCHARGE,
+    (2, "discharge"): SolisSlotOwner.RESERVE_EXPORT,
     (3, "charge"): SolisSlotOwner.RESERVED,
     (3, "discharge"): SolisSlotOwner.RESERVED,
     (4, "charge"): SolisSlotOwner.RESERVED,

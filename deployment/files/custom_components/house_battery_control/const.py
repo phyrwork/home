@@ -6,7 +6,6 @@ from .domain_constants import (
     FULL_SOC_PERCENT,
     MAXIMUM_GRID_IMPORT_POWER_KW,
     MINIMUM_SOC_PERCENT,
-    OFF_PEAK_CYCLE_DISCHARGE_DURATION,
 )
 
 DOMAIN = "house_battery_control"

@@ -13,7 +13,6 @@ from custom_components.house_battery_control.domain_constants import (
     FULL_SOC_PERCENT,
     MAXIMUM_GRID_IMPORT_POWER_KW,
     MINIMUM_SOC_PERCENT,
-    OFF_PEAK_CYCLE_DISCHARGE_DURATION,
 )
 
 
@@ -46,7 +45,6 @@ def test_policy_constants_are_exact() -> None:
     assert (FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT, FORCE_CHARGE_SOC_PERCENT) == (100, 10, 7)
     assert MAXIMUM_GRID_IMPORT_POWER_KW == Decimal("0.1")
     assert isinstance(MAXIMUM_GRID_IMPORT_POWER_KW, Decimal)
-    assert OFF_PEAK_CYCLE_DISCHARGE_DURATION == timedelta(minutes=10)
     assert BATTERY_CYCLE_COST_PER_KWH == Decimal("0.0165")
     assert str(BATTERY_CYCLE_COST_PER_KWH) == "0.0165"
 
@@ -84,7 +82,7 @@ def test_enums_and_structural_exclusivity() -> None:
     assert set(contracts.StrategyPhase) == {
         contracts.StrategyPhase.OBSERVING,
         contracts.StrategyPhase.IDLE,
-        contracts.StrategyPhase.PRE_DISCHARGE,
+        contracts.StrategyPhase.RESERVE_DISCHARGE,
         contracts.StrategyPhase.OFF_PEAK_CHARGE,
         contracts.StrategyPhase.OFF_PEAK_CYCLE_DISCHARGE,
         contracts.StrategyPhase.FINAL_CHARGE,
@@ -93,7 +91,7 @@ def test_enums_and_structural_exclusivity() -> None:
     assert set(contracts.SlotOwner) == {
         contracts.SlotOwner.CHEAP_CHARGING,
         contracts.SlotOwner.FULL_SOC_CYCLING,
-        contracts.SlotOwner.PRE_DISCHARGE,
+        contracts.SlotOwner.RESERVE_EXPORT,
     }
     assert set(contracts.SlotDirection) == {
         contracts.SlotDirection.CHARGE,

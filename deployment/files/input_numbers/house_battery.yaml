@@ -1,0 +1,8 @@
+house_battery_cycle_discharge_duration_minutes:
+  name: House Battery Cycle Discharge Duration
+  min: 1
+  max: 60
+  step: 1
+  unit_of_measurement: min
+  mode: box
+  icon: mdi:battery-minus

@@ -17,6 +17,7 @@ solar:
   config_entry_id: 79c4415a9ea776404127c1b61ba240cf
 
 control_disable_guard_entity_id: input_boolean.house_battery_control_disable
+cycle_discharge_duration_entity_id: input_number.house_battery_cycle_discharge_duration_minutes
 
 # Live entity capabilities are re-read on every evaluation. Charge/discharge
 # power is derived from battery voltage and the owned slot-current maxima.
@@ -81,7 +82,7 @@ solis:
         time_entity_id: text.garage_inverter_control_slot2_discharge_time
         current_entity_id: number.garage_inverter_control_slot2_discharge_current
         target_soc_entity_id: number.garage_inverter_control_slot2_discharge_soc
-        owner: pre_discharge
+        owner: reserve_export
     - physical_slot: 3
       charge:
         enable_entity_id: switch.garage_inverter_control_slot3_charge

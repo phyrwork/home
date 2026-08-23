@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_CEILING
 from typing import Any, Mapping, Sequence
 
@@ -14,12 +14,11 @@ from homeassistant.util import dt as dt_util
 from . import load
 from .config import Config
 from .contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
-from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT, OFF_PEAK_CYCLE_DISCHARGE_DURATION
+from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
 from .energy import EnergyInterval
 from .interval import TimeInterval
 from .octopus_windows import (
     AdjustedRateInterval,
-    CheapClassification,
     CheapWindow,
     CoverageStatus,
     DispatchSourceObservation,
@@ -30,7 +29,6 @@ from .octopus_windows import (
     parse_fused_export_rates,
     parse_fused_import_rates,
 )
-from .pre_discharge import PreDischargePlanResult, plan_pre_discharge
 from .reserve_planner import ReserveInputInterval, ReservePlanResult, ReservePlanningStatus, plan_reserve
 from .solis_reader import read_solis_state
 from .solis_state import SolisStateReadResult, SolisStateSnapshot
@@ -46,6 +44,7 @@ class RuntimeInputs:
     next_window: CheapWindow | None
     maximum_charge_power_kw: Decimal
     maximum_discharge_power_kw: Decimal
+    cycle_discharge_duration: timedelta
 
 
 async def async_read_runtime_inputs(
@@ -54,6 +53,7 @@ async def async_read_runtime_inputs(
     *,
     now: datetime,
     cycle_state: CycleState,
+    cycle_deadline: datetime | None = None,
 ) -> RuntimeInputs:
     guard = _state(hass, config.control_disable_guard_entity_id)
     guard_off = guard.state == "off"
@@ -64,6 +64,7 @@ async def async_read_runtime_inputs(
 
     import_state = _state(hass, config.tariff.import_rates_entity_id)
     export_state = _state(hass, config.tariff.export_rates_entity_id)
+    cycle_duration = _cycle_duration(_state(hass, config.cycle_discharge_duration_entity_id))
     import_rates = parse_fused_import_rates(_attribute(import_state, "rates"))
     export_rates = parse_fused_export_rates(_attribute(export_state, "rates"))
     horizon_end = min(max(item.end for item in import_rates), max(item.end for item in export_rates))
@@ -88,6 +89,12 @@ async def async_read_runtime_inputs(
     next_window = next((window for window in windows if window.start > now), None)
 
     reserve_end = next_window.start if next_window is not None else horizon_end
+    # Solis schedules are real, bounded schedules.  Keep the reserve-export
+    # intent safely below the device's 24-hour limit when a forecast horizon
+    # has no subsequent cheap start.
+    reserve_end = _minute_floor(min(reserve_end, now + timedelta(hours=23, minutes=59)))
+    if reserve_end <= now:
+        reserve_end = _minute_floor(now + timedelta(minutes=1))
     trusted_import = evaluate_trusted_import_rates(
         import_rates=import_rates,
         start=now,
@@ -120,11 +127,10 @@ async def async_read_runtime_inputs(
     current_energy = config.battery.capacity_kwh * telemetry.state_of_charge_percent / Decimal(FULL_SOC_PERCENT)
     charge_state = snapshot.slots[0].charge
     cycle_state_observed = snapshot.slots[0].discharge
-    pre_state = snapshot.slots[1].discharge
+    reserve_state = snapshot.slots[1].discharge
     cheap_intent = None
+    reserve_intent = None
     cycle_intent = None
-    pre_intent = None
-    pre_plan: PreDischargePlanResult | None = None
 
     if current_window is not None:
         start = _minute_floor(now)
@@ -140,55 +146,48 @@ async def async_read_runtime_inputs(
             min(Decimal(FULL_SOC_PERCENT), charge_state.target_soc.maximum),
             current_window.end,
         )
-        cycle_end = min(start + OFF_PEAK_CYCLE_DISCHARGE_DURATION, current_window.end)
-        if cycle_end > start:
+        if _positive_margin(current_window):
+            cycle_start = start
+            cycle_end = min(cycle_start + cycle_duration, current_window.end)
+            if cycle_deadline is not None:
+                cycle_end = min(cycle_deadline, current_window.end)
+                cycle_start = cycle_end - cycle_duration
+        else:
+            cycle_start = start
+            cycle_end = start
+        if cycle_end > cycle_start:
             cycle_intent = SlotIntent(
                 SlotOwner.FULL_SOC_CYCLING,
                 1,
                 SlotDirection.DISCHARGE,
-                start,
+                cycle_start,
                 cycle_end,
                 cycle_state_observed.current.maximum,
                 max(reserve_soc, cycle_state_observed.target_soc.minimum),
                 cycle_end,
             )
-    elif next_window is not None and _is_standard_cheap_window(next_window):
-        expected = _expected_energy_at_window(
-            current_energy,
-            forecast,
-            config,
-            maximum_charge_power,
-            maximum_discharge_power,
+
+    if not _positive_margin(current_window) and current_energy > reserve.reserve_energy_kwh:
+        reserve_target = _quantize_target(
+            reserve_soc,
+            reserve_state.target_soc.minimum,
+            reserve_state.target_soc.maximum,
+            reserve_state.target_soc.step,
         )
-        pre_plan = plan_pre_discharge(
-            now=now,
-            current_energy_kwh=current_energy,
-            expected_window_start_energy_kwh=expected,
-            reserve_energy_kwh=reserve.reserve_energy_kwh,
-            capacity_kwh=config.battery.capacity_kwh,
-            maximum_charge_power_kw=maximum_charge_power,
-            maximum_discharge_power_kw=maximum_discharge_power,
-            charge_efficiency=config.battery.charge_efficiency,
-            discharge_efficiency=config.battery.discharge_efficiency,
-            window=next_window,
-            minimum_target_soc=max(Decimal(MINIMUM_SOC_PERCENT), pre_state.target_soc.minimum),
-            target_soc_step=pre_state.target_soc.step,
+        reserve_intent = SlotIntent(
+            SlotOwner.RESERVE_EXPORT,
+            2,
+            SlotDirection.DISCHARGE,
+            _minute_floor(now),
+            reserve_end,
+            reserve_state.current.maximum,
+            reserve_target,
+            reserve_end,
         )
-        if pre_plan.proposed_start and pre_plan.proposed_end and pre_plan.target_soc_percent is not None:
-            pre_intent = SlotIntent(
-                SlotOwner.PRE_DISCHARGE,
-                2,
-                SlotDirection.DISCHARGE,
-                pre_plan.proposed_start,
-                pre_plan.proposed_end,
-                pre_state.current.maximum,
-                pre_plan.target_soc_percent,
-                pre_plan.proposed_end,
-            )
 
     recharge = timedelta(0)
     if cycle_intent is not None:
-        withdrawn = maximum_discharge_power * Decimal(str((cycle_intent.end - cycle_intent.start).total_seconds())) / Decimal(3600) / config.battery.discharge_efficiency
+        withdrawn = maximum_discharge_power * Decimal(str(cycle_duration.total_seconds())) / Decimal(3600) / config.battery.discharge_efficiency
         recharge_hours = withdrawn / (maximum_charge_power * config.battery.charge_efficiency)
         recharge = timedelta(seconds=float(recharge_hours * Decimal(3600)))
 
@@ -201,14 +200,15 @@ async def async_read_runtime_inputs(
         reserve_soc_percent=reserve_soc,
         cheap_window=current_window,
         cheap_charge_intent=cheap_intent,
-        pre_discharge_plan=pre_plan,
-        pre_discharge_intent=pre_intent,
+        reserve_discharge_intent=reserve_intent,
         cycle_window=current_window,
         cycle_discharge_intent=cycle_intent,
         recharge_duration=recharge,
+        cycle_discharge_duration=cycle_duration,
         cycle_state=cycle_state,
+        cycle_deadline=cycle_deadline,
     )
-    return RuntimeInputs(strategy, solis, reserve, current_window, next_window, maximum_charge_power, maximum_discharge_power)
+    return RuntimeInputs(strategy, solis, reserve, current_window, next_window, maximum_charge_power, maximum_discharge_power, cycle_duration)
 
 
 def _state(hass: HomeAssistant, entity_id: str) -> State:
@@ -260,11 +260,27 @@ def _runtime_powers(snapshot: SolisStateSnapshot) -> tuple[Decimal, Decimal]:
     return charge, discharge
 
 
-def _is_standard_cheap_window(window: CheapWindow) -> bool:
-    return bool(window.components) and all(
-        item.rate_interval.classification is CheapClassification.STANDARD_CHEAP
-        for item in window.components
-    )
+def _cycle_duration(state: State) -> timedelta:
+    try:
+        value = Decimal(str(state.state))
+    except (ArithmeticError, TypeError, ValueError):
+        raise ValueError("cycle discharge duration is not numeric") from None
+    if not value.is_finite() or value != value.to_integral_value() or not Decimal("1") <= value <= Decimal("60"):
+        raise ValueError("cycle discharge duration must be an integer from 1 to 60 minutes")
+    return timedelta(minutes=int(value))
+
+
+def _quantize_target(requested: Decimal, minimum: Decimal, maximum: Decimal, step: Decimal) -> Decimal:
+    if step <= 0 or minimum > maximum:
+        raise ValueError("target capability is invalid")
+    target = minimum + ((max(minimum, requested) - minimum) / step).to_integral_value(rounding=ROUND_CEILING) * step
+    if target > maximum:
+        raise ValueError("target capability cannot represent the reserve")
+    return target
+
+
+def _positive_margin(window: CheapWindow | None) -> bool:
+    return window is not None and any(item.margin_per_stored_kwh > 0 for item in window.components)
 
 
 async def _forecast_intervals(
@@ -334,26 +350,6 @@ def _energy(interval: TimeInterval, items: Sequence[EnergyInterval], *, required
     if required and covered != interval.end - interval.start:
         raise ValueError("load forecast does not cover the reserve interval")
     return total
-
-
-def _expected_energy_at_window(
-    current: Decimal,
-    forecast: Sequence[ReserveInputInterval],
-    config: Config,
-    maximum_charge: Decimal,
-    maximum_discharge: Decimal,
-) -> Decimal:
-    energy = current
-    for item in forecast:
-        hours = Decimal(str((item.interval.end - item.interval.start).total_seconds())) / Decimal(3600)
-        deficit = item.load_kwh - item.solar_kwh
-        if deficit > 0:
-            output = min(deficit, maximum_discharge * hours)
-            energy -= output / config.battery.discharge_efficiency
-        else:
-            energy += min(-deficit, maximum_charge * hours) * config.battery.charge_efficiency
-        energy = min(config.battery.capacity_kwh, max(config.battery.minimum_energy_kwh, energy))
-    return energy
 
 
 def _soc_ceiling(energy: Decimal, capacity: Decimal) -> Decimal:

@@ -3,15 +3,13 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from custom_components.house_battery_control.octopus_windows import (
-    CheapClassification,
-    CheapWindow,
     CoverageStatus,
     DispatchSourceObservation,
     RateSourceObservation,
     evaluate_trusted_import_rates,
     parse_public_import_event,
 )
-from custom_components.house_battery_control.runtime_inputs import _is_standard_cheap_window, _runtime_powers
+from custom_components.house_battery_control.runtime_inputs import _cycle_duration, _runtime_powers
 from custom_components.house_battery_control.solis_reader import read_solis_state
 from custom_components.house_battery_control.tests.test_solis_reader import NOW, fixture
 
@@ -33,24 +31,19 @@ def test_runtime_power_ignores_percentage_output_capability() -> None:
     assert _runtime_powers(result.snapshot) == (Decimal("5.12"), Decimal("5.12"))
 
 
-def _window(*classifications: CheapClassification) -> CheapWindow:
-    components = tuple(
-        SimpleNamespace(rate_interval=SimpleNamespace(classification=classification))
-        for classification in classifications
-    )
-    return CheapWindow(NOW, NOW + timedelta(minutes=30), components)  # type: ignore[arg-type]
+def test_cycle_duration_is_validated_at_runtime() -> None:
+    assert _cycle_duration(SimpleNamespace(state="10")).total_seconds() == 600
 
 
-def test_pre_discharge_requires_standard_cheap_window() -> None:
-    assert _is_standard_cheap_window(_window(CheapClassification.STANDARD_CHEAP))
-    assert not _is_standard_cheap_window(_window(CheapClassification.BONUS_DISPATCH))
-    assert not _is_standard_cheap_window(
-        _window(CheapClassification.STANDARD_CHEAP, CheapClassification.BONUS_DISPATCH)
-    )
+def test_cycle_duration_rejects_out_of_range_values() -> None:
+    import pytest
 
-
-def test_empty_cheap_window_is_not_eligible_for_pre_discharge() -> None:
-    assert not _is_standard_cheap_window(CheapWindow(NOW, NOW + timedelta(minutes=30), ()))
+    with pytest.raises(ValueError):
+        _cycle_duration(SimpleNamespace(state="0"))
+    with pytest.raises(ValueError):
+        _cycle_duration(SimpleNamespace(state="10.5"))
+    with pytest.raises(ValueError):
+        _cycle_duration(SimpleNamespace(state="61"))
 
 
 def test_stale_bonus_dispatch_is_not_usable_for_reserve() -> None:

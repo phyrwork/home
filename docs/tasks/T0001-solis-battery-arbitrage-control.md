@@ -39,8 +39,11 @@ FULL_SOC_PERCENT = 100
 MINIMUM_SOC_PERCENT = 10
 FORCE_CHARGE_SOC_PERCENT = 7
 MAXIMUM_GRID_IMPORT_POWER_KW = 0.1
-OFF_PEAK_CYCLE_DISCHARGE_MINUTES = 10
 ```
+
+The cycle duration is the live Home Assistant entity
+`input_number.house_battery_cycle_discharge_duration_minutes`; it is currently
+commissioned to 10 minutes and remains configurable from 1 to 60.
 
 Safety values must not be duplicated as numeric literals throughout the
 implementation. Code, tests, diagnostics and documentation should refer to these
@@ -193,7 +196,8 @@ When those conditions hold:
 
 1. Disable and verify the charge slot.
 2. Configure a discharge period lasting
-   `OFF_PEAK_CYCLE_DISCHARGE_MINUTES`.
+   `input_number.house_battery_cycle_discharge_duration_minutes` (commissioned
+   to 10 minutes, configurable from 1 to 60).
 3. Force discharge, stopping early if the dynamic household reserve is reached.
 4. Disable and verify the discharge slot.
 5. Resume charging to `FULL_SOC_PERCENT`.
@@ -211,10 +215,10 @@ Near the end of a cheap interval, the controller must stop starting new discharg
 cycles, disable any discharge slot and enter a final charge phase toward
 `FULL_SOC_PERCENT`.
 
-## Headroom strategy 2 — pre-discharge before scheduled off-peak
+## Reserve export outside a trusted cheap window
 
-This is a separate planning action performed before a known standard or bonus
-off-peak interval.
+When no trusted positive-margin cheap or Intelligent Octopus dispatch window is
+active, export immediately toward the dynamic reserve.
 
 Calculate:
 
@@ -223,23 +227,18 @@ Calculate:
 - Forecast load and negative-load PV contribution.
 - The dynamic household reserve required before the interval.
 
-If the forecast charging opportunity would take the battery above
-`FULL_SOC_PERCENT`, pre-discharge the otherwise unusable energy before the cheap
-interval.
+If SOC is above the upward-quantized dynamic reserve, discharge via physical
+slot 2 to that reserve, bounded by the next trusted cheap start or a sub-24-hour
+horizon.
 
 The discharge target must:
 
-- Create only the useful calculated headroom.
-- Remain above the dynamic household reserve.
+- Stop at the upward-quantized reserve and never below it.
 - Remain above `MINIMUM_SOC_PERCENT`.
 - Account for forecast demand before cheap charging starts.
 
-This pre-discharge should normally require one discharge operation rather than
-repeated switching.
-
-Both strategies may apply to one cheap interval: pre-discharge creates forecast
-headroom before it begins, while full-SOC cycling exploits additional capacity if
-the battery becomes full during it.
+This reserve export is independent of full-SOC cycling, which applies only while
+the trusted cheap interval is active.
 
 ## Intelligent Octopus dispatches
 
@@ -256,8 +255,7 @@ The controller must:
 - Clear expired slots so they cannot repeat the following day.
 - Reconcile all slots after Home Assistant restarts.
 
-A planned dispatch may justify pre-discharge before it begins, provided the
-dynamic reserve is preserved.
+A planned dispatch is a trusted cheap window when its margin is positive.
 
 ## Arbitrage calculation
 
@@ -321,7 +319,7 @@ A partial write must never leave both directions enabled.
 
 - Charge slot 1: standard and bonus off-peak charging.
 - Discharge slot 1: full-SOC cycling during off-peak.
-- Discharge slot 2: forecast pre-discharge before a scheduled cheap interval.
+- Discharge slot 2: reserve export outside a trusted cheap interval.
 - Remaining charge and discharge slots: disabled and reserved.
 
 Home Assistant owns all Solis charge and discharge slots. Fail-safe cleanup
@@ -398,7 +396,7 @@ Expose:
 
 ### Phase 4 — Controlled export cycling
 
-- Enable forecast pre-discharge.
+- Enable reserve export outside trusted cheap windows.
 - Enable full-SOC off-peak cycling.
 - Validate actual metered export and profitability.
 - Confirm that EV demand is handled correctly.
@@ -422,7 +420,7 @@ Expose:
 - Feed-in is not unnecessarily restricted below inverter capability.
 - Negative load is represented as battery-charge potential in the planner.
 - Charge and discharge slots are never enabled simultaneously in production.
-- Pre-discharge creates useful headroom before a scheduled cheap interval.
+- Reserve export preserves only the energy needed before the next trusted cheap interval.
 - Profitable cycling can repeat after the battery reaches full SOC during a cheap
   interval.
 - No discharge cycle starts without enough time to recharge.

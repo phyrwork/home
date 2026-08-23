@@ -38,7 +38,6 @@ from .domain_constants import (
     OCTOPUS_EXPORT_SOURCE_MAX_AGE,
     OCTOPUS_RATE_SOURCE_MAX_AGE,
     OCTOPUS_RATE_UNIT,
-    OFF_PEAK_CYCLE_DISCHARGE_DURATION,
 )
 from .write_contracts import (
     DatetimeWriteRequest,

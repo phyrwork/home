@@ -1,9 +1,4 @@
-"""Small, pure strategy selector for the battery controller.
-
-The coordinator supplies already validated inputs and ready-to-write slot
-intents.  This module only decides which one action is allowed next; it does
-not read Home Assistant, calculate power, or perform writes.
-"""
+"""Small, pure strategy selector for the house-battery controller."""
 
 from __future__ import annotations
 
@@ -16,20 +11,20 @@ from typing import Any
 from .contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
 from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
 from .octopus_windows import CheapWindow
-from .pre_discharge import PreDischargePlanResult, PreDischargePlanningStatus
 
 
 class StrategyAction(str, Enum):
     FAIL_SAFE = "FAIL_SAFE"
     STOP = "STOP"
     CHEAP_CHARGE = "CHEAP_CHARGE"
-    PRE_DISCHARGE = "PRE_DISCHARGE"
+    RESERVE_DISCHARGE = "RESERVE_DISCHARGE"
     CYCLE_DISCHARGE = "CYCLE_DISCHARGE"
     IDLE = "IDLE"
 
 
 class CycleState(str, Enum):
     IDLE = "IDLE"
+    RESERVE_DISCHARGING = "RESERVE_DISCHARGING"
     DISCHARGING = "DISCHARGING"
     CHARGING = "CHARGING"
     STOPPING = "STOPPING"
@@ -37,8 +32,6 @@ class CycleState(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class StrategyInputs:
-    """Validated facts and pre-built candidate intents for one evaluation."""
-
     now: datetime
     health: ControllerHealth
     control_enabled: bool
@@ -47,12 +40,13 @@ class StrategyInputs:
     reserve_soc_percent: Decimal
     cheap_window: CheapWindow | None = None
     cheap_charge_intent: SlotIntent | None = None
-    pre_discharge_plan: PreDischargePlanResult | None = None
-    pre_discharge_intent: SlotIntent | None = None
+    reserve_discharge_intent: SlotIntent | None = None
     cycle_window: CheapWindow | None = None
     cycle_discharge_intent: SlotIntent | None = None
     recharge_duration: timedelta = timedelta(0)
+    cycle_discharge_duration: timedelta = timedelta(0)
     cycle_state: CycleState = CycleState.IDLE
+    cycle_deadline: datetime | None = None
     maximum_soc_percent: Decimal = Decimal(FULL_SOC_PERCENT)
     minimum_soc_percent: Decimal = Decimal(MINIMUM_SOC_PERCENT)
 
@@ -66,8 +60,6 @@ class StrategyResult:
 
     @property
     def intent(self) -> SlotIntent | None:
-        """Descriptive alias for callers that call slots intents."""
-
         return self.slot
 
 
@@ -81,10 +73,9 @@ def _decimal(value: Any, name: str) -> Decimal:
     return value
 
 
-def _aware(value: Any, name: str) -> datetime:
+def _aware(value: Any, name: str) -> None:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must be timezone-aware")
-    return value
 
 
 def _window_active(window: CheapWindow | None, now: datetime) -> bool:
@@ -104,11 +95,16 @@ def _candidate(intent: SlotIntent | None, owner: SlotOwner, direction: SlotDirec
 
 
 def _safe_intent(intent: SlotIntent, minimum_soc: Decimal) -> SlotIntent:
-    """Raise a discharge target to the active safety floor if necessary."""
-
     if intent.target_soc < minimum_soc:
         return replace(intent, target_soc=minimum_soc)
     return intent
+
+
+def _effective_reserve(inputs: StrategyInputs, intent: SlotIntent | None) -> Decimal:
+    target = inputs.reserve_soc_percent
+    if intent is not None:
+        target = max(target, intent.target_soc)
+    return max(inputs.minimum_soc_percent, target)
 
 
 def _valid_inputs(inputs: StrategyInputs) -> None:
@@ -131,10 +127,14 @@ def _valid_inputs(inputs: StrategyInputs) -> None:
         raise ValueError("maximum SOC is below the reserve SOC")
     if not isinstance(inputs.recharge_duration, timedelta) or inputs.recharge_duration < timedelta(0):
         raise ValueError("recharge duration is invalid")
+    if not isinstance(inputs.cycle_discharge_duration, timedelta) or inputs.cycle_discharge_duration <= timedelta(0):
+        raise ValueError("cycle discharge duration is invalid")
     if type(inputs.cycle_state) is not CycleState:
         raise ValueError("cycle state is invalid")
+    if inputs.cycle_deadline is not None:
+        _aware(inputs.cycle_deadline, "cycle deadline")
     _candidate(inputs.cheap_charge_intent, SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE)
-    _candidate(inputs.pre_discharge_intent, SlotOwner.PRE_DISCHARGE, SlotDirection.DISCHARGE)
+    _candidate(inputs.reserve_discharge_intent, SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE)
     _candidate(inputs.cycle_discharge_intent, SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE)
 
 
@@ -148,10 +148,9 @@ def _cycle_can_start(inputs: StrategyInputs) -> bool:
         return False
     if intent.start > inputs.now or intent.end <= inputs.now:
         return False
-    if charge.end > window.end or charge.start > charge.end:
-        return False
     remaining = window.end - inputs.now
-    return remaining >= (intent.end - max(intent.start, inputs.now)) + inputs.recharge_duration
+    duration = inputs.cycle_discharge_duration or (intent.end - intent.start)
+    return remaining >= duration + inputs.recharge_duration
 
 
 def _cycle_can_continue(inputs: StrategyInputs) -> bool:
@@ -159,14 +158,22 @@ def _cycle_can_continue(inputs: StrategyInputs) -> bool:
     window = inputs.cycle_window or inputs.cheap_window
     if intent is None or not _window_active(window, inputs.now) or not _positive_margin(window):
         return False
-    if inputs.soc_percent <= max(inputs.minimum_soc_percent, intent.target_soc):
+    deadline = min(
+        value
+        for value in (
+            inputs.cycle_deadline or intent.end,
+            intent.end,
+            window.end,
+        )
+    )
+    if inputs.now >= deadline or inputs.soc_percent <= max(inputs.minimum_soc_percent, intent.target_soc):
         return False
-    remaining = window.end - inputs.now
-    return remaining >= inputs.recharge_duration
+    remaining_discharge = deadline - inputs.now
+    return window.end - inputs.now >= remaining_discharge + inputs.recharge_duration
 
 
 def select_strategy(inputs: StrategyInputs | object) -> StrategyResult:
-    """Select one safe action, returning ``FAIL_SAFE`` for malformed input."""
+    """Select exactly one safe action from validated runtime facts."""
 
     try:
         if not isinstance(inputs, StrategyInputs):
@@ -181,43 +188,71 @@ def select_strategy(inputs: StrategyInputs | object) -> StrategyResult:
         if inputs.soc_percent < inputs.minimum_soc_percent:
             return _result(StrategyAction.FAIL_SAFE, "SOC is below the safety floor")
 
-        # A stop is deliberately a complete evaluation result.  The caller
-        # must observe all slots off before asking for a new direction.
         if inputs.cycle_state is CycleState.STOPPING:
             return _result(StrategyAction.STOP, "complete direction change", state=CycleState.IDLE)
 
         charge = _candidate(inputs.cheap_charge_intent, SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE)
-        pre = _candidate(inputs.pre_discharge_intent, SlotOwner.PRE_DISCHARGE, SlotDirection.DISCHARGE)
+        reserve = _candidate(inputs.reserve_discharge_intent, SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE)
         cycle = _candidate(inputs.cycle_discharge_intent, SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE)
+        cheap = _window_active(inputs.cheap_window, inputs.now) and _positive_margin(inputs.cheap_window)
+
+        if inputs.cycle_state is CycleState.RESERVE_DISCHARGING:
+            effective_reserve = _effective_reserve(inputs, reserve)
+            if not cheap and reserve is not None and inputs.soc_percent > effective_reserve:
+                return _result(
+                    StrategyAction.RESERVE_DISCHARGE,
+                    "continue export to the dynamic reserve",
+                    slot=_safe_intent(reserve, effective_reserve),
+                    state=CycleState.RESERVE_DISCHARGING,
+                )
+            return _result(StrategyAction.STOP, "reserve export ended before a new direction", state=CycleState.STOPPING)
 
         if inputs.cycle_state is CycleState.CHARGING:
-            if charge is not None and _window_active(inputs.cheap_window, inputs.now) and inputs.soc_percent < inputs.maximum_soc_percent:
-                return _result(StrategyAction.CHEAP_CHARGE, "continue cheap-window charge", slot=charge, state=CycleState.CHARGING)
-            return _result(StrategyAction.STOP, "charge window ended or SOC target reached", state=CycleState.STOPPING)
+            if cheap and charge is not None and inputs.soc_percent < inputs.maximum_soc_percent:
+                return _result(StrategyAction.CHEAP_CHARGE, "recharge to full SOC after cycle", slot=charge, state=CycleState.CHARGING)
+            return _result(StrategyAction.STOP, "recharge complete or cheap window ended", state=CycleState.STOPPING)
 
         if inputs.cycle_state is CycleState.DISCHARGING:
-            if cycle is not None and _cycle_can_continue(inputs):
-                return _result(StrategyAction.CYCLE_DISCHARGE, "continue profitable full-SOC cycle", slot=_safe_intent(cycle, max(inputs.minimum_soc_percent, inputs.reserve_soc_percent)), state=CycleState.DISCHARGING)
-            return _result(StrategyAction.STOP, "cycle must stop before recharge or reserve breach", state=CycleState.STOPPING)
+            if _cycle_can_continue(inputs):
+                window = inputs.cycle_window or inputs.cheap_window
+                assert window is not None
+                deadline = min(
+                    value
+                    for value in (
+                        inputs.cycle_deadline or cycle.end,
+                        cycle.end,
+                        window.end,
+                    )
+                )
+                bounded_cycle = replace(cycle, end=deadline, expiry=min(cycle.expiry, deadline))
+                return _result(
+                    StrategyAction.CYCLE_DISCHARGE,
+                    "continue bounded full-SOC cycle",
+                    slot=_safe_intent(bounded_cycle, max(inputs.minimum_soc_percent, inputs.reserve_soc_percent)),
+                    state=CycleState.DISCHARGING,
+                )
+            return _result(StrategyAction.STOP, "cycle deadline or reserve reached", state=CycleState.STOPPING)
 
-        if pre is not None and inputs.pre_discharge_plan is not None:
-            plan = inputs.pre_discharge_plan
-            if type(plan) is not PreDischargePlanResult:
-                raise ValueError("pre-discharge plan has an unexpected type")
-            if plan.status is PreDischargePlanningStatus.PLANNED and plan.proposed_start is not None and plan.proposed_end is not None and plan.proposed_start <= inputs.now < plan.proposed_end:
-                # Pre-discharge is an independent one-shot intent, not part
-                # of the full-SOC charge/discharge cycle state machine.  Keep
-                # the cycle state idle so the next evaluation can continue
-                # the still-active plan instead of treating it as a cycle
-                # continuation and stopping it.
-                return _result(StrategyAction.PRE_DISCHARGE, "create planned headroom before cheap window", slot=_safe_intent(pre, max(inputs.minimum_soc_percent, inputs.reserve_soc_percent)))
-
-        if charge is not None and _window_active(inputs.cheap_window, inputs.now) and inputs.soc_percent < inputs.maximum_soc_percent:
-            return _result(StrategyAction.CHEAP_CHARGE, "charge during trusted cheap window", slot=charge, state=CycleState.CHARGING)
+        if cheap and charge is not None and inputs.soc_percent < inputs.maximum_soc_percent:
+            return _result(StrategyAction.CHEAP_CHARGE, "charge during trusted positive-margin window", slot=charge, state=CycleState.CHARGING)
 
         if _cycle_can_start(inputs):
             assert cycle is not None
-            return _result(StrategyAction.CYCLE_DISCHARGE, "create profitable headroom at full SOC", slot=_safe_intent(cycle, max(inputs.minimum_soc_percent, inputs.reserve_soc_percent)), state=CycleState.DISCHARGING)
+            return _result(
+                StrategyAction.CYCLE_DISCHARGE,
+                "create profitable headroom at full SOC",
+                slot=_safe_intent(cycle, max(inputs.minimum_soc_percent, inputs.reserve_soc_percent)),
+                state=CycleState.DISCHARGING,
+            )
+
+        effective_reserve = _effective_reserve(inputs, reserve)
+        if not cheap and reserve is not None and inputs.soc_percent > effective_reserve:
+            return _result(
+                StrategyAction.RESERVE_DISCHARGE,
+                "export immediately to the dynamic reserve",
+                slot=_safe_intent(reserve, effective_reserve),
+                state=CycleState.RESERVE_DISCHARGING,
+            )
 
         return _result(StrategyAction.IDLE, "no eligible strategy action")
     except (AttributeError, TypeError, ValueError):
@@ -226,12 +261,4 @@ def select_strategy(inputs: StrategyInputs | object) -> StrategyResult:
 
 plan_strategy = select_strategy
 
-
-__all__ = [
-    "CycleState",
-    "StrategyAction",
-    "StrategyInputs",
-    "StrategyResult",
-    "plan_strategy",
-    "select_strategy",
-]
+__all__ = ["CycleState", "StrategyAction", "StrategyInputs", "StrategyResult", "plan_strategy", "select_strategy"]

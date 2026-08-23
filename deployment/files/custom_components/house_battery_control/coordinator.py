@@ -35,6 +35,7 @@ class Snapshot:
     action: StrategyAction
     reason: str
     cycle_state: CycleState
+    cycle_deadline: datetime | None = None
     reserve_soc_percent: Decimal | None = None
     battery_energy_kwh: Decimal | None = None
     reserve_target_energy_kwh: Decimal | None = None
@@ -55,6 +56,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         super().__init__(hass, _LOGGER, config_entry=None, name=DOMAIN, update_interval=HEARTBEAT_INTERVAL)
         self.config = config
         self._cycle_state = CycleState.IDLE
+        self._cycle_deadline: datetime | None = None
         self._last_healthy_at: datetime | None = None
         self._unsub_sources: CALLBACK_TYPE | None = None
         self._started = False
@@ -176,6 +178,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                 self.config,
                 now=now,
                 cycle_state=self._cycle_state,
+                cycle_deadline=self._cycle_deadline,
             )
             decision = select_strategy(runtime.strategy)
             if decision.action is StrategyAction.FAIL_SAFE:
@@ -198,7 +201,12 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                     actuation=actuation,
                 )
             self._safe_state_applied = False
+            previous_cycle_state = self._cycle_state
             self._cycle_state = decision.next_cycle_state
+            if decision.action is StrategyAction.CYCLE_DISCHARGE and self._cycle_deadline is None and decision.slot is not None:
+                self._cycle_deadline = decision.slot.end
+            elif decision.action is StrategyAction.STOP and previous_cycle_state is CycleState.STOPPING:
+                self._cycle_deadline = None
             self._last_healthy_at = now
             return self._snapshot(
                 now,
@@ -228,6 +236,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         error: str | None = None,
     ) -> Snapshot:
         self._cycle_state = CycleState.IDLE
+        self._cycle_deadline = None
         if self._safe_state_applied:
             actuation = PolicyActuationResult(True, True, "fail-safe already applied")
         else:
@@ -258,6 +267,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                 self.config,
                 now=now,
                 cycle_state=self._cycle_state,
+                cycle_deadline=self._cycle_deadline,
             )
         except Exception as exc:
             _LOGGER.debug("Reserve diagnostics unavailable: %s", exc)
@@ -291,6 +301,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             action=action,
             reason=reason,
             cycle_state=self._cycle_state,
+            cycle_deadline=self._cycle_deadline,
             reserve_soc_percent=reserve_soc,
             battery_energy_kwh=battery_energy,
             reserve_target_energy_kwh=reserve_target,
@@ -359,6 +370,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             self.config.control_disable_guard_entity_id,
             self.config.tariff.import_rates_entity_id,
             self.config.tariff.export_rates_entity_id,
+            self.config.cycle_discharge_duration_entity_id,
             telemetry.state_of_charge_entity_id,
             telemetry.battery_power_entity_id,
             telemetry.battery_voltage_entity_id,

@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from dataclasses import replace
 
 from custom_components.house_battery_control.contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
 from custom_components.house_battery_control.octopus_windows import CheapWindow
-from custom_components.house_battery_control.pre_discharge import PreDischargePlanResult, PreDischargePlanningStatus
 from custom_components.house_battery_control.strategy import CycleState, StrategyAction, StrategyInputs, select_strategy
 
 
@@ -12,7 +12,7 @@ NOW = datetime(2026, 8, 22, 12, tzinfo=UTC)
 
 
 def _intent(owner, direction, start=NOW, *, minutes=30, target="80"):
-    return SlotIntent(owner, 1 if owner is not SlotOwner.PRE_DISCHARGE else 2, direction, start, start + timedelta(minutes=minutes), Decimal("5"), Decimal(target), start + timedelta(minutes=minutes))
+    return SlotIntent(owner, 2 if owner is SlotOwner.RESERVE_EXPORT else 1, direction, start, start + timedelta(minutes=minutes), Decimal("5"), Decimal(target), start + timedelta(minutes=minutes))
 
 
 def _window(*, start=NOW, minutes=60, margin="0.10"):
@@ -31,7 +31,9 @@ def _inputs(**changes):
         cheap_charge_intent=_intent(SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE),
         cycle_window=_window(),
         cycle_discharge_intent=_intent(SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE, minutes=10, target="20"),
+        reserve_discharge_intent=_intent(SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE, minutes=30, target="10"),
         recharge_duration=timedelta(minutes=30),
+        cycle_discharge_duration=timedelta(minutes=10),
     )
     values.update(changes)
     return StrategyInputs(**values)
@@ -52,20 +54,69 @@ def test_malformed_input_and_floor_breach_fail_safe():
     assert result.action is StrategyAction.FAIL_SAFE
 
 
-def test_pre_discharge_precedes_cheap_charge_when_its_window_is_active():
-    plan = PreDischargePlanResult(PreDischargePlanningStatus.PLANNED, proposed_start=NOW, proposed_end=NOW + timedelta(minutes=20))
-    values = _inputs(pre_discharge_plan=plan, pre_discharge_intent=_intent(SlotOwner.PRE_DISCHARGE, SlotDirection.DISCHARGE))
+def test_reserve_export_is_used_outside_cheap_window_and_has_stop_barrier():
+    values = _inputs(
+        cheap_window=None,
+        cheap_charge_intent=None,
+        cycle_window=None,
+        cycle_discharge_intent=None,
+        reserve_discharge_intent=_intent(SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE, target="10"),
+        soc_percent=Decimal("50"),
+    )
     result = select_strategy(values)
-    assert result.action is StrategyAction.PRE_DISCHARGE
-    assert result.slot is not None and result.slot.owner is SlotOwner.PRE_DISCHARGE
-    assert result.next_cycle_state is CycleState.IDLE
+    assert result.action is StrategyAction.RESERVE_DISCHARGE
+    assert result.slot is not None and result.slot.owner is SlotOwner.RESERVE_EXPORT
+    assert result.next_cycle_state is CycleState.RESERVE_DISCHARGING
 
-    # The same plan remains active on the next evaluation; it must not enter
-    # the full-SOC cycle continuation branch and stop prematurely.
-    again = select_strategy(values)
-    assert again.action is StrategyAction.PRE_DISCHARGE
-    assert again.slot is not None and again.slot.owner is SlotOwner.PRE_DISCHARGE
-    assert again.next_cycle_state is CycleState.IDLE
+    again = select_strategy(replace(values, cycle_state=CycleState.RESERVE_DISCHARGING))
+    assert again.action is StrategyAction.RESERVE_DISCHARGE
+
+    stopped = select_strategy(replace(values, cycle_state=CycleState.RESERVE_DISCHARGING, cheap_window=_window(), cheap_charge_intent=_intent(SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE)))
+    assert stopped.action is StrategyAction.STOP
+    assert stopped.next_cycle_state is CycleState.STOPPING
+
+
+def test_reserve_discharge_stops_at_reserve_soc():
+    result = select_strategy(
+        _inputs(
+            cycle_state=CycleState.RESERVE_DISCHARGING,
+            soc_percent=Decimal("10"),
+            reserve_soc_percent=Decimal("10"),
+            cheap_window=None,
+        )
+    )
+    assert result.action is StrategyAction.STOP
+    assert result.next_cycle_state is CycleState.STOPPING
+
+
+def test_reserve_intent_target_is_an_effective_floor():
+    values = _inputs(
+        cheap_window=None,
+        cheap_charge_intent=None,
+        cycle_window=None,
+        cycle_discharge_intent=None,
+        reserve_soc_percent=Decimal("35"),
+        reserve_discharge_intent=_intent(SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE, target="40"),
+        soc_percent=Decimal("37"),
+    )
+    assert select_strategy(values).action is StrategyAction.IDLE
+    active = select_strategy(replace(values, cycle_state=CycleState.RESERVE_DISCHARGING))
+    assert active.action is StrategyAction.STOP
+    assert active.next_cycle_state is CycleState.STOPPING
+
+
+def test_charging_continues_below_full_then_stops_at_full_before_new_cycle():
+    continuing = select_strategy(
+        _inputs(cycle_state=CycleState.CHARGING, soc_percent=Decimal("99"))
+    )
+    assert continuing.action is StrategyAction.CHEAP_CHARGE
+    assert continuing.next_cycle_state is CycleState.CHARGING
+
+    complete = select_strategy(
+        _inputs(cycle_state=CycleState.CHARGING, soc_percent=Decimal("100"))
+    )
+    assert complete.action is StrategyAction.STOP
+    assert complete.next_cycle_state is CycleState.STOPPING
 
 
 def test_cheap_charge_is_exclusive_and_requires_not_full():
@@ -103,6 +154,65 @@ def test_active_cycle_stops_at_target_or_when_window_cannot_refill():
     assert result.action is StrategyAction.STOP
     assert result.next_cycle_state is CycleState.STOPPING
 
+
+def test_cycle_deadline_is_fixed_and_not_slid_by_heartbeat():
+    deadline = NOW + timedelta(minutes=10)
+    result = select_strategy(
+        _inputs(
+            soc_percent=Decimal("100"),
+            cycle_state=CycleState.DISCHARGING,
+            cycle_deadline=deadline,
+            cycle_discharge_intent=_intent(SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE, minutes=10),
+            now=NOW + timedelta(minutes=5),
+        )
+    )
+    assert result.action is StrategyAction.CYCLE_DISCHARGE
+    assert result.slot is not None and result.slot.end == NOW + timedelta(minutes=10)
+
+    stopped = select_strategy(
+        _inputs(
+            soc_percent=Decimal("100"),
+            cycle_state=CycleState.DISCHARGING,
+            cycle_deadline=deadline,
+            cycle_discharge_intent=_intent(SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE, minutes=10),
+            now=deadline,
+        )
+    )
+    assert stopped.action is StrategyAction.STOP
+    assert stopped.next_cycle_state is CycleState.STOPPING
+
+
+def test_shortened_cycle_window_stops_and_never_returns_intent_past_window():
+    short_window = _window(minutes=12)
+    result = select_strategy(
+        _inputs(
+            now=NOW + timedelta(minutes=5),
+            soc_percent=Decimal("100"),
+            cycle_state=CycleState.DISCHARGING,
+            cheap_window=short_window,
+            cycle_window=short_window,
+            cycle_deadline=NOW + timedelta(minutes=10),
+            cycle_discharge_intent=_intent(SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE, minutes=30),
+        )
+    )
+    assert result.action is StrategyAction.STOP
+
+    enough_window = _window(minutes=50)
+    continued = select_strategy(
+        _inputs(
+            now=NOW + timedelta(minutes=5),
+            soc_percent=Decimal("100"),
+            cycle_state=CycleState.DISCHARGING,
+            cheap_window=enough_window,
+            cycle_window=enough_window,
+            cycle_deadline=NOW + timedelta(minutes=20),
+            cycle_discharge_intent=_intent(SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE, minutes=30),
+            recharge_duration=timedelta(0),
+        )
+    )
+    assert continued.action is StrategyAction.CYCLE_DISCHARGE
+    assert continued.slot is not None and continued.slot.end <= enough_window.end
+
     result = select_strategy(_inputs(cycle_state=CycleState.DISCHARGING, soc_percent=Decimal("80"), recharge_duration=timedelta(minutes=61)))
     assert result.action is StrategyAction.STOP
 
@@ -111,9 +221,3 @@ def test_discharge_target_is_raised_to_reserve_floor():
     result = select_strategy(_inputs(soc_percent=Decimal("100"), reserve_soc_percent=Decimal("30"), cycle_discharge_intent=_intent(SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE, target="5")))
     assert result.action is StrategyAction.CYCLE_DISCHARGE
     assert result.slot is not None and result.slot.target_soc == Decimal("30")
-
-
-def test_non_planned_pre_discharge_is_ignored():
-    plan = PreDischargePlanResult(PreDischargePlanningStatus.NO_HEADROOM_NEEDED, proposed_start=NOW, proposed_end=NOW + timedelta(minutes=20))
-    result = select_strategy(_inputs(pre_discharge_plan=plan, pre_discharge_intent=_intent(SlotOwner.PRE_DISCHARGE, SlotDirection.DISCHARGE)))
-    assert result.action is StrategyAction.CHEAP_CHARGE

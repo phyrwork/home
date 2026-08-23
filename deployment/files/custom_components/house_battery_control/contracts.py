@@ -25,7 +25,7 @@ class ControllerHealth(_TextEnum):
 class StrategyPhase(_TextEnum):
     OBSERVING = "observing"
     IDLE = "idle"
-    PRE_DISCHARGE = "pre_discharge"
+    RESERVE_DISCHARGE = "reserve_discharge"
     OFF_PEAK_CHARGE = "off_peak_charge"
     OFF_PEAK_CYCLE_DISCHARGE = "off_peak_cycle_discharge"
     FINAL_CHARGE = "final_charge"
@@ -40,7 +40,7 @@ class SlotDirection(_TextEnum):
 class SlotOwner(_TextEnum):
     CHEAP_CHARGING = "cheap_charging"
     FULL_SOC_CYCLING = "full_soc_cycling"
-    PRE_DISCHARGE = "pre_discharge"
+    RESERVE_EXPORT = "reserve_export"
 
 
 class StorageMode(_TextEnum):

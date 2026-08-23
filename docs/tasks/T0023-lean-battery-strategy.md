@@ -10,18 +10,19 @@ inputs and the current cycle state, select exactly one action:
 - `FAIL_SAFE`
 - `STOP`
 - `CHEAP_CHARGE`
-- `PRE_DISCHARGE`
+- `RESERVE_DISCHARGE`
 - `CYCLE_DISCHARGE`
 - `IDLE`
 
 ## Scope
 
-- Add a four-state cycle model: `IDLE`, `DISCHARGING`, `CHARGING`, `STOPPING`.
+- Add a five-state cycle model: `IDLE`, `RESERVE_DISCHARGING`, `DISCHARGING`,
+  `CHARGING`, `STOPPING`. `CHARGING` deliberately covers cycle recharge.
 - Start a bounded full-SOC discharge only during a profitable cheap window and
   only when enough cheap-window time remains to recharge.
 - Stop discharging before charging resumes.
 - Give fail-safe and stop conditions priority over economic actions.
-- Reuse the existing Octopus window, reserve, and pre-discharge calculations
+- Reuse the existing Octopus window and reserve calculations
   without adding authority records, fingerprints, journals, or simulation
   infrastructure.
 - Add focused pure tests for precedence, exclusivity, cycling, malformed input,

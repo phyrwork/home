@@ -1,6 +1,6 @@
 # T0025 — Lean runtime cutover and legacy cleanup
 
-Status: MVP deployed with dynamic control disabled; legacy cleanup pending
+Status: MVP deployed with dynamic control disabled; reserve-export/cycling cutover in progress
 
 ## Objective
 

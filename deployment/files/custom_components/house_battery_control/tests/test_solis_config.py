@@ -20,7 +20,7 @@ def test_live_mapping_has_real_entities_and_six_physical_slots() -> None:
     assert parsed.telemetry.battery_power_sign is BatteryPowerSign.POSITIVE_MEANS_CHARGING
     assert len(parsed.slots) == 6
     assert parsed.slots[0].charge.owner is SolisSlotOwner.CHEAP_CHARGING
-    assert parsed.slots[1].discharge.owner is SolisSlotOwner.PRE_DISCHARGE
+    assert parsed.slots[1].discharge.owner is SolisSlotOwner.RESERVE_EXPORT
 
 
 def test_slot_mapping_is_strict() -> None:

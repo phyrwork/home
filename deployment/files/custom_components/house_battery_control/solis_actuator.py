@@ -236,7 +236,7 @@ class SolisSlotActuator:
         target = {
             (SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE): (1, SolisSlotOwner.CHEAP_CHARGING),
             (SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE): (1, SolisSlotOwner.FULL_SOC_CYCLING),
-            (SlotOwner.PRE_DISCHARGE, SlotDirection.DISCHARGE): (2, SolisSlotOwner.PRE_DISCHARGE),
+            (SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE): (2, SolisSlotOwner.RESERVE_EXPORT),
         }.get((intent.owner, intent.direction))
         if target is None or intent.physical_slot != target[0]:
             return "slot owner and direction are not targetable"

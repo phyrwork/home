@@ -1,6 +1,6 @@
 """Focused lifecycle and safety tests for the MVP coordinator."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,13 +11,13 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.house_battery_control import config as integration_config
 from custom_components.house_battery_control.const import DOMAIN
-from custom_components.house_battery_control.contracts import ControllerHealth
+from custom_components.house_battery_control.contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
 from custom_components.house_battery_control.coordinator import (
     HEARTBEAT_INTERVAL,
     Coordinator,
 )
 from custom_components.house_battery_control.solis_policy import PolicyActuationResult
-from custom_components.house_battery_control.strategy import CycleState, StrategyAction
+from custom_components.house_battery_control.strategy import CycleState, StrategyAction, StrategyResult
 
 
 NOW = datetime(2026, 8, 22, 10, tzinfo=UTC)
@@ -219,6 +219,59 @@ async def test_enabled_unexpected_failure_fails_safe(hass: HomeAssistant) -> Non
     assert result.action is StrategyAction.FAIL_SAFE
     assert "critical input" in result.reason
     actuator.async_apply_fail_safe.assert_awaited_once_with()
+
+
+async def test_cycle_deadline_is_stored_and_reused_across_heartbeats(hass: HomeAssistant) -> None:
+    source = yaml.safe_load(
+        (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
+    )
+    source["dynamic_control_enabled"] = True
+    coordinator = Coordinator(hass, integration_config.from_mapping(source))
+    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
+    actuator = policy(coordinator)
+    deadline = NOW + timedelta(minutes=10)
+    intent = SlotIntent(
+        SlotOwner.FULL_SOC_CYCLING,
+        1,
+        SlotDirection.DISCHARGE,
+        NOW,
+        deadline,
+        Decimal("5"),
+        Decimal("20"),
+        deadline,
+    )
+    runtime = SimpleNamespace(
+        strategy=SimpleNamespace(reserve_soc_percent=Decimal("10")),
+        solis=SimpleNamespace(snapshot=SimpleNamespace(telemetry=SimpleNamespace(
+            state_of_charge_percent=Decimal("100"), battery_power_kw=Decimal("0")
+        ))),
+        reserve=SimpleNamespace(reserve_energy_kwh=Decimal("3")),
+        current_window=None,
+        next_window=None,
+    )
+    decision = StrategyResult(
+        StrategyAction.CYCLE_DISCHARGE,
+        intent,
+        CycleState.DISCHARGING,
+        "test cycle",
+    )
+    with (
+        patch(
+            "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
+            AsyncMock(side_effect=(runtime, runtime)),
+        ) as read_runtime,
+        patch(
+            "custom_components.house_battery_control.coordinator.select_strategy",
+            return_value=decision,
+        ),
+    ):
+        await coordinator._async_update_data()
+        await coordinator._async_update_data()
+
+    assert coordinator._cycle_deadline == deadline
+    assert read_runtime.await_args_list[0].kwargs["cycle_deadline"] is None
+    assert read_runtime.await_args_list[1].kwargs["cycle_deadline"] == deadline
+    actuator.async_apply_healthy.assert_awaited()
 
 
 async def test_source_refresh_is_ignored_after_stop(hass: HomeAssistant) -> None:
