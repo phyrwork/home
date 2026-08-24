@@ -232,6 +232,84 @@ async def test_late_state_event_is_accepted_and_missing_states_are_rejected() ->
 
 
 @pytest.mark.asyncio
+async def test_successful_service_accepts_optimistic_revision_before_stale_refresh() -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    ha.service_wait = asyncio.Event()
+
+    def apply(_domain, _service, _data):
+        # Solis Cloud Control publishes this optimistic state before its API
+        # call, then its refresh can replace it with the old device value.
+        ha.set_state("switch.a", "on", updated=NOW + timedelta(seconds=1), context_id="optimistic")
+        ha.set_state("switch.a", "off", updated=NOW + timedelta(seconds=2), context_id="stale-refresh")
+        ha.service_wait.set()
+
+    ha.on_call = apply
+    result = await HomeAssistantWriter(ha).async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True)
+    )
+
+    assert result.outcome is WriteOutcome.APPLIED_HA_READBACK
+    assert "optimistic Home Assistant revision" in result.message
+    assert "device state remains unproven" in result.message
+    assert ha.states["switch.a"]["state"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_optimistic_revision_does_not_hide_service_error() -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    ha.service_error = RuntimeError("Solis API rejected the write")
+    ha.on_call = lambda *_: ha.set_state(
+        "switch.a", "on", updated=NOW + timedelta(seconds=1), context_id="optimistic"
+    )
+
+    result = await HomeAssistantWriter(ha).async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True)
+    )
+
+    assert result.outcome is WriteOutcome.SERVICE_ERROR
+
+
+@pytest.mark.asyncio
+async def test_optimistic_revision_does_not_hide_service_timeout(monkeypatch) -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "off")
+    ha.service_wait = asyncio.Event()
+    ha.on_call = lambda *_: (
+        ha.set_state("switch.a", "on", updated=NOW + timedelta(seconds=1), context_id="optimistic"),
+        ha.set_state("switch.a", "off", updated=NOW + timedelta(seconds=2), context_id="stale-refresh"),
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_CALL_TIMEOUT",
+        timedelta(seconds=0.01),
+    )
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.ha_writer.HA_SERVICE_TIMEOUT_CONFIRMATION",
+        timedelta(seconds=0.01),
+    )
+
+    result = await HomeAssistantWriter(ha).async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True)
+    )
+
+    assert result.outcome is WriteOutcome.SERVICE_TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_matching_pre_cas_state_is_no_change_without_service() -> None:
+    ha = FakeHA()
+    seed(ha, "switch.a", "on")
+
+    result = await HomeAssistantWriter(ha).async_write(
+        SwitchWriteRequest(precondition(ha, "switch.a"), True)
+    )
+
+    assert result.outcome is WriteOutcome.NO_CHANGE
+    assert ha.calls == []
+
+
+@pytest.mark.asyncio
 async def test_service_error_and_service_timeout_are_distinct(monkeypatch) -> None:
     ha = FakeHA()
     seed(ha, "switch.a", "off")

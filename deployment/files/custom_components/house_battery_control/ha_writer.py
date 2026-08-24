@@ -429,13 +429,48 @@ class HomeAssistantWriter:
         event = asyncio.Event()
         loop = asyncio.get_running_loop()
 
-        def on_change(*args: object, **kwargs: object) -> None:
-            loop.call_soon_threadsafe(event.set)
-
         remove: Callable[[], object] | None = None
         write_cancellation: asyncio.CancelledError | None = None
+        # Solis Cloud Control publishes an optimistic HA state before its
+        # blocking API call and then refreshes the coordinator in ``finally``.
+        # That refresh can replace the optimistic target with the previous
+        # device value before this method regains control.  Keep a latch for a
+        # matching post-CAS revision observed while the service is in flight;
+        # it is usable only after a successful service return and never turns
+        # an error or timeout into success.
+        post_cas_armed = False
+        service_in_flight = False
+        matching_revision_seen = False
+
+        def listener_state(args: tuple[object, ...], kwargs: Mapping[str, object]) -> object | None:
+            """Extract a new state from either HA events or test adapters."""
+
+            for value in args:
+                data = _field(value, "data")
+                if isinstance(data, Mapping) and "new_state" in data:
+                    return data["new_state"]
+                if isinstance(value, Mapping) and "state" in value:
+                    return value
+            data = kwargs.get("data")
+            if isinstance(data, Mapping) and "new_state" in data:
+                return data["new_state"]
+            return None
+
         try:
             # Arm before the final CAS check so a fast state transition cannot be missed.
+            def on_change(*args: object, **kwargs: object) -> None:
+                nonlocal matching_revision_seen
+                candidate = listener_state(args, kwargs)
+                if (
+                    post_cas_armed
+                    and service_in_flight
+                    and candidate is not None
+                    and self._matches(request, candidate, normalized)
+                    and self._new_revision(candidate, request.precondition)
+                ):
+                    matching_revision_seen = True
+                loop.call_soon_threadsafe(event.set)
+
             remove = self._listen(request.entity_id, on_change)
             latest = self._get(request.entity_id)
             rejected = self._precondition(request, latest)
@@ -447,11 +482,17 @@ class HomeAssistantWriter:
             normalized, service, service_data = validated
             if self._matches(request, latest, normalized):
                 return WriteResult(request.entity_id, WriteOutcome.NO_CHANGE, "Home Assistant already has target", service, service_data)
+            # There is no await between this final CAS and arming the latch,
+            # so a matching state observed here cannot be mistaken for a
+            # pre-CAS event.
+            post_cas_armed = True
+            service_in_flight = True
             try:
                 await self._call_service(
                     request, service, service_data, deadline=deadline
                 )
             except asyncio.TimeoutError:
+                service_in_flight = False
                 confirmed = await self._wait_for_matching_revision(
                     request,
                     normalized,
@@ -469,13 +510,25 @@ class HomeAssistantWriter:
                     )
                 return WriteResult(request.entity_id, WriteOutcome.SERVICE_TIMEOUT, "Home Assistant service call timed out without a new matching HA revision", f"{request.domain}.{service}", service_data)
             except asyncio.CancelledError as exc:
+                service_in_flight = False
                 # Keep the exact exception object raised by the service wait;
                 # listener cleanup may receive additional cancellation while
                 # it is unwinding, but must not replace this provenance.
                 write_cancellation = exc
                 raise
             except Exception as exc:
+                service_in_flight = False
                 return WriteResult(request.entity_id, WriteOutcome.SERVICE_ERROR, f"Home Assistant service call failed: {exc}", f"{request.domain}.{service}", service_data)
+            service_in_flight = False
+
+            if matching_revision_seen:
+                return WriteResult(
+                    request.entity_id,
+                    WriteOutcome.APPLIED_HA_READBACK,
+                    "A new matching optimistic Home Assistant revision was observed during the successful service call; device state remains unproven",
+                    f"{request.domain}.{service}",
+                    service_data,
+                )
 
             try:
                 confirmed = await self._wait_for_matching_revision(
