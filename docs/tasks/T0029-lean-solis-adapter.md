@@ -80,9 +80,10 @@ drift and must be visible to the controller.
 - Allocate only the T0027 owner slots.
 - Convert aware UTC to site-local wall time only here.
 - Split a logical cross-midnight interval into two temporally adjacent segments.
-- Use the configured/commissioned midnight representation. `24:00` is the
-  continuous candidate. If only `23:59` is accepted live, model and test its
-  one-minute gap as an explicit Solis limitation rather than adjacency.
+- Use the configured/commissioned midnight representation. The deployed
+  configuration uses `23:59`; model and test its one-minute gap as an explicit
+  Solis limitation rather than adjacency. Keep `24:00` support for controlled
+  compatibility tests, but do not emit it in the deployed configuration.
 - Validate prospective enabled intervals only; a disabled stored interval is not
   an active overlap.
 - A used slot may be reset to `00:00-00:00` and `0 A` after confirmed off, but
@@ -144,10 +145,11 @@ Consolidate Solis behavior tests into `test_solis.py` covering:
   reconciliation, observes every enable, and matches only when all are
   confirmed off, while deliberately returning no inferred cleanup write.
 - `split_intent` keeps aware UTC segments temporally adjacent. The strict
-  `solis.midnight_end` setting is currently `24:00`, the continuous candidate
-  requiring live commissioning. `23:59` is also modeled and tested as native
-  ranges `[start, 23:59)` and `[00:00, end)`, preserving its explicit one-minute
-  limitation rather than describing it as adjacent.
+  `solis.midnight_end` is commissioned as `23:59` because the Solis text entity
+  rejects an end value of `24:00`. It is modeled and tested as native ranges
+  `[start, 23:59)` and `[00:00, end)`, preserving its explicit one-minute
+  limitation rather than describing it as adjacent. `24:00` remains supported
+  only for compatibility coverage.
 - `apply` performs a second exact revision/capability CAS after acquiring one
   ordinary lock. Only successful blocking service completion plus matching new
   HA state is provisional success. Timeout/error remain ambiguous even after

@@ -136,9 +136,10 @@ time; confirm all directions off between tests.
 4. **Full-SOC cycle:** at full SOC during a profitable cheap interval, prove
    discharge for the configured duty duration, stop at its bound, then charge
    back toward full without a pre-discharge phase.
-5. **Local midnight charge:** determine whether `24:00` is accepted. Prove the
-   first segment stops and the adjacent second segment becomes physically
-   effective. If only `23:59` works, commission it and record the one-minute gap.
+5. **Local midnight charge:** use the commissioned `23:59` text-entity boundary
+   recorded in T0042. Prove the first segment stops, retain the accepted
+   `23:59–00:00` one-minute gap, and prove the second segment becomes physically
+   effective.
 6. **Local midnight discharge:** prove the equivalent two-segment readback,
    physical flow and no overlap. Because normal reserve economics do not span
    the static cheap midnight, run this as an isolated controller-unloaded,

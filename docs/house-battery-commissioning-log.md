@@ -348,3 +348,17 @@ off. The schedule stayed exactly `15:15–16:00` through the `15:16`, `15:17`,
 and `15:18` minute boundaries with healthy controller state. Whole-site demand
 rose from approximately `7.6 kW` to `12.7 kW`, proving about `5 kW` of battery
 charging alongside the EV. Dispatch-end stop proof remains pending.
+
+## 2026-08-24 Solis text-entity midnight boundary
+
+Fresh read-only controller evidence from `23:44–23:48 BST` showed
+`CHEAP_CHARGE` attempting to write charge schedules ending in `23:xx-24:00`.
+The Solis text entity accepts hours `00–23`, so the `24:00` end representation
+was rejected. Both charge slots remained off; this interval supplies no
+physical charging proof.
+
+The deployed boundary is therefore commissioned as `23:59`. The split remains
+two native local schedules, with the explicit one-minute gap `[23:59, 00:00)`
+accepted as a Solis text-entity limitation. No schedule encoding redesign is
+needed. Physical proof that the first segment stops and the next-day segment
+becomes effective remains part of the T0034 acceptance.

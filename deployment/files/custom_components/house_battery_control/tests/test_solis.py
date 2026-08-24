@@ -128,7 +128,7 @@ def advance(adapter: SolisAdapter, states: dict[str, object], desired: LogicalIn
 def test_compact_config_generates_exact_six_slot_map_and_allocations() -> None:
     parsed, _ = fixture()
     assert parsed.telemetry.battery_power_sign is BatteryPowerSign.POSITIVE_MEANS_CHARGING
-    assert parsed.midnight_end == "24:00"
+    assert parsed.midnight_end == "23:59"
     assert len(parsed.slots) == 6
     assert parsed.allocation(SlotOwner.CHEAP_CHARGING) == (
         SlotKey(1, SlotDirection.CHARGE), SlotKey(2, SlotDirection.CHARGE),
@@ -216,8 +216,15 @@ def test_unknown_peak_shaving_does_not_hide_mode_but_blocks_start() -> None:
     assert adapter.next_start_change(observed, intent(), reserve_soc_percent=Decimal("10"), peak_shaving=False) is None
 
 
-def test_split_midnight_is_adjacent_for_charge_and_discharge_and_encodes_candidate_boundary() -> None:
+@pytest.mark.parametrize(
+    ("midnight_end", "expected_first"),
+    (("23:59", "22:00-23:59"), ("24:00", "22:00-24:00")),
+)
+def test_split_midnight_encodes_configured_boundary(
+    midnight_end: str, expected_first: str,
+) -> None:
     parsed, states = fixture()
+    parsed = replace(parsed, midnight_end=midnight_end)
     for owner, direction in (
         (SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE),
         (SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE),
@@ -228,14 +235,14 @@ def test_split_midnight_is_adjacent_for_charge_and_discharge_and_encodes_candida
             end=datetime(2026, 12, 2, 1, tzinfo=UTC),
             target="100" if direction is SlotDirection.CHARGE else "20",
         )
-        split = split_intent(desired, timezone=LONDON, midnight_end="24:00")
+        split = split_intent(desired, timezone=LONDON, midnight_end=midnight_end)
         assert len(split.segments) == 2
         assert split.segments[0].end == split.segments[1].start
         local_states = deepcopy(states)
         adapter = SolisAdapter(local_states, parsed, timezone=LONDON)
         changes = advance(adapter, local_states, desired, reserve=Decimal("10"))
         times = [change.target for change in changes if change.entity_id.startswith("text.")]
-        assert times == ["22:00-24:00", "00:00-01:00"]
+        assert times == [expected_first, "00:00-01:00"]
         final = read_state(local_states, parsed, now=NOW)
         assert adapter.intent_matches(final, desired, reserve_soc_percent=Decimal("10"), peak_shaving=False)
 
@@ -388,9 +395,9 @@ def test_active_half_open_adjacency_is_accepted_but_conflict_or_unknown_blocks_s
         end=datetime(2026, 12, 2, 1, tzinfo=UTC),
     )
     adapter = SolisAdapter(states, parsed, timezone=LONDON)
-    split = split_intent(desired, timezone=LONDON, midnight_end="24:00")
+    split = split_intent(desired, timezone=LONDON, midnight_end=parsed.midnight_end)
     first = parsed.slots[0].charge
-    states[first.time_entity_id]["state"] = "22:00-24:00"
+    states[first.time_entity_id]["state"] = "22:00-23:59"
     states[first.target_soc_entity_id]["state"] = "100"
     states[first.enable_entity_id]["state"] = "on"
     observed = read_state(states, parsed, now=NOW)
@@ -505,7 +512,7 @@ def test_conflict_projection_is_exact_read_only_and_omits_unknown() -> None:
     )
     adapter = SolisAdapter(states, parsed, timezone=LONDON)
     first, second = parsed.allocation(SlotOwner.CHEAP_CHARGING)
-    for key, time_text in ((first, "22:00-24:00"), (second, "00:00-01:00")):
+    for key, time_text in ((first, "22:00-23:59"), (second, "00:00-01:00")):
         direction = parsed.direction(key)
         states[direction.time_entity_id]["state"] = time_text
         states[direction.target_soc_entity_id]["state"] = "100"
@@ -514,7 +521,7 @@ def test_conflict_projection_is_exact_read_only_and_omits_unknown() -> None:
     assert adapter.conflicting_enabled_keys(observed, desired) == ()
 
     mismatch = parsed.direction(first)
-    states[mismatch.time_entity_id]["state"] = "21:59-24:00"
+    states[mismatch.time_entity_id]["state"] = "21:59-23:59"
     extra = parsed.slots[0].discharge
     states[extra.enable_entity_id]["state"] = "on"
     unknown = parsed.slots[2].charge

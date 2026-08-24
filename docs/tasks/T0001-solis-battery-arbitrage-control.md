@@ -47,7 +47,9 @@ These are one-time operator settings, documented rather than runtime-managed:
 
 Feed-In Priority, native charge, native discharge, the charge time/SOC stop and
 unrestricted forced export have live physical evidence in the commissioning
-log. The exact native midnight end representation remains to be commissioned.
+log. The deployed native midnight end is `23:59`; T0042 records the text-entity
+boundary evidence and the explicitly accepted one-minute gap. Physical
+two-slot midnight behavior remains a commissioning acceptance.
 
 Runtime owns only:
 
@@ -121,9 +123,11 @@ There is no pre-discharge mode.
 - Runtime instants are aware UTC; native schedule values are inverter-local
   `HH:MM` wall-clock values.
 - Intervals are half-open `[start, end)`: adjacency is valid and overlap is not.
-- A logical interval crossing local midnight is split into two adjacent native
-  slots for both charge and discharge. Never rely on Solis priority between
-  overlapping slots.
+- A logical interval crossing local midnight is split into two UTC-adjacent
+  logical segments for both charge and discharge. The deployed `23:59`
+  representation encodes them as native `[start, 23:59)` and `[00:00, end)`
+  schedules with the explicitly accepted one-minute gap; they are not native
+  adjacency. Never rely on Solis priority between overlapping slots.
 - An unavailable enable state blocks starts and is never treated as off.
 - Native slot end and target SOC are authoritative bounds if Home Assistant is
   unavailable.
@@ -186,7 +190,8 @@ authenticated Ansible deploy, live acceptance must:
 3. prove reserve discharge and its reserve stop;
 4. prove a full-SOC discharge/recharge cycle;
 5. prove no overlap during direction changes;
-6. commission `24:00` or explicitly accept the `23:59` one-minute gap;
+6. retain the commissioned `23:59` boundary and explicitly accepted one-minute
+   gap from T0042;
 7. physically prove two-slot charge and discharge across local midnight;
 8. prove fresh-setup recovery, degraded-to-Self-Use, sentinel and shutdown; and
 9. retain 24 hours of evidence covering telemetry recovery, retries, reserve
