@@ -122,8 +122,8 @@ planning or Solis-control generation changes. Re-evaluate eligibility before
 every attempt. Events may wake reconciliation early but do not reset the attempt
 count unless they change that generation.
 
-Stops are important. Keep only the enable entity IDs awaiting stop plus retry
-timing. Retry until observed off. Strategy changes cannot cancel a known stop.
+Stops are important. Keep only validated configured slot keys awaiting stop plus
+retry timing. Retry until observed off. Strategy changes cannot cancel a known stop.
 Unknown stop state is reread with backoff and never receives a speculative write.
 
 Each start, stop, or mode service attempt has a 30-second monotonic deadline.
