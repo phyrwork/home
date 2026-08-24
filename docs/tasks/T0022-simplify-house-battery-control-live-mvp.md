@@ -1,6 +1,9 @@
 # T0022 — Simplify house-battery control to a live-verified MVP
 
-Status: Live verified
+Status: Superseded by T0026
+
+Historical evidence below is retained, but its broad baseline, guard and
+all-slot cleanup design is not current architecture.
 
 ## Objective
 

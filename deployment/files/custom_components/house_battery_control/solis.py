@@ -13,10 +13,11 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
-from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
 from .model import (
     ControllerHealth,
+    FULL_SOC_PERCENT,
     LogicalIntent,
+    MINIMUM_SOC_PERCENT,
     ObservedCapability,
     RuntimeCapabilities,
     SlotDirection,

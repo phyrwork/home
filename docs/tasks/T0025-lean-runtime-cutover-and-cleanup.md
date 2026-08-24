@@ -1,6 +1,9 @@
 # T0025 — Lean runtime cutover and legacy cleanup
 
-Status: Live cutover verified; dynamic control healthy
+Status: Superseded by T0026
+
+Historical cutover evidence below is retained, but its guard, static-enable,
+broad-baseline and legacy actuator design is not current architecture.
 
 ## Objective
 

@@ -1,4 +1,0 @@
-house_battery_control_disable:
-  name: House battery automatic control disabled (commissioning / observation only)
-  icon: mdi:battery-lock
-  initial: true

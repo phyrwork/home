@@ -10,7 +10,7 @@ from homeassistant.core import CoreState, HomeAssistant
 
 from custom_components.house_battery_control import async_setup
 from custom_components.house_battery_control import config as integration_config
-from custom_components.house_battery_control.const import DOMAIN
+from custom_components.house_battery_control.config import DOMAIN
 from custom_components.house_battery_control.controller import Controller
 
 

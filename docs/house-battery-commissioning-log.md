@@ -13,8 +13,8 @@ proof that the inverter acted.
   subsequent direct Solis API read.
 - Charge/discharge behaviour is proven only by physical power flow: battery
   power plus whole-site Octopus demand/export, ideally followed by SOC movement.
-- The Home Assistant control-disable guard remains asserted during manual
-  experiments unless an experiment explicitly says otherwise.
+- Manual experiments must first stop the controller and stale-heartbeat sentinel
+  so there is one writer. The superseded control-disable helper no longer exists.
 
 ## Established findings
 
@@ -137,14 +137,10 @@ unsupported:
 - Mobile **Quick Control > Force Charge** was also ineffective during the same
   offline period and produced no persistent register delta or physical charge.
 
-Cleanup disabled CID 5916 and verified it off. The controller remains unloaded,
-the manual control guard remains asserted, and the watchdog is temporarily off
-to prevent further contention during commissioning.
-
-Next valid charge proof must begin only after SolisCloud reports the inverter
-online. Keep the watchdog paused, use an inverter-local start two minutes in the
-future, verify the slot remains enabled across the boundary, and prove charging
-from fresh battery power plus whole-site import.
+Cleanup disabled CID 5916 and verified it off. At that historical point the
+legacy controller remained unloaded, its guard was asserted and its watchdog
+was paused. Those superseded surfaces were later removed. The subsequent valid
+online charge proof is recorded below.
 
 ### 2026-08-24 proven native grid-charge configuration
 
@@ -202,11 +198,28 @@ The ownership boundary is:
   all six charge/discharge slot fields are runtime-owned.
 - Grid Peak Shaving is disabled as a one-time commissioned setting and is not
   runtime-managed.
-- Disabled directions are normalised to `00:00-00:00` and `0 A`, not merely
-  switched off.
-- Every prospective charge/discharge schedule is checked for overlap across all
-  12 directions before mutation. Intervals are half-open `[start, end)`, so
-  adjacent boundaries do not overlap; cross-midnight intervals are compared on
-  both sides of midnight.
+- Enabled directions are reconciled against the one logical intent. After a
+  controller-owned direction is confirmed off, its time and current may be
+  reset once as best-effort housekeeping; there is no all-slot normalization
+  sweep.
+- Every prospective charge/discharge schedule is checked against all configured
+  direction enables before mutation. Active intervals are half-open `[start,
+  end)`, so adjacent boundaries do not overlap. A logical interval crossing
+  inverter-local midnight uses two adjacent native slots.
 - Grid Feed-in Power Limit is disabled as a one-time commissioned setting; the
   runtime does not enable it or write maximum power/current values.
+
+## Current runtime architecture and remaining evidence
+
+T0026 supersedes the historical guard, broad fail-safe script and independent
+all-controls watchdog described in earlier experiments. The release candidate
+has one event-driven controller and one Solis writer/lock. Best-effort starts use
+bounded retries; important stops persist until authoritatively off. Temporary
+input or telemetry loss is `DEGRADED` and recovers passively. Fifteen minutes of
+continuous degradation latches a mode-only Self-Use fail-safe. The remaining
+crash sentinel can write only Self-Use after a stale heartbeat and recheck.
+
+Control-plane readback remains provisional. The authenticated live release gate
+must still prove the exact local-midnight representation and two-slot charge and
+discharge behavior, a full-SOC discharge/recharge cycle, restart/fail-safe/
+shutdown behavior, and 24 hours without overlap or next-day slot recurrence.

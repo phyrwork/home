@@ -8,8 +8,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT
 from homeassistant.core import CoreState, Event, HomeAssistant
 from homeassistant.helpers.discovery import async_load_platform
 
-from .config import Config, from_mapping
-from .const import DOMAIN
+from .config import Config, DOMAIN, from_mapping
 from .controller import Controller
 
 CONFIG_SCHEMA = vol.Schema({DOMAIN: vol.All(dict, from_mapping)}, extra=vol.ALLOW_EXTRA)
@@ -73,4 +72,4 @@ async def _async_teardown(hass: HomeAssistant, controller: Controller) -> None:
         hass.data.pop(DOMAIN, None)
 
 
-__all__ = ["CONFIG_SCHEMA", "async_setup"]
+__all__ = ["CONFIG_SCHEMA", "DOMAIN", "async_setup"]

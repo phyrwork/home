@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from custom_components.house_battery_control import CONFIG_SCHEMA, config
-from custom_components.house_battery_control.const import DOMAIN
+from custom_components.house_battery_control.config import DOMAIN
 
 
 def deployed() -> dict[str, object]:

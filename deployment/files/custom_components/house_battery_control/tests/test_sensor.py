@@ -11,7 +11,7 @@ from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 
 from custom_components.house_battery_control import config as integration_config
-from custom_components.house_battery_control.const import DOMAIN
+from custom_components.house_battery_control.config import DOMAIN
 from custom_components.house_battery_control.model import ControllerHealth
 from custom_components.house_battery_control.controller import Controller, Snapshot
 from custom_components.house_battery_control.sensor import (

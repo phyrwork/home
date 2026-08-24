@@ -8,8 +8,10 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
+from .model import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
 from .solis import SolisConfig, config_from_mapping
+
+DOMAIN = "house_battery_control"
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,4 +160,11 @@ def _entity(value: object, name: str, domain: str) -> str:
     return value
 
 
-__all__ = ["BatteryConfig", "Config", "SolarConfig", "TariffConfig", "from_mapping"]
+__all__ = [
+    "BatteryConfig",
+    "Config",
+    "DOMAIN",
+    "SolarConfig",
+    "TariffConfig",
+    "from_mapping",
+]

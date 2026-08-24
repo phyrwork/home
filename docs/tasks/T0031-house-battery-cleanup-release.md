@@ -1,6 +1,6 @@
 # T0031 — Battery integration cleanup and local release gate
 
-Status: Accepted
+Status: Implemented — approved for local commit
 
 Depends on: T0030
 
@@ -105,6 +105,62 @@ task. T0026 stays incomplete until later live acceptance and 24-hour observation
 ## Completion
 
 - Final source shape and searches pass.
-- Local release gate is green or an auth-only syntax step is explicitly deferred.
+- Local battery/deployment gates are green; any unrelated repository exception
+  is independently reproduced on unchanged `main` and explicitly approved.
 - Council approves the implementation against T0026.
 - Commit from an isolated worktree; do not deploy or push.
+
+## Implementation decisions
+
+- `DOMAIN` moved into `config.py`; shared full/minimum SOC bounds moved into
+  `model.py`; planner-only tariff freshness, unit, cycle-cost and residual-grid
+  constants moved into `planner.py`.
+- The unused runtime force-charge constant was deleted. Its 7% value remains a
+  one-time commissioned fact, not runtime code.
+- The legacy physical-slot `contracts.SlotIntent` and its abstraction tests were
+  deleted. `test_model.py` now covers the surviving shared value behavior.
+- `const.py`, `contracts.py`, `domain_constants.py`, the broad fail-safe script
+  and the control-disable input boolean were deleted. Ansible directory syncs
+  use `delete: yes`, so the obsolete HA files will be removed at deployment.
+- Current T0001 and commissioning documentation now describe the single-writer
+  architecture. T0022, T0024 and T0025 retain their historical evidence but are
+  explicitly superseded.
+
+## Local release evidence
+
+The production integration has exactly seven Python files plus `manifest.json`.
+The staged before/after count is 10 Python modules / 3,905 nonblank lines to
+7 modules / 3,850 nonblank lines. Tests remain outside the production shape.
+
+Passed gates:
+
+- 93 battery component tests;
+- 41 deployment tests;
+- import of all seven production modules and `compileall`;
+- parsing the battery integration, sentinel and cycle-helper YAML;
+- `ANSIBLE_LOCAL_TEMP=/private/tmp/ansible-t0031 ansible-playbook -i
+  inventory/local config.yaml --syntax-check` without vault or network access;
+- exact-file, deleted-name/config, single-writer, mode-only-sentinel,
+  Peak-Shaving/feed-limit, rsync-filter and tracked-bytecode static searches;
+  and
+- `git diff --check`.
+
+The full repository command with `--import-mode=importlib` completed 157 tests
+but has one teardown error in the unrelated
+`energy_cost_saving_tracker::test_power_tracker_uses_existing_internal_rate_before_rate_change`.
+The test body passes; a lingering task exhausts its finite mocked `utcnow`
+iterator during teardown. The exact focused failure was independently reproduced
+on unchanged `main`, so this gate is explicitly blocked by a pre-existing
+non-battery error rather than reported green or fixed out of scope.
+
+No auth, network, Home Assistant or Solis access was used. Deployment,
+commissioning of the midnight representation, live behavior and the 24-hour
+evidence window remain T0026 live acceptance.
+
+## Review
+
+The skeptical de-YAGNI/safety review approved without blockers. It confirmed
+the exact source shape, constant/value preservation, single writer and sentinel
+exception, removal of obsolete surfaces, current documentation, and the
+explicitly non-green pre-existing repository-test exception. Its independent
+battery-plus-sentinel verification passed 95 tests.

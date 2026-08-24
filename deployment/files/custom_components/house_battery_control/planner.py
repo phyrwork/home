@@ -9,25 +9,24 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
-from .domain_constants import (
-    BATTERY_CYCLE_COST_PER_KWH,
-    FULL_SOC_PERCENT,
-    MAXIMUM_SOURCE_FUTURE_SKEW,
-    MINIMUM_SOC_PERCENT,
-    OCTOPUS_DISPATCH_SOURCE_MAX_AGE,
-    OCTOPUS_EXPORT_SOURCE_MAX_AGE,
-    OCTOPUS_RATE_SOURCE_MAX_AGE,
-    OCTOPUS_RATE_UNIT,
-    MAXIMUM_GRID_IMPORT_POWER_KW,
-)
 from .model import (
     CycleState,
+    FULL_SOC_PERCENT,
     LogicalIntent,
+    MINIMUM_SOC_PERCENT,
     SlotDirection,
     SlotIntent,
     SlotOwner,
     StrategyAction,
 )
+
+BATTERY_CYCLE_COST_PER_KWH = Decimal("0.0165")
+MAXIMUM_GRID_IMPORT_POWER_KW = Decimal("0.1")
+MAXIMUM_SOURCE_FUTURE_SKEW = timedelta(minutes=2)
+OCTOPUS_DISPATCH_SOURCE_MAX_AGE = timedelta(minutes=10)
+OCTOPUS_EXPORT_SOURCE_MAX_AGE = timedelta(hours=26)
+OCTOPUS_RATE_SOURCE_MAX_AGE = timedelta(hours=26)
+OCTOPUS_RATE_UNIT = "GBP/kWh"
 
 
 @dataclass(frozen=True, slots=True)

@@ -17,13 +17,12 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .config import Config
-from .const import DOMAIN
-from .domain_constants import MINIMUM_SOC_PERCENT
+from .config import Config, DOMAIN
 from .model import (
     ControllerHealth,
     CycleState,
     LogicalIntent,
+    MINIMUM_SOC_PERCENT,
     SlotDirection,
     StorageMode,
     StrategyAction,

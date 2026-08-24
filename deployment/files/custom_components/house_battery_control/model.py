@@ -7,6 +7,9 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 
+FULL_SOC_PERCENT = 100
+MINIMUM_SOC_PERCENT = 10
+
 
 class _TextEnum(str, Enum):
     def __str__(self) -> str:
@@ -76,7 +79,7 @@ class ObservedCapability:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeCapabilities:
-    """Transitional aggregate removed when T0029 owns Solis capabilities."""
+    """Live inverter current limits used by planning and native slots."""
     maximum_charge_current: ObservedCapability
     maximum_discharge_current: ObservedCapability
 
@@ -88,7 +91,7 @@ def _validate_percent(value: Decimal, name: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class SlotIntent:
-    """One bounded logical segment; physical allocation belongs to T0029."""
+    """One bounded logical segment; physical allocation belongs to Solis."""
 
     owner: SlotOwner
     direction: SlotDirection
@@ -141,6 +144,7 @@ class LogicalIntent:
 
 
 __all__ = [
-    "ControllerHealth", "StrategyAction", "CycleState", "SlotDirection", "SlotOwner",
-    "StorageMode", "ObservedCapability", "RuntimeCapabilities", "SlotIntent", "LogicalIntent",
+    "ControllerHealth", "CycleState", "FULL_SOC_PERCENT", "LogicalIntent",
+    "MINIMUM_SOC_PERCENT", "ObservedCapability", "RuntimeCapabilities",
+    "SlotDirection", "SlotIntent", "SlotOwner", "StorageMode", "StrategyAction",
 ]
