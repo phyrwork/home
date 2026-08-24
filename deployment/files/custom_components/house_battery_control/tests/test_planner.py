@@ -44,7 +44,9 @@ from custom_components.house_battery_control.planner import (
     prorated_energy,
     RESERVE_SOC_UNCERTAINTY_PERCENT,
     _common_quantize_target,
+    _charge_phase_start,
     _charge_phase_end,
+    _recover_standard_phase_start,
 )
 from custom_components.house_battery_control.solis import read_state
 from custom_components.house_battery_control.tests.test_solis import fixture as solis_fixture
@@ -600,6 +602,10 @@ async def _build(
     bonus: bool = False,
     charge_lease_deadline: datetime | None = None,
     cycle_target_step: str | None = None,
+    now: datetime = NOW,
+    window_override: CheapWindow | None = None,
+    import_rates_override: tuple[AdjustedRateInterval, ...] | None = None,
+    export_rates_override: tuple[ExportRateInterval, ...] | None = None,
 ):
     config = _config()
     for entity_id, value in (
@@ -608,13 +614,13 @@ async def _build(
         (config.cycle_discharge_duration_entity_id, "10"),
     ):
         hass.states.async_set(entity_id, value, {"rates": ("placeholder",)})
-    imports = _import_rates(
+    imports = import_rates_override or _import_rates(
         ("0.07", CheapClassification.BONUS_DISPATCH if bonus else CheapClassification.STANDARD_CHEAP, bonus),
         ("0.30", CheapClassification.NOT_CHEAP, False),
     )
     if bonus:
         hass.states.async_set(DISPATCH_SOURCE, "on")
-    exports = _export()
+    exports = export_rates_override or _export()
     windows = (
         _result(
             imports,
@@ -624,6 +630,8 @@ async def _build(
         if cheap
         else ()
     )
+    if window_override is not None:
+        windows = (window_override,)
     if windows and window_minutes != 60:
         windows = (replace(windows[0], end=NOW + timedelta(minutes=window_minutes)),)
     window_result = SimpleNamespace(
@@ -649,7 +657,7 @@ async def _build(
         patch("custom_components.house_battery_control.planner.plan_reserve", return_value=ReservePlanResult(reserve_energy)),
     ):
         return await build_plan(
-            hass, config, _solis(soc=soc, cycle_target_step=cycle_target_step), now=NOW, cycle_state=state,
+            hass, config, _solis(soc=soc, cycle_target_step=cycle_target_step), now=now, cycle_state=state,
             cycle_deadline=deadline, charge_lease_deadline=charge_lease_deadline,
         )
 
@@ -673,6 +681,49 @@ async def test_build_plan_selects_all_three_actions_and_reports_reserve(hass) ->
     assert reserve.reserve_balance_kwh == Decimal("12.68448")
     assert reserve.maximum_charge_power_kw == Decimal("5.12")
     assert reserve.maximum_discharge_power_kw == Decimal("5.12")
+
+
+@pytest.mark.asyncio
+async def test_build_plan_recovers_real_half_hour_standard_phase_across_midnight(hass) -> None:
+    phase_start = datetime(2026, 8, 22, 23, 30, tzinfo=UTC)
+    phase_end = datetime(2026, 8, 23, 5, 30, tzinfo=UTC)
+    imports = tuple(
+        replace(
+            _import_rates(
+                ("0.07", CheapClassification.STANDARD_CHEAP, False),
+                ("0.30", CheapClassification.NOT_CHEAP, False),
+            )[0],
+            start=phase_start + timedelta(minutes=30 * index),
+            end=phase_start + timedelta(minutes=30 * (index + 1)),
+            source_event=f"phase-{index}",
+        )
+        for index in range(12)
+    )
+    exports = (replace(_export()[0], start=phase_start, end=phase_end),)
+    planned = []
+    for now in (
+        datetime(2026, 8, 22, 23, 45, tzinfo=UTC),
+        datetime(2026, 8, 23, 0, 1, tzinfo=UTC),
+        datetime(2026, 8, 23, 0, 31, tzinfo=UTC),
+    ):
+        current_rate = next(item for item in imports if item.start <= now < item.end)
+        current = CheapWindow(
+            now,
+            phase_end,
+            (CheapWindowComponent(TimeInterval(now, phase_end), current_rate, exports[0], Decimal("1")),),
+        )
+        plan_result = await _build(
+            hass,
+            cheap=True,
+            now=now,
+            window_override=current,
+            import_rates_override=imports,
+            export_rates_override=exports,
+        )
+        assert plan_result.intent is not None
+        planned.append((plan_result.intent.start, plan_result.intent.end))
+
+    assert planned == [(phase_start, phase_end)] * 3
 
 
 @pytest.mark.asyncio
@@ -738,6 +789,66 @@ def test_adjacent_bonus_components_keep_the_first_native_lease_boundary() -> Non
     end, is_bonus = _charge_phase_end(window, NOW)
     assert is_bonus
     assert end == first.end
+
+
+def test_adjacent_standard_components_share_a_phase_and_retain_past_boundary() -> None:
+    first = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+    )[0]
+    first = replace(first, start=NOW - timedelta(minutes=30), end=NOW)
+    second = replace(first, start=NOW, end=NOW + timedelta(minutes=30), source_event="next")
+    export = _export()[0]
+    window = CheapWindow(
+        first.start,
+        second.end,
+        (
+            CheapWindowComponent(TimeInterval(first.start, first.end), first, export, Decimal("1")),
+            CheapWindowComponent(TimeInterval(second.start, second.end), second, export, Decimal("1")),
+        ),
+    )
+
+    phase_start, classification = _charge_phase_start(window, NOW)
+    assert classification is CheapClassification.STANDARD_CHEAP
+    assert phase_start == first.start
+
+
+def test_standard_phase_recovery_stops_at_adjacent_bonus_component() -> None:
+    bonus_start = datetime(2026, 8, 22, 23, 30, tzinfo=UTC)
+    standard_start = datetime(2026, 8, 23, 0, 0, tzinfo=UTC)
+    phase_end = datetime(2026, 8, 23, 5, 30, tzinfo=UTC)
+    standard = replace(
+        _import_rates(
+            ("0.07", CheapClassification.STANDARD_CHEAP, False),
+            ("0.30", CheapClassification.NOT_CHEAP, False),
+        )[0],
+        start=standard_start,
+        end=standard_start + timedelta(minutes=30),
+    )
+    bonus = replace(
+        standard,
+        start=bonus_start,
+        end=standard_start,
+        classification=CheapClassification.BONUS_DISPATCH,
+        is_intelligent_adjusted=True,
+        source_event="bonus",
+    )
+    export = replace(_export()[0], start=bonus_start, end=phase_end)
+    now = datetime(2026, 8, 23, 0, 1, tzinfo=UTC)
+    current = CheapWindow(
+        now,
+        phase_end,
+        (CheapWindowComponent(TimeInterval(now, phase_end), standard, export, Decimal("1")),),
+    )
+
+    assert _recover_standard_phase_start(
+        current,
+        now,
+        import_rates=(bonus, standard),
+        export_rates=(export,),
+        charge_efficiency=Decimal("0.95"),
+        discharge_efficiency=Decimal("0.95"),
+    ) == standard_start
 
 
 def test_bonus_lease_component_boundary_uses_utc_instants_across_dst_fold() -> None:

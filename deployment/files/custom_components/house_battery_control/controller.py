@@ -312,6 +312,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         self._last_plan = plan
 
         fingerprint = _bonus_fingerprint(plan, now)
+        preserve_standard_cheap_slot = _preserve_standard_cheap_slot(plan, now)
         if self._bonus_charge_keys and self._bonus_lease_fingerprint != fingerprint:
             for key in self._bonus_charge_keys:
                 self._add_stop(key, now, monotonic)
@@ -319,7 +320,11 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 await self._attempt_stop(debt, observation, now, monotonic)
             return
 
-        for key in self.solis.conflicting_enabled_keys(observation, plan.intent):
+        for key in self.solis.conflicting_enabled_keys(
+            observation,
+            plan.intent,
+            preserve_standard_cheap_slot=preserve_standard_cheap_slot,
+        ):
             self._add_stop(key, now, monotonic)
         if debt := self._due_stop(monotonic):
             await self._attempt_stop(debt, observation, now, monotonic)
@@ -342,9 +347,14 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             plan.intent,
             reserve_soc_percent=plan.reserve_soc_percent,
             peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
+            preserve_standard_cheap_slot=preserve_standard_cheap_slot,
         )
         if change is not None:
-            generation = self._start_generation(plan, change)
+            generation = self._start_generation(
+                plan,
+                change,
+                preserve_standard_cheap_slot=preserve_standard_cheap_slot,
+            )
             await self._attempt_start(change, generation, plan, observation, now, monotonic)
             return
         if not self.solis.intent_matches(
@@ -352,6 +362,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             plan.intent,
             reserve_soc_percent=plan.reserve_soc_percent,
             peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
+            preserve_standard_cheap_slot=preserve_standard_cheap_slot,
         ):
             self._start_retry = None
             self._degrade(
@@ -862,7 +873,13 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             next_retry_at=None if debt is None else debt.next_retry_at,
         )
 
-    def _start_generation(self, plan: Plan, change: SolisChange) -> Hashable:
+    def _start_generation(
+        self,
+        plan: Plan,
+        change: SolisChange,
+        *,
+        preserve_standard_cheap_slot: bool = False,
+    ) -> Hashable:
         source_tokens: list[Hashable] = []
         for entity_id in (
             self.config.tariff.import_rates_entity_id,
@@ -878,16 +895,30 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                     getattr(getattr(state, "context", None), "id", None),
                 )
             )
+        intent_token: Hashable = plan.intent
+        change_target: Hashable = change.target
+        if preserve_standard_cheap_slot and plan.intent is not None and len(plan.intent.segments) == 1:
+            segment = plan.intent.segments[0]
+            intent_token = (
+                segment.owner,
+                segment.direction,
+                segment.end,
+                segment.expiry,
+                segment.current,
+                segment.target_soc,
+            )
+            if change.entity_id.startswith("text.") and isinstance(change.target, str):
+                change_target = ("standard-cheap-end", change.target.rsplit("-", 1)[-1])
         return (
             plan.action,
-            plan.intent,
+            intent_token,
             plan.reserve_soc_percent,
             plan.control_reserve_soc_percent,
             plan.cycle_deadline,
             plan.charge_lease_deadline,
             tuple(source_tokens),
             change.entity_id,
-            change.target,
+            change_target,
         )
 
     def _degrade(
@@ -1256,6 +1287,28 @@ def _bonus_fingerprint(plan: Plan, now: datetime) -> Hashable | None:
             export.export_price,
         )
     return None
+
+
+def _preserve_standard_cheap_slot(plan: Plan, now: datetime) -> bool:
+    """Opt into rollover slot reuse only for an active standard-cheap plan."""
+
+    if (
+        plan.action is not StrategyAction.CHEAP_CHARGE
+        or plan.intent is None
+        or len(plan.intent.segments) != 1
+        or plan.intent.segments[0].owner is not SlotOwner.CHEAP_CHARGING
+        or plan.intent.segments[0].direction is not SlotDirection.CHARGE
+    ):
+        return False
+    window = plan.current_cheap_window
+    components = getattr(window, "components", ()) if window is not None else ()
+    return any(
+        component.rate_interval.classification.value == "STANDARD_CHEAP"
+        and component.interval.start.astimezone(timezone.utc)
+        <= now.astimezone(timezone.utc)
+        < component.interval.end.astimezone(timezone.utc)
+        for component in components
+    )
 
 
 def _instant(value: datetime) -> datetime:

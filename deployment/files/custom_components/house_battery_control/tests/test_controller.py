@@ -22,6 +22,7 @@ from custom_components.house_battery_control.controller import (
     StartRetry,
     _stop_retry_delay,
     _bonus_fingerprint,
+    _preserve_standard_cheap_slot,
 )
 from custom_components.house_battery_control.model import (
     ControllerHealth,
@@ -74,6 +75,30 @@ def test_bonus_fingerprint_binds_dispatch_source_identity() -> None:
         first, current_cheap_window=SimpleNamespace(components=(second_component,))
     )
     assert _bonus_fingerprint(first, NOW) != _bonus_fingerprint(second, NOW)
+
+
+def test_standard_cheap_plan_explicitly_allows_rollover_slot_preservation() -> None:
+    component = SimpleNamespace(
+        interval=SimpleNamespace(start=NOW - timedelta(minutes=30), end=NOW + timedelta(minutes=30)),
+        rate_interval=SimpleNamespace(classification=CheapClassification.STANDARD_CHEAP),
+    )
+    standard_plan = replace(
+        plan(),
+        action=StrategyAction.CHEAP_CHARGE,
+        intent=LogicalIntent((SlotIntent(
+            SlotOwner.CHEAP_CHARGING,
+            SlotDirection.CHARGE,
+            NOW - timedelta(minutes=30),
+            NOW + timedelta(minutes=30),
+            Decimal("100"), Decimal("100"), NOW + timedelta(minutes=30),
+        ),)),
+        current_cheap_window=SimpleNamespace(components=(component,)),
+    )
+
+    assert _preserve_standard_cheap_slot(standard_plan, NOW)
+    assert not _preserve_standard_cheap_slot(
+        replace(standard_plan, action=StrategyAction.CYCLE_DISCHARGE), NOW
+    )
 
 
 def config() -> integration_config.Config:
@@ -187,8 +212,25 @@ async def test_start_retries_at_exact_generation_offsets_then_suppresses(
 ) -> None:
     controller = Controller(hass, config())
     solis = adapter(controller)
+    stable_standard = replace(
+        plan(),
+        action=StrategyAction.CHEAP_CHARGE,
+        intent=LogicalIntent((SlotIntent(
+            SlotOwner.CHEAP_CHARGING,
+            SlotDirection.CHARGE,
+            NOW - timedelta(minutes=30),
+            NOW + timedelta(hours=4),
+            Decimal("100"),
+            Decimal("100"),
+            NOW + timedelta(hours=4),
+        ),)),
+        current_cheap_window=SimpleNamespace(components=(SimpleNamespace(
+            interval=SimpleNamespace(start=NOW - timedelta(minutes=30), end=NOW + timedelta(hours=4)),
+            rate_interval=SimpleNamespace(classification=CheapClassification.STANDARD_CHEAP),
+        ),)),
+    )
     solis.next_start_change.return_value = SimpleNamespace(
-        entity_id="text.slot", target="value"
+        entity_id="text.slot", target="12:00-16:00"
     )
     solis.apply.return_value = WriteResult(
         "text.slot", WriteOutcome.SERVICE_ERROR, "cloud failed"
@@ -203,13 +245,19 @@ async def test_start_retries_at_exact_generation_offsets_then_suppresses(
         ),
         patch(
             "custom_components.house_battery_control.controller.build_plan",
-            AsyncMock(return_value=plan()),
+            AsyncMock(return_value=stable_standard),
         ),
     ):
+        generation = None
         for instant, calls in ((0, 1), (10, 1), (15, 2), (59, 2), (60, 3), (120, 3)):
             clock[0] = float(instant)
             await controller._reconcile()
             assert solis.apply.await_count == calls
+            assert controller._start_retry is not None
+            if generation is None:
+                generation = controller._start_retry.generation
+            else:
+                assert controller._start_retry.generation == generation
 
     assert START_RETRY_DELAYS == (
         timedelta(0),
@@ -218,6 +266,31 @@ async def test_start_retries_at_exact_generation_offsets_then_suppresses(
     )
     assert controller._start_retry is not None
     assert controller._start_retry.suppressed
+    same_end = SimpleNamespace(entity_id="text.slot", target="13:00-16:00")
+    assert controller._start_generation(
+        stable_standard,
+        same_end,
+        preserve_standard_cheap_slot=True,
+    ) == generation
+    changed_end = SimpleNamespace(entity_id="text.slot", target="13:00-17:00")
+    assert controller._start_generation(
+        stable_standard,
+        changed_end,
+        preserve_standard_cheap_slot=True,
+    ) != generation
+    bonus_component = SimpleNamespace(
+        interval=stable_standard.current_cheap_window.components[0].interval,
+        rate_interval=SimpleNamespace(classification=CheapClassification.BONUS_DISPATCH),
+    )
+    bonus_plan = replace(
+        stable_standard,
+        current_cheap_window=SimpleNamespace(components=(bonus_component,)),
+    )
+    assert controller._start_generation(
+        bonus_plan,
+        same_end,
+        preserve_standard_cheap_slot=False,
+    ) != generation
 
 
 async def test_peak_off_failure_uses_bounded_start_retry_without_slot_cleanup(

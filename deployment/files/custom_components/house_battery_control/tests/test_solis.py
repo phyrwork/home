@@ -264,6 +264,99 @@ def test_2359_representation_keeps_explicit_native_one_minute_gap() -> None:
     assert observed.direction(second).schedule.ranges() == ((0, 60),)  # type: ignore[union-attr]
 
 
+def test_prearmed_2359_split_rollover_reuses_active_standard_slot() -> None:
+    parsed, states = fixture()
+    parsed = replace(parsed, midnight_end="23:59")
+    desired = intent(
+        start=datetime(2026, 8, 22, 23, 30, tzinfo=LONDON),
+        end=datetime(2026, 8, 23, 5, 30, tzinfo=LONDON),
+    )
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    advance(adapter, states, desired)
+
+    at_0001 = datetime(2026, 8, 23, 0, 1, tzinfo=LONDON)
+    for item in states.values():
+        if isinstance(item, dict):
+            item["last_updated"] = at_0001
+    states[parsed.telemetry.device_timestamp_entity_id]["state"] = str(at_0001.timestamp())
+    states[parsed.persistent.inverter_time_entity_id]["state"] = at_0001.isoformat()
+    observed = read_state(states, parsed, now=at_0001)
+    assert observed.health is ControllerHealth.HEALTHY, observed.issues
+    assert adapter.conflicting_enabled_keys(observed, desired) == ()
+    rollover = intent(
+        start=datetime(2026, 8, 23, 0, 0, tzinfo=LONDON),
+        end=datetime(2026, 8, 23, 5, 30, tzinfo=LONDON),
+    )
+    first, second = parsed.allocation(SlotOwner.CHEAP_CHARGING)
+    assert adapter.conflicting_enabled_keys(
+        observed, rollover, preserve_standard_cheap_slot=True
+    ) == (first,)
+    assert adapter.next_start_change(
+        observed,
+        rollover,
+        reserve_soc_percent=Decimal("10"),
+        peak_shaving=False,
+        preserve_standard_cheap_slot=True,
+    ) is None
+    states[parsed.direction(first).enable_entity_id]["state"] = "off"
+    observed = read_state(states, parsed, now=at_0001)
+    assert adapter.conflicting_enabled_keys(
+        observed, rollover, preserve_standard_cheap_slot=True
+    ) == ()
+    assert adapter.next_start_change(
+        observed,
+        rollover,
+        reserve_soc_percent=Decimal("10"),
+        peak_shaving=False,
+        preserve_standard_cheap_slot=True,
+    ) is None
+    assert adapter.intent_matches(
+        observed,
+        rollover,
+        reserve_soc_percent=Decimal("10"),
+        peak_shaving=False,
+        preserve_standard_cheap_slot=True,
+    )
+    for changed in (
+        intent(
+            start=rollover.start,
+            end=rollover.end + timedelta(minutes=1),
+        ),
+        intent(start=rollover.start, end=rollover.end, current="99"),
+        intent(start=rollover.start, end=rollover.end, target="99"),
+        intent(SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE,
+               start=rollover.start, end=rollover.end, current="100", target="20"),
+    ):
+        assert adapter.conflicting_enabled_keys(
+            observed, changed, preserve_standard_cheap_slot=True
+        ) == (second,)
+
+    rolling = intent(
+        start=at_0001,
+        end=datetime(2026, 8, 23, 5, 30, tzinfo=LONDON),
+    )
+    assert adapter.conflicting_enabled_keys(
+        observed, rolling, preserve_standard_cheap_slot=True
+    ) == ()
+
+
+def test_bonus_charge_remains_positional_and_never_reuses_noncanonical_slot() -> None:
+    parsed, states = fixture()
+    desired = intent(start=NOW, end=NOW + timedelta(hours=1))
+    second = parsed.allocation(SlotOwner.CHEAP_CHARGING)[1]
+    second_direction = parsed.direction(second)
+    states[second_direction.enable_entity_id]["state"] = "on"
+    states[second_direction.time_entity_id]["state"] = "12:00-13:00"
+    states[second_direction.target_soc_entity_id]["state"] = "100"
+    observed = read_state(states, parsed, now=NOW)
+
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    assert adapter.conflicting_enabled_keys(observed, desired) == (second,)
+    assert adapter.next_start_change(
+        observed, desired, reserve_soc_percent=Decimal("10"), peak_shaving=False
+    ) is None
+
+
 def test_ordered_start_changes_enable_last_and_quantize_dynamic_reserve() -> None:
     parsed, states = fixture()
     states[parsed.persistent.storage_mode_entity_id]["state"] = "Self-Use"

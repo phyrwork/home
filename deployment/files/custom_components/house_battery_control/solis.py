@@ -727,6 +727,7 @@ class SolisAdapter:
         *,
         reserve_soc_percent: Decimal,
         peak_shaving: bool,
+        preserve_standard_cheap_slot: bool = False,
     ) -> SolisChange | None:
         """Return the next ordered idempotent start change, never a stop."""
 
@@ -749,7 +750,11 @@ class SolisAdapter:
             if any(direction.enabled is not False for direction in directions):
                 return None
         else:
-            native = self._native_intent(intent)
+            native = self._native_intent(
+                intent,
+                state=state,
+                preserve_standard_cheap_slot=preserve_standard_cheap_slot,
+            )
             if _native_overlap(native):
                 raise ValueError("logical Solis segments overlap")
             if any(direction.enabled is None for direction in directions):
@@ -835,12 +840,14 @@ class SolisAdapter:
         *,
         reserve_soc_percent: Decimal,
         peak_shaving: bool,
+        preserve_standard_cheap_slot: bool = False,
     ) -> bool:
         """Return whether the full policy and complete desired intent match."""
 
         if self.next_start_change(
             state, intent, reserve_soc_percent=reserve_soc_percent,
             peak_shaving=peak_shaving,
+            preserve_standard_cheap_slot=preserve_standard_cheap_slot,
         ) is not None:
             return False
         if state.health is not ControllerHealth.HEALTHY or state.persistent is None:
@@ -871,7 +878,11 @@ class SolisAdapter:
                 for slot in state.slots
                 for direction in (slot.charge, slot.discharge)
             )
-        native = self._native_intent(intent)
+        native = self._native_intent(
+            intent,
+            state=state,
+            preserve_standard_cheap_slot=preserve_standard_cheap_slot,
+        )
         expected = {item.key: item for item in native}
         return len(enabled) == len(native) and all(
             direction.key in expected
@@ -887,6 +898,8 @@ class SolisAdapter:
         self,
         state: SolisState,
         intent: LogicalIntent | None,
+        *,
+        preserve_standard_cheap_slot: bool = False,
     ) -> tuple[SlotKey, ...]:
         """Project explicitly-on directions that conflict with one intent."""
 
@@ -898,7 +911,11 @@ class SolisAdapter:
         if intent is None:
             return tuple(direction.key for direction in directions if direction.enabled is True)
         try:
-            native = self._native_intent(intent)
+            native = self._native_intent(
+                intent,
+                state=state,
+                preserve_standard_cheap_slot=preserve_standard_cheap_slot,
+            )
             if _native_overlap(native):
                 return ()
         except (IndexError, TypeError, ValueError):
@@ -1007,9 +1024,48 @@ class SolisAdapter:
             return WriteResult(entity_id, WriteOutcome.REJECTED, "Peak Shaving state is unknown or has no revision")
         return await self.apply(SolisChange(entity_id, enabled, revision), deadline=deadline)
 
-    def _native_intent(self, intent: LogicalIntent) -> tuple[_NativeIntent, ...]:
+    def _native_intent(
+        self,
+        intent: LogicalIntent,
+        *,
+        state: SolisState | None = None,
+        preserve_standard_cheap_slot: bool = False,
+    ) -> tuple[_NativeIntent, ...]:
         split = split_intent(intent, timezone=self.timezone, midnight_end=self.config.midnight_end)
         allocation = self.config.allocation(split.segments[0].owner)
+        if (
+            preserve_standard_cheap_slot
+            and state is not None
+            and len(split.segments) == 1
+            and intent.segments[0].owner is SlotOwner.CHEAP_CHARGING
+            and intent.segments[0].direction is SlotDirection.CHARGE
+        ):
+            segment = split.segments[0]
+            canonical = _NativeIntent(
+                allocation[0], segment, *_encode_schedule(
+                    segment, timezone=self.timezone, midnight_end=self.config.midnight_end
+                ),
+            )
+            exact = [
+                _NativeIntent(
+                    key, segment, *_encode_schedule(
+                        segment, timezone=self.timezone, midnight_end=self.config.midnight_end
+                    ),
+                )
+                for key in allocation
+                if state.direction(key).enabled is True
+                and _direction_matches(
+                    state.direction(key),
+                    _NativeIntent(
+                        key, segment, *_encode_schedule(
+                            segment, timezone=self.timezone, midnight_end=self.config.midnight_end
+                        ),
+                    ),
+                    now_minute=_local_minute(state.observed_at, self.timezone),
+                )
+            ]
+            if len(exact) == 1 or any(item.key == canonical.key for item in exact):
+                allocation = (exact[0].key,) if len(exact) == 1 else (canonical.key,)
         return tuple(
             _NativeIntent(allocation[index], segment, *_encode_schedule(
                 segment, timezone=self.timezone, midnight_end=self.config.midnight_end

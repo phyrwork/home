@@ -1245,14 +1245,29 @@ async def build_plan(
         effective_charge_lease_deadline = charge_lease_deadline
         cycle_intent: SlotIntent | None = None
         if current_window is not None:
-            start = _slot_start(now, current_window.start)
+            now_based_start = _slot_start(now, current_window.start)
+            current_phase_start, current_classification = _charge_phase_start(current_window, now)
+            if current_classification is CheapClassification.STANDARD_CHEAP:
+                current_phase_start = _recover_standard_phase_start(
+                    current_window,
+                    now,
+                    import_rates=import_rates,
+                    export_rates=export_rates,
+                    charge_efficiency=config.battery.charge_efficiency,
+                    discharge_efficiency=config.battery.discharge_efficiency,
+                )
+            charge_start = (
+                _minute_ceil(current_phase_start)
+                if current_classification is CheapClassification.STANDARD_CHEAP
+                else now_based_start
+            )
             component_end, is_bonus = _charge_phase_end(current_window, now)
             charge_end = component_end
             if is_bonus:
                 effective_charge_lease_deadline = _min_instant(
                     _min_instant(
-                        effective_charge_lease_deadline or start + BONUS_CHARGE_LEASE_DURATION,
-                        start + BONUS_CHARGE_LEASE_DURATION,
+                        effective_charge_lease_deadline or charge_start + BONUS_CHARGE_LEASE_DURATION,
+                        charge_start + BONUS_CHARGE_LEASE_DURATION,
                     ),
                     component_end,
                 )
@@ -1261,18 +1276,18 @@ async def build_plan(
                 # A previously observed bonus lease is never extended by a
                 # re-plan, even if the source reclassifies the interval.
                 charge_end = _min_instant(charge_end, charge_lease_deadline)
-            if _instant(charge_end) > _instant(start):
+            if _instant(charge_end) > _instant(charge_start):
                 charge_intent = _intent(
                     SlotOwner.CHEAP_CHARGING,
                     SlotDirection.CHARGE,
-                    start,
+                    charge_start,
                     charge_end,
                     charge_state.current.maximum,
                     min(Decimal(FULL_SOC_PERCENT), charge_state.target_soc.maximum),
                     charge_end,
                 )
-            cycle_start = start
-            cycle_end = min(start + cycle_duration, current_window.end)
+            cycle_start = now_based_start
+            cycle_end = min(cycle_start + cycle_duration, current_window.end)
             if cycle_deadline is not None:
                 cycle_end = min(cycle_deadline, current_window.end)
                 cycle_start = cycle_end - cycle_duration
@@ -1479,6 +1494,99 @@ def _charge_phase_end(window: CheapWindow, now: datetime) -> tuple[datetime, boo
             break
         end = item.interval.end
     return end, classification is CheapClassification.BONUS_DISPATCH
+
+
+def _charge_phase_start(window: CheapWindow, now: datetime) -> tuple[datetime, CheapClassification]:
+    """Return the start and classification of the phase containing ``now``.
+
+    Adjacent standard-cheap components form one phase. Bonus components remain
+    independent so a mixed boundary cannot inherit a neighboring start or
+    lease.
+    """
+
+    components = sorted(window.components, key=lambda item: _instant(item.interval.start))
+    current_index = next(
+        (
+            index
+            for index, item in enumerate(components)
+            if _instant(item.interval.start) <= _instant(now) < _instant(item.interval.end)
+        ),
+        None,
+    )
+    if current_index is None:
+        raise ValueError("cheap window does not contain now")
+    current = components[current_index]
+    classification = current.rate_interval.classification
+    # ``evaluate_cheap_windows`` clips the active component to ``now``. Use
+    # the original import/export intersection so a heartbeat cannot roll the
+    # start of an already-active standard phase forward.
+    start = _max_instant(current.rate_interval.start, current.export_interval.start)
+    if classification is CheapClassification.STANDARD_CHEAP:
+        for item in reversed(components[:current_index]):
+            if (
+                item.rate_interval.classification is not classification
+                or _instant(item.interval.end) != _instant(start)
+            ):
+                break
+            start = item.interval.start
+    return start, classification
+
+
+def _recover_standard_phase_start(
+    window: CheapWindow,
+    now: datetime,
+    *,
+    import_rates: Sequence[AdjustedRateInterval],
+    export_rates: Sequence[ExportRateInterval],
+    charge_efficiency: Decimal,
+    discharge_efficiency: Decimal,
+) -> datetime:
+    """Recover the original boundary of the active standard-cheap phase.
+
+    The cheap-window evaluator intentionally clips the active component to
+    ``now`` and drops completed components. The source intervals retain enough
+    validated history to walk backward across adjacent actionable standard
+    components without changing coverage or persistence semantics.
+    """
+
+    start, classification = _charge_phase_start(window, now)
+    if classification is not CheapClassification.STANDARD_CHEAP:
+        return start
+    current = next(
+        (
+            item
+            for item in window.components
+            if _instant(item.interval.start) <= _instant(now) < _instant(item.interval.end)
+        ),
+        None,
+    )
+    if current is None:
+        return start
+    boundary = _max_instant(current.rate_interval.start, current.export_interval.start)
+    charge = _decimal(charge_efficiency, "charge_efficiency")
+    discharge = _decimal(discharge_efficiency, "discharge_efficiency")
+    candidates: list[tuple[datetime, datetime]] = []
+    for imported in import_rates:
+        if imported.classification is not CheapClassification.STANDARD_CHEAP:
+            continue
+        for exported in export_rates:
+            candidate_start = _max_instant(imported.start, exported.start)
+            candidate_end = _min_instant(imported.end, exported.end)
+            if _instant(candidate_end) > _instant(boundary) or _instant(candidate_end) <= _instant(candidate_start):
+                continue
+            margin = exported.export_price * discharge - imported.import_price / charge - BATTERY_CYCLE_COST_PER_KWH
+            if margin > 0:
+                candidates.append((candidate_start, candidate_end))
+    while True:
+        previous = [
+            candidate_start
+            for candidate_start, candidate_end in candidates
+            if _instant(candidate_end) == _instant(boundary)
+        ]
+        if not previous:
+            break
+        boundary = min(previous, key=_instant)
+    return boundary
 
 
 def _effective_reserve(reserve_soc: Decimal, intent: SlotIntent | None) -> Decimal:
@@ -1733,6 +1841,13 @@ def _actual_battery_energy(config: Any, solis_state: Any) -> Decimal | None:
 
 def _minute_floor(value: datetime) -> datetime:
     return value.replace(second=0, microsecond=0)
+
+
+def _minute_ceil(value: datetime) -> datetime:
+    """Round a timestamp up to the next exact minute when needed."""
+
+    floor = _minute_floor(value)
+    return floor if floor == value else floor + timedelta(minutes=1)
 
 
 def _slot_start(now: datetime, window_start: datetime) -> datetime:

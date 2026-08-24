@@ -362,3 +362,26 @@ two native local schedules, with the explicit one-minute gap `[23:59, 00:00)`
 accepted as a Solis text-entity limitation. No schedule encoding redesign is
 needed. Physical proof that the first segment stops and the next-day segment
 becomes effective remains part of the T0034 acceptance.
+
+## 2026-08-25 post-midnight charge recovery and T0043 boundary
+
+The old `24:00` text-entity representation was rejected through midnight.
+At `00:00`, the controller recovered with charge slot 1 at `00:00-05:30`.
+By `00:04`, fresh passive telemetry showed SOC rising from `18%` to `19%`,
+battery charge power of `5.014 kW`, and whole-site demand of approximately
+`5.87 kW`. This proves effective post-midnight physical charging.
+
+It does not prove prearmed split continuity: the first segment had already
+failed at the old `24:00` boundary, so the later slot was recovered after
+midnight rather than continuously armed across the boundary.
+
+T0043 therefore gives only actionable one-segment `STANDARD_CHEAP` charge
+intents a stable, minute-ceiled start while the validated source retains the
+prior phase history. Fused history may omit the prior day at rollover; in that
+case the adapter may reuse one already-enabled allocated cheap slot when its
+owner, direction, values, native end, and active half-open schedule match
+exactly. An inactive past slot may be stopped while the active slot continues.
+Bonus charge remains positional and now-based with its existing native lease
+clipping, and full-SOC cycle timing remains independently now-based. The
+exact-start `23:59` bonus empty-first-segment edge is deferred and is not
+broadened; T0042's one-minute boundary remains in force.
