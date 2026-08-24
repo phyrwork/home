@@ -79,8 +79,6 @@ async def async_read_runtime_inputs(
     cycle_state: CycleState,
     cycle_deadline: datetime | None = None,
 ) -> RuntimeInputs:
-    guard = _state(hass, config.control_disable_guard_entity_id)
-    guard_off = guard.state == "off"
     solis = read_solis_state(config.solis, hass.states, now)
     if solis.health is not ControllerHealth.HEALTHY or solis.snapshot is None:
         message = "Solis state is not healthy: " + ", ".join(issue.code for issue in solis.issues)
@@ -232,8 +230,6 @@ async def async_read_runtime_inputs(
     strategy = StrategyInputs(
         now=now,
         health=ControllerHealth.HEALTHY,
-        control_enabled=config.dynamic_control_enabled,
-        guard_off=guard_off,
         soc_percent=telemetry.state_of_charge_percent,
         reserve_soc_percent=reserve_soc,
         cheap_window=current_window,

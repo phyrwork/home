@@ -1,10 +1,5 @@
-# One-time SolisCloud commissioning is complete: EMS is disabled for this plant
-# so cloud dispatch cannot overwrite Home Assistant inverter controls. The
-# Grid Peak Shaving is commissioned disabled and is not a runtime dependency.
-# Charge requires it disabled; battery discharge/load following does not
-# require it. Native Grid Feed in Power Limit is disabled; an enabled
-# 0 W / 0 A limit blocks export and no lower software export cap is required.
-dynamic_control_enabled: true
+# One-time SolisCloud commissioning is complete: EMS is disabled, Feed-In
+# Priority is commissioned, Peak Shaving and Feed-In Power Limit are disabled.
 
 battery:
   capacity_kwh: 32.1536
@@ -20,11 +15,8 @@ tariff:
 solar:
   config_entry_id: 79c4415a9ea776404127c1b61ba240cf
 
-control_disable_guard_entity_id: input_boolean.house_battery_control_disable
 cycle_discharge_duration_entity_id: input_number.house_battery_cycle_discharge_duration_minutes
 
-# Live entity capabilities are re-read on every evaluation. Charge/discharge
-# power is derived from battery voltage and the owned slot-current maxima.
 solis:
   telemetry:
     state_of_charge_entity_id: sensor.garage_inverter_telemetry_garage_inverter_remaining_battery_capacity
@@ -32,102 +24,18 @@ solis:
     battery_power_sign: positive_means_charging
     battery_voltage_entity_id: sensor.garage_inverter_telemetry_garage_inverter_battery_voltage
     device_timestamp_entity_id: sensor.garage_inverter_telemetry_garage_inverter_timestamp_measurements_received
-
   persistent:
     storage_mode_entity_id: select.garage_inverter_control_storage_mode
     allow_grid_charging_entity_id: switch.garage_inverter_control_allow_grid_charging
     inverter_time_entity_id: datetime.garage_inverter_control_inverter_time
-
   protection:
     battery_reserve_entity_id: switch.garage_inverter_control_battery_reserve
     battery_reserve_soc_entity_id: number.garage_inverter_control_battery_reserve_soc
-
   capability:
     battery_max_charge_current_entity_id: number.garage_inverter_control_battery_max_charge_current
     battery_max_discharge_current_entity_id: number.garage_inverter_control_battery_max_discharge_current
-
-  # Grid Peak Shaving remains disabled and unmanaged. Grid Feed in Power Limit
-  # is disabled and remains unmanaged. Runtime intent times are UTC instants; the configured inverter
-  # IANA timezone is authoritative at the Solis schedule boundary.
-
-  # Every physical slot is mapped for reconciliation and cleanup.  Reserved
-  # directions are intentionally not enabled by the MVP controller.
-  slots:
-    - physical_slot: 1
-      charge:
-        enable_entity_id: switch.garage_inverter_control_slot1_charge
-        time_entity_id: text.garage_inverter_control_slot1_charge_time
-        current_entity_id: number.garage_inverter_control_slot1_charge_current
-        target_soc_entity_id: number.garage_inverter_control_slot1_charge_soc
-        owner: cheap_charging
-      discharge:
-        enable_entity_id: switch.garage_inverter_control_slot1_discharge
-        time_entity_id: text.garage_inverter_control_slot1_discharge_time
-        current_entity_id: number.garage_inverter_control_slot1_discharge_current
-        target_soc_entity_id: number.garage_inverter_control_slot1_discharge_soc
-        owner: full_soc_cycling
-    - physical_slot: 2
-      charge:
-        enable_entity_id: switch.garage_inverter_control_slot2_charge
-        time_entity_id: text.garage_inverter_control_slot2_charge_time
-        current_entity_id: number.garage_inverter_control_slot2_charge_current
-        target_soc_entity_id: number.garage_inverter_control_slot2_charge_soc
-        owner: reserved
-      discharge:
-        enable_entity_id: switch.garage_inverter_control_slot2_discharge
-        time_entity_id: text.garage_inverter_control_slot2_discharge_time
-        current_entity_id: number.garage_inverter_control_slot2_discharge_current
-        target_soc_entity_id: number.garage_inverter_control_slot2_discharge_soc
-        owner: reserve_export
-    - physical_slot: 3
-      charge:
-        enable_entity_id: switch.garage_inverter_control_slot3_charge
-        time_entity_id: text.garage_inverter_control_slot3_charge_time
-        current_entity_id: number.garage_inverter_control_slot3_charge_current
-        target_soc_entity_id: number.garage_inverter_control_slot3_charge_soc
-        owner: reserved
-      discharge:
-        enable_entity_id: switch.garage_inverter_control_slot3_discharge
-        time_entity_id: text.garage_inverter_control_slot3_discharge_time
-        current_entity_id: number.garage_inverter_control_slot3_discharge_current
-        target_soc_entity_id: number.garage_inverter_control_slot3_discharge_soc
-        owner: reserved
-    - physical_slot: 4
-      charge:
-        enable_entity_id: switch.garage_inverter_control_slot4_charge
-        time_entity_id: text.garage_inverter_control_slot4_charge_time
-        current_entity_id: number.garage_inverter_control_slot4_charge_current
-        target_soc_entity_id: number.garage_inverter_control_slot4_charge_soc
-        owner: reserved
-      discharge:
-        enable_entity_id: switch.garage_inverter_control_slot4_discharge
-        time_entity_id: text.garage_inverter_control_slot4_discharge_time
-        current_entity_id: number.garage_inverter_control_slot4_discharge_current
-        target_soc_entity_id: number.garage_inverter_control_slot4_discharge_soc
-        owner: reserved
-    - physical_slot: 5
-      charge:
-        enable_entity_id: switch.garage_inverter_control_slot5_charge
-        time_entity_id: text.garage_inverter_control_slot5_charge_time
-        current_entity_id: number.garage_inverter_control_slot5_charge_current
-        target_soc_entity_id: number.garage_inverter_control_slot5_charge_soc
-        owner: reserved
-      discharge:
-        enable_entity_id: switch.garage_inverter_control_slot5_discharge
-        time_entity_id: text.garage_inverter_control_slot5_discharge_time
-        current_entity_id: number.garage_inverter_control_slot5_discharge_current
-        target_soc_entity_id: number.garage_inverter_control_slot5_discharge_soc
-        owner: reserved
-    - physical_slot: 6
-      charge:
-        enable_entity_id: switch.garage_inverter_control_slot6_charge
-        time_entity_id: text.garage_inverter_control_slot6_charge_time
-        current_entity_id: number.garage_inverter_control_slot6_charge_current
-        target_soc_entity_id: number.garage_inverter_control_slot6_charge_soc
-        owner: reserved
-      discharge:
-        enable_entity_id: switch.garage_inverter_control_slot6_discharge
-        time_entity_id: text.garage_inverter_control_slot6_discharge_time
-        current_entity_id: number.garage_inverter_control_slot6_discharge_current
-        target_soc_entity_id: number.garage_inverter_control_slot6_discharge_soc
-        owner: reserved
+  slot_entity_prefix: garage_inverter_control
+  slot_allocations:
+    cheap_charging: [1, 2]
+    full_soc_cycling: [1, 3]
+    reserve_export: [2, 4]

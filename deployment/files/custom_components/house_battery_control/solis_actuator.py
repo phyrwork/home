@@ -215,17 +215,13 @@ class SolisSlotActuator:
         config: SolisConfig,
         writer: HomeAssistantWriter,
         *,
-        control_disable_guard_entity_id: str,
         inverter_timezone: tzinfo,
         orchestration_lock: ReentrantAsyncLock | None = None,
     ) -> None:
-        if not control_disable_guard_entity_id.startswith("input_boolean.") and not control_disable_guard_entity_id.startswith("switch."):
-            raise ValueError("control-disable guard must be a switch-like entity")
         if not isinstance(inverter_timezone, tzinfo):
             raise TypeError("inverter_timezone must be explicit")
         self.config = config
         self.writer = writer
-        self.control_disable_guard_entity_id = control_disable_guard_entity_id
         self.inverter_timezone = inverter_timezone
         self.last_cancellation_result: CancellationDiagnostic | None = None
         self.orchestration_lock = orchestration_lock or ReentrantAsyncLock()
@@ -298,8 +294,6 @@ class SolisSlotActuator:
         effective_end = min(intent.end, intent.expiry)
         if not intent.start <= now < effective_end:
             return "slot intent is not active"
-        if not self._guard_off():
-            return "control-disable guard is asserted or unavailable"
         return direction_config, direction_state, schedule
 
     def _verified_precondition(self, entity_id: str) -> StatePrecondition | None:
@@ -312,10 +306,6 @@ class SolisSlotActuator:
         if not isinstance(precondition.context_id, str) or not precondition.context_id:
             return None
         return precondition
-
-    def _guard_off(self) -> bool:
-        observed = self._verified_precondition(self.control_disable_guard_entity_id)
-        return observed is not None and observed.state == "off"
 
     def _prove_all_off(self) -> bool:
         for direction, _physical_slot, _kind in self._directions():
@@ -396,7 +386,7 @@ class SolisSlotActuator:
             and self._disabled_directions_are_normalized(
                 snapshot, intent.physical_slot, intent.direction
             )
-            and self._guard_off()
+
         )
 
     @staticmethod
@@ -697,8 +687,6 @@ class SolisSlotActuator:
                         raise RuntimeError(f"configuration write failed: {write_result.message}")
                 if not self._prove_all_off():
                     raise RuntimeError("slot direction changed while target configuration was written")
-                if not self._guard_off():
-                    raise RuntimeError("control-disable guard asserted before slot enable")
                 enable_precondition = self._require_verified_precondition(target_config.enable_entity_id)
                 if enable_precondition.state != "on":
                     enable_request = SwitchWriteRequest(enable_precondition, True)
@@ -707,8 +695,6 @@ class SolisSlotActuator:
                     )
                     if not write_result.success:
                         raise RuntimeError(f"slot enable failed: {write_result.message}")
-                if not self._guard_off():
-                    raise RuntimeError("control-disable guard asserted after slot enable")
                 if not self._prove_exact_target(target_config.enable_entity_id):
                     raise RuntimeError("final slot enable proof failed")
             return SlotActuationResult(

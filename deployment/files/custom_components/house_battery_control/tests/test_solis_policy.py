@@ -105,18 +105,15 @@ def fixture():
             states[direction.time_entity_id] = _state("00:00-00:00")
             states[direction.current_entity_id] = _capability("1", "A", "10")
             states[direction.target_soc_entity_id] = _capability("50", "%")
-    guard = "input_boolean.house_battery_control_disable"
-    states[guard] = _state("off")
     observation = read_solis_state(solis, states, NOW)
     assert observation.snapshot is not None
-    return solis, states, guard, observation
+    return solis, states, observation
 
 
-def policy(*, guard_state="off"):
-    solis, states, guard, observation = fixture()
-    states[guard]["state"] = guard_state
+def policy():
+    solis, states, observation = fixture()
     ha = FakeHA(states)
-    return SolisPolicyActuator(solis, HomeAssistantWriter(ha), control_disable_guard_entity_id=guard, inverter_timezone=timezone.utc), ha, observation
+    return SolisPolicyActuator(solis, HomeAssistantWriter(ha), inverter_timezone=timezone.utc), ha, observation
 
 
 def intent(direction: SlotDirection) -> SlotIntent:
@@ -139,8 +136,8 @@ def intent(direction: SlotDirection) -> SlotIntent:
 
 
 @pytest.mark.asyncio
-async def test_safe_baseline_selects_self_use_and_disables_reserve_with_guard_off():
-    actuator, ha, _observation = policy(guard_state="off")
+async def test_safe_baseline_selects_self_use_and_disables_reserve():
+    actuator, ha, _observation = policy()
     result = await actuator.async_apply_safe_baseline()
 
     assert result.success and result.safe
@@ -150,7 +147,7 @@ async def test_safe_baseline_selects_self_use_and_disables_reserve_with_guard_of
 
 @pytest.mark.asyncio
 async def test_safe_baseline_writes_mode_before_reserve():
-    actuator, ha, _observation = policy(guard_state="on")
+    actuator, ha, _observation = policy()
     ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] = "Feed-In Priority"
 
     result = await actuator.async_apply_safe_baseline()
@@ -231,8 +228,8 @@ async def test_healthy_restores_feed_in_priority_after_safe_baseline():
 
 
 @pytest.mark.asyncio
-async def test_healthy_actuation_with_asserted_guard_is_not_reported_successful():
-    actuator, _ha, observation = policy(guard_state="on")
+async def test_healthy_actuation_without_operator_gate_is_successful():
+    actuator, _ha, observation = policy()
 
     result = await actuator.async_apply_healthy(
         observation=observation,
@@ -241,22 +238,12 @@ async def test_healthy_actuation_with_asserted_guard_is_not_reported_successful(
         now=NOW,
     )
 
-    assert not result.success
-    assert result.safe
-    assert "guard" in result.message
+    assert result.success
 
 
 @pytest.mark.asyncio
-async def test_guard_assertion_during_healthy_write_falls_back_to_safe_baseline():
+async def test_healthy_write_does_not_use_an_operator_gate():
     actuator, ha, observation = policy()
-    original_call = ha.async_call
-
-    async def assert_guard_after_first_write(domain, service, data, *, blocking=True):
-        await original_call(domain, service, data, blocking=blocking)
-        if data["entity_id"] == actuator.config.persistent.storage_mode_entity_id:
-            ha.states[actuator.control_disable_guard_entity_id]["state"] = "on"
-
-    ha.async_call = assert_guard_after_first_write
     result = await actuator.async_apply_healthy(
         observation=observation,
         reserve_soc_percent=10,
@@ -264,15 +251,7 @@ async def test_guard_assertion_during_healthy_write_falls_back_to_safe_baseline(
         now=NOW,
     )
 
-    assert not result.success
-    assert result.safe
-    assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
-    assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
-    assert all(
-        ha.states[direction.enable_entity_id]["state"] == "off"
-        for slot in actuator.config.slots
-        for direction in (slot.charge, slot.discharge)
-    )
+    assert result.success
 
 
 async def _cancel_repeatedly_during_write(actuator, ha, operation):
@@ -298,7 +277,7 @@ async def _cancel_repeatedly_during_write(actuator, ha, operation):
 
 @pytest.mark.asyncio
 async def test_safe_baseline_completes_slot_and_persistent_cleanup_before_cancellation():
-    actuator, ha, _observation = policy(guard_state="off")
+    actuator, ha, _observation = policy()
 
     await _cancel_repeatedly_during_write(actuator, ha, actuator.async_apply_safe_baseline)
 
@@ -312,21 +291,20 @@ async def test_safe_baseline_completes_slot_and_persistent_cleanup_before_cancel
 
 
 @pytest.mark.asyncio
-async def test_safe_baseline_leaves_guard_off_and_proves_safe_outputs():
-    actuator, ha, _observation = policy(guard_state="off")
+async def test_safe_baseline_proves_safe_outputs():
+    actuator, ha, _observation = policy()
 
     result = await actuator.async_apply_safe_baseline()
 
     assert result.success
     assert result.safe
-    assert ha.states[actuator.control_disable_guard_entity_id]["state"] == "off"
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
     assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
 
 
 @pytest.mark.asyncio
-async def test_safe_baseline_does_not_depend_on_guard_availability():
-    actuator, ha, _observation = policy(guard_state="unavailable")
+async def test_safe_baseline_does_not_depend_on_an_operator_gate():
+    actuator, ha, _observation = policy()
 
     result = await actuator.async_apply_safe_baseline()
 

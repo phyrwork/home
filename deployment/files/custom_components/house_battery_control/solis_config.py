@@ -103,16 +103,16 @@ _ENTITY_PATTERN = re.compile(r"(?P<domain>[a-z0-9_]+)\.[a-z0-9_]+$")
 _EXPECTED_SLOT_NUMBERS = frozenset(range(1, 7))
 _EXPECTED_SLOT_OWNERS = {
     (1, "charge"): SolisSlotOwner.CHEAP_CHARGING,
+    (2, "charge"): SolisSlotOwner.CHEAP_CHARGING,
     (1, "discharge"): SolisSlotOwner.FULL_SOC_CYCLING,
-    (2, "charge"): SolisSlotOwner.RESERVED,
+    (3, "discharge"): SolisSlotOwner.FULL_SOC_CYCLING,
     (2, "discharge"): SolisSlotOwner.RESERVE_EXPORT,
+    (4, "discharge"): SolisSlotOwner.RESERVE_EXPORT,
     (3, "charge"): SolisSlotOwner.RESERVED,
-    (3, "discharge"): SolisSlotOwner.RESERVED,
     (4, "charge"): SolisSlotOwner.RESERVED,
-    (4, "discharge"): SolisSlotOwner.RESERVED,
     (5, "charge"): SolisSlotOwner.RESERVED,
-    (5, "discharge"): SolisSlotOwner.RESERVED,
     (6, "charge"): SolisSlotOwner.RESERVED,
+    (5, "discharge"): SolisSlotOwner.RESERVED,
     (6, "discharge"): SolisSlotOwner.RESERVED,
 }
 def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
@@ -126,7 +126,8 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
             "persistent",
             "protection",
             "capability",
-            "slots",
+            "slot_entity_prefix",
+            "slot_allocations",
         },
         "solis",
     )
@@ -241,7 +242,7 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         ),
     )
 
-    slots = _slots(root["slots"])
+    slots = _compact_slots(root["slot_entity_prefix"], root["slot_allocations"])
     config = SolisConfig(
         telemetry=telemetry,
         persistent=persistent,
@@ -253,107 +254,52 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
     return config
 
 
-def _slots(value: ConfigValue) -> tuple[SolisSlotConfig, ...]:
-    if not isinstance(value, (list, tuple)):
-        raise ValueError("solis.slots must be a list")
-    if len(value) != 6:
-        raise ValueError("solis.slots must contain exactly six slot groups")
+def _compact_slots(prefix_value: ConfigValue, allocations_value: ConfigValue) -> tuple[SolisSlotConfig, ...]:
+    """Generate the complete six-slot mapping from the compact allocation."""
 
-    parsed: list[SolisSlotConfig] = []
-    seen: set[int] = set()
-    for index, raw_slot in enumerate(value):
-        slot_source = _mapping(raw_slot, f"solis.slots[{index}]")
-        _require_keys(
-            slot_source,
-            {"physical_slot", "charge", "discharge"},
-            f"solis.slots[{index}]",
-        )
-        physical_slot = slot_source["physical_slot"]
-        if (
-            not isinstance(physical_slot, int)
-            or isinstance(physical_slot, bool)
-            or physical_slot not in _EXPECTED_SLOT_NUMBERS
-        ):
-            raise ValueError(
-                f"solis.slots[{index}].physical_slot must be in the range 1 through 6"
-            )
-        if physical_slot in seen:
-            raise ValueError(f"duplicate Solis physical slot {physical_slot}")
-        seen.add(physical_slot)
-        charge = _slot_direction(
-            slot_source["charge"], physical_slot, "charge"
-        )
-        discharge = _slot_direction(
-            slot_source["discharge"], physical_slot, "discharge"
-        )
-        expected_charge_owner = _EXPECTED_SLOT_OWNERS[(physical_slot, "charge")]
-        expected_discharge_owner = _EXPECTED_SLOT_OWNERS[(physical_slot, "discharge")]
-        if charge.owner is not expected_charge_owner:
-            raise ValueError(
-                f"Solis slot {physical_slot} charge owner must be "
-                f"{expected_charge_owner.value}"
-            )
-        if discharge.owner is not expected_discharge_owner:
-            raise ValueError(
-                f"Solis slot {physical_slot} discharge owner must be "
-                f"{expected_discharge_owner.value}"
-            )
-        parsed.append(
-            SolisSlotConfig(
-                physical_slot=physical_slot,
-                charge=charge,
-                discharge=discharge,
-            )
+    if not isinstance(prefix_value, str) or re.fullmatch(r"[a-z0-9_]+", prefix_value) is None:
+        raise ValueError("solis.slot_entity_prefix must be lowercase text")
+    allocations = _mapping(allocations_value, "solis.slot_allocations")
+    expected = {"cheap_charging", "full_soc_cycling", "reserve_export"}
+    if set(allocations) != expected:
+        raise ValueError("solis.slot_allocations must define exactly the three owners")
+    owner_values: dict[SolisSlotOwner, tuple[int, int]] = {}
+    for key, value in allocations.items():
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError(f"solis.slot_allocations.{key} must contain two slots")
+        if any(not isinstance(slot, int) or isinstance(slot, bool) or slot not in _EXPECTED_SLOT_NUMBERS for slot in value):
+            raise ValueError(f"solis.slot_allocations.{key} contains an invalid slot")
+        if value[0] == value[1]:
+            raise ValueError(f"solis.slot_allocations.{key} contains a duplicate slot")
+        owner_values[SolisSlotOwner(key)] = (value[0], value[1])
+
+    def direction(slot: int, name: str) -> SolisSlotDirectionConfig:
+        owner = SolisSlotOwner.RESERVED
+        for candidate, slots_for_owner in owner_values.items():
+            if (name == "charge" and candidate is SolisSlotOwner.CHEAP_CHARGING) or (
+                name == "discharge" and candidate is not SolisSlotOwner.CHEAP_CHARGING
+            ):
+                if slot in slots_for_owner:
+                    owner = candidate
+        base = f"{prefix_value}_slot{slot}_{name}"
+        return SolisSlotDirectionConfig(
+            enable_entity_id=_entity(f"switch.{base}", f"slot {slot} {name} enable", "switch"),
+            time_entity_id=_entity(f"text.{base}_time", f"slot {slot} {name} time", "text"),
+            current_entity_id=_entity(f"number.{base}_current", f"slot {slot} {name} current", "number"),
+            target_soc_entity_id=_entity(f"number.{base}_soc", f"slot {slot} {name} target", "number"),
+            owner=owner,
         )
 
-    if seen != _EXPECTED_SLOT_NUMBERS:
-        missing = sorted(_EXPECTED_SLOT_NUMBERS - seen)
-        raise ValueError(f"solis.slots is missing physical slots: {missing}")
-    return tuple(sorted(parsed, key=lambda slot: slot.physical_slot))
-
-
-def _slot_direction(
-    value: ConfigValue, physical_slot: int, direction: str
-) -> SolisSlotDirectionConfig:
-    name = f"solis.slots[{physical_slot}].{direction}"
-    source = _mapping(value, name)
-    _require_keys(
-        source,
-        {
-            "enable_entity_id",
-            "time_entity_id",
-            "current_entity_id",
-            "target_soc_entity_id",
-            "owner",
-        },
-        name,
+    slots = tuple(
+        SolisSlotConfig(slot, direction(slot, "charge"), direction(slot, "discharge"))
+        for slot in sorted(_EXPECTED_SLOT_NUMBERS)
     )
-    return SolisSlotDirectionConfig(
-        enable_entity_id=_entity(
-            source["enable_entity_id"], f"{name}.enable_entity_id", "switch"
-        ),
-        time_entity_id=_entity(
-            source["time_entity_id"], f"{name}.time_entity_id", "text"
-        ),
-        current_entity_id=_entity(
-            source["current_entity_id"], f"{name}.current_entity_id", "number"
-        ),
-        target_soc_entity_id=_entity(
-            source["target_soc_entity_id"],
-            f"{name}.target_soc_entity_id",
-            "number",
-        ),
-        owner=_owner(source["owner"], f"{name}.owner"),
-    )
-
-
-def _owner(value: ConfigValue, name: str) -> SolisSlotOwner:
-    if not isinstance(value, str):
-        raise ValueError(f"{name} must be a Solis slot owner")
-    try:
-        return SolisSlotOwner(value)
-    except ValueError:
-        raise ValueError(f"{name} has an unknown Solis slot owner: {value}") from None
+    for slot in slots:
+        if slot.charge.owner is not _EXPECTED_SLOT_OWNERS[(slot.physical_slot, "charge")]:
+            raise ValueError("slot allocation does not match charge owner mapping")
+        if slot.discharge.owner is not _EXPECTED_SLOT_OWNERS[(slot.physical_slot, "discharge")]:
+            raise ValueError("slot allocation does not match discharge owner mapping")
+    return slots
 
 
 def _power_sign(value: ConfigValue, name: str) -> BatteryPowerSign:

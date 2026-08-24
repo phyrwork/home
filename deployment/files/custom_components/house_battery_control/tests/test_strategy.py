@@ -23,8 +23,6 @@ def _inputs(**changes):
     values = dict(
         now=NOW,
         health=ControllerHealth.HEALTHY,
-        control_enabled=True,
-        guard_off=True,
         soc_percent=Decimal("50"),
         reserve_soc_percent=Decimal("10"),
         cheap_window=_window(),
@@ -39,12 +37,8 @@ def _inputs(**changes):
     return StrategyInputs(**values)
 
 
-def test_fail_safe_precedes_economic_actions():
-    result = select_strategy(_inputs(control_enabled=False, soc_percent=Decimal("100")))
-    assert result.action is StrategyAction.FAIL_SAFE
-    assert result.slot is None
-
-    result = select_strategy(_inputs(health=ControllerHealth.DEGRADED, guard_off=False))
+def test_unhealthy_input_precedes_economic_actions():
+    result = select_strategy(_inputs(health=ControllerHealth.DEGRADED))
     assert result.action is StrategyAction.FAIL_SAFE
 
 

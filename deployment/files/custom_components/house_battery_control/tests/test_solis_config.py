@@ -22,11 +22,40 @@ def test_live_mapping_has_real_entities_and_six_physical_slots() -> None:
     assert parsed.slots[0].charge.owner is SolisSlotOwner.CHEAP_CHARGING
     assert parsed.slots[1].discharge.owner is SolisSlotOwner.RESERVE_EXPORT
 
+    for slot in range(1, 7):
+        for direction in ("charge", "discharge"):
+            item = getattr(parsed.slots[slot - 1], direction)
+            base = f"garage_inverter_control_slot{slot}_{direction}"
+            assert item.enable_entity_id == f"switch.{base}"
+            assert item.time_entity_id == f"text.{base}_time"
+            assert item.current_entity_id == f"number.{base}_current"
+            assert item.target_soc_entity_id == f"number.{base}_soc"
+
+
+def test_compact_mapping_has_expected_owner_allocations() -> None:
+    parsed = config.from_mapping(deployed()).solis
+    owners = {
+        (slot.physical_slot, "charge"): slot.charge.owner
+        for slot in parsed.slots
+    }
+    owners.update(
+        {(slot.physical_slot, "discharge"): slot.discharge.owner for slot in parsed.slots}
+    )
+    assert [key for key, owner in owners.items() if owner is SolisSlotOwner.CHEAP_CHARGING] == [
+        (1, "charge"), (2, "charge")
+    ]
+    assert [key for key, owner in owners.items() if owner is SolisSlotOwner.FULL_SOC_CYCLING] == [
+        (1, "discharge"), (3, "discharge")
+    ]
+    assert [key for key, owner in owners.items() if owner is SolisSlotOwner.RESERVE_EXPORT] == [
+        (2, "discharge"), (4, "discharge")
+    ]
+
 
 def test_slot_mapping_is_strict() -> None:
     source = deployed()
-    source["solis"]["slots"].pop()  # type: ignore[index]
-    with pytest.raises(ValueError, match="exactly six"):
+    source["solis"]["slot_allocations"].pop("reserve_export")  # type: ignore[index]
+    with pytest.raises(ValueError, match="exactly the three owners"):
         config.from_mapping(source)
 
 

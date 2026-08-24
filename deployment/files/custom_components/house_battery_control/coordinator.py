@@ -15,7 +15,7 @@ from homeassistant.util import dt as dt_util
 
 from .config import Config
 from .const import DOMAIN
-from .contracts import ControllerHealth, StorageMode
+from .contracts import ControllerHealth
 from .domain_constants import FULL_SOC_PERCENT
 from .ha_writer import HomeAssistantWriter
 from .reserve_planner import ReservePlanResult
@@ -62,8 +62,8 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         self._started = False
         self._stopping = False
         self._stop_task: asyncio.Task[None] | None = None
-        # Cache only proven baseline output for the current episode. Severity
-        # remains independent: DEGRADED can recover, while FAIL_SAFE is hard.
+        # Transitional cache retained until T0030 replaces the broad baseline
+        # path with the lean controller-owned fail-safe state.
         self._safe_state_applied = False
         writer = HomeAssistantWriter.for_home_assistant(hass)
         zone = dt_util.get_time_zone(hass.config.time_zone)
@@ -72,7 +72,6 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         self.policy_actuator = SolisPolicyActuator(
             config.solis,
             writer,
-            control_disable_guard_entity_id=config.control_disable_guard_entity_id,
             inverter_timezone=zone,
         )
 
@@ -109,7 +108,6 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         # disabled result here: the independent watchdog may have observed a
         # state change since the last evaluation.
         result = await self.policy_actuator.async_apply_safe_baseline()
-        self._safe_state_applied = result.safe
         await self.async_shutdown()
 
     async def _async_update_data(self) -> Snapshot:
@@ -122,54 +120,6 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                 reason="controller is stopping",
                 cycle_state=CycleState.IDLE,
             )
-        guard = self.hass.states.get(self.config.control_disable_guard_entity_id)
-        guard_off = guard is not None and guard.state == "off"
-        if not self.config.dynamic_control_enabled:
-            # Keep observing the native controls after the one-time startup
-            # safe write.  An unavailable/stale/invalid Solis observation is a
-            # real fault even when dynamic scheduling is disabled.
-            if self._safe_state_applied:
-                if guard is None or guard.state != "on":
-                    self._safe_state_applied = False
-                    return await self._fail_safe_snapshot(
-                        now,
-                        "control-disable guard is not asserted",
-                    )
-                observation = read_solis_state(self.config.solis, self.hass.states, now)
-                if (
-                    observation.health is not ControllerHealth.HEALTHY
-                    or not self._is_safe_state_proven(observation)
-                ):
-                    self._safe_state_applied = False
-                    return await self._fail_safe_snapshot(
-                        now,
-                        "Solis safe state is unavailable or not proven",
-                        error=_issues_text(observation),
-                    )
-                telemetry = observation.telemetry
-                reserve_soc, battery_energy, reserve_target, reserve_balance = (
-                    await self._async_reserve_diagnostics(now, observation)
-                )
-                self._last_healthy_at = now
-                return Snapshot(
-                    heartbeat_at=now,
-                    health=ControllerHealth.HEALTHY,
-                    action=StrategyAction.STOP,
-                    reason="dynamic control is disabled",
-                    cycle_state=CycleState.IDLE,
-                    reserve_soc_percent=reserve_soc,
-                    battery_energy_kwh=battery_energy,
-                    reserve_target_energy_kwh=reserve_target,
-                    reserve_balance_kwh=reserve_balance,
-                    state_of_charge_percent=None if telemetry is None else telemetry.state_of_charge_percent,
-                    battery_power_kw=None if telemetry is None else telemetry.battery_power_kw,
-                    last_healthy_at=self._last_healthy_at,
-                )
-            return await self._fail_safe_snapshot(now, "dynamic control is disabled")
-        if not guard_off:
-            self._safe_state_applied = False
-            return await self._fail_safe_snapshot(now, "control-disable guard is asserted or unavailable")
-
         runtime: RuntimeInputs | None = None
         try:
             runtime = await async_read_runtime_inputs(
@@ -263,11 +213,8 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
 
         self._cycle_state = CycleState.IDLE
         self._cycle_deadline = None
-        if self._safe_state_applied and self._is_safe_state_proven(observation):
-            actuation = PolicyActuationResult(True, True, "safe baseline already proven")
-        else:
-            actuation = await self.policy_actuator.async_apply_safe_baseline()
-            self._safe_state_applied = actuation.safe
+        actuation = await self.policy_actuator.async_apply_safe_baseline()
+        self._safe_state_applied = actuation.safe
         if not actuation.safe:
             return self._snapshot(
                 now,
@@ -402,44 +349,12 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             return
         await self.async_request_refresh()
 
-    def _is_safe_state_proven(self, observation: object) -> bool:
-        """Return whether a healthy snapshot proves the disabled baseline."""
-
-        snapshot = getattr(observation, "snapshot", None)
-        try:
-            persistent = (
-                getattr(snapshot, "persistent", None)
-                if snapshot is not None
-                else getattr(observation, "persistent", None)
-            )
-            slots = (
-                getattr(snapshot, "slots", None)
-                if snapshot is not None
-                else getattr(observation, "slots", None)
-            )
-            if (
-                persistent is None
-                or slots is None
-                or persistent.storage_mode != StorageMode.SELF_USE.value
-                or persistent.battery_reserve is not False
-                or len(slots) != len(self.config.solis.slots)
-            ):
-                return False
-            return all(
-                direction.enabled is False
-                for slot in slots
-                for direction in (slot.charge, slot.discharge)
-            )
-        except (AttributeError, TypeError):
-            return False
-
     def _source_entity_ids(self) -> tuple[str, ...]:
         telemetry = self.config.solis.telemetry
         persistent = self.config.solis.persistent
         protection = self.config.solis.protection
         capability = self.config.solis.capability
         entity_ids = [
-            self.config.control_disable_guard_entity_id,
             self.config.tariff.import_rates_entity_id,
             self.config.tariff.export_rates_entity_id,
             self.config.cycle_discharge_duration_entity_id,

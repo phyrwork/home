@@ -23,17 +23,23 @@ def _load(path: Path) -> Any:
 
 def _configured_slots(config: dict[str, Any]) -> list[str]:
     return [
-        direction["enable_entity_id"]
-        for slot in config["solis"]["slots"]
-        for direction in (slot["charge"], slot["discharge"])
+        f"switch.{config['solis']['slot_entity_prefix']}_slot{slot}_{direction}"
+        for slot in range(1, 7)
+        for direction in ("charge", "discharge")
     ]
 
 
 def _configured_slot_fields(config: dict[str, Any], field: str) -> list[str]:
+    suffix = {
+        "time_entity_id": "_time",
+        "current_entity_id": "_current",
+        "target_soc_entity_id": "_soc",
+    }[field]
+    domain = {"time_entity_id": "text", "current_entity_id": "number", "target_soc_entity_id": "number"}[field]
     return [
-        direction[field]
-        for slot in config["solis"]["slots"]
-        for direction in (slot["charge"], slot["discharge"])
+        f"{domain}.{config['solis']['slot_entity_prefix']}_slot{slot}_{direction}{suffix}"
+        for slot in range(1, 7)
+        for direction in ("charge", "discharge")
     ]
 
 

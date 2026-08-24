@@ -53,17 +53,14 @@ class SolisPolicyActuator:
         config: SolisConfig,
         writer: HomeAssistantWriter,
         *,
-        control_disable_guard_entity_id: str,
         inverter_timezone: tzinfo,
     ) -> None:
         self.config = config
         self.writer = writer
-        self.control_disable_guard_entity_id = control_disable_guard_entity_id
         self._lock = ReentrantAsyncLock()
         self.slots = SolisSlotActuator(
             config,
             writer,
-            control_disable_guard_entity_id=control_disable_guard_entity_id,
             inverter_timezone=inverter_timezone,
             orchestration_lock=self._lock,
         )
@@ -268,16 +265,6 @@ class SolisPolicyActuator:
             await self._lock.acquire(deadline=deadline)
             results: list[WriteResult] = []
             try:
-                if not self._guard_off():
-                    fallback = await self._apply_safe_baseline_attempts_locked(
-                        deadline=deadline
-                    )
-                    return PolicyActuationResult(
-                        False,
-                        fallback.safe,
-                        "healthy actuation rejected: control-disable guard is asserted or unavailable",
-                        fallback.results,
-                    )
                 if observation.health is not ControllerHealth.HEALTHY or observation.snapshot is None:
                     return await self._apply_safe_baseline_attempts_locked(
                         deadline=deadline
@@ -320,19 +307,13 @@ class SolisPolicyActuator:
                         ),
                         SwitchWriteRequest(self.writer.capture_precondition(protection.battery_reserve_entity_id), True),
                     ):
-                        if not self._guard_off():
-                            raise RuntimeError("control-disable guard changed during healthy actuation")
                         result = await transaction.async_write(
                             request, deadline=deadline
                         )
                         results.append(result)
                         if not result.success:
                             raise RuntimeError(result.message)
-                        if not self._guard_off():
-                            raise RuntimeError("control-disable guard changed during healthy actuation")
                 if intent is None:
-                    if not self._guard_off():
-                        raise RuntimeError("control-disable guard changed before slot cleanup")
                     disabled = await self.slots._disable_all_once(
                         results, deadline=deadline
                     )
@@ -340,8 +321,6 @@ class SolisPolicyActuator:
                         raise RuntimeError("not all Solis slots were proven disabled")
                     return PolicyActuationResult(True, False, "healthy baseline active; all slots off", tuple(results))
                 slot_results: list[WriteResult] = []
-                if not self._guard_off():
-                    raise RuntimeError("control-disable guard changed before slot actuation")
                 slot_result = await self.slots._async_apply_intent(
                     intent,
                     observation,
@@ -392,12 +371,5 @@ class SolisPolicyActuator:
         if (target - minimum) % step != 0:
             return None, "reserve target is not aligned to the capability step"
         return target, None
-
-    def _guard_off(self) -> bool:
-        try:
-            return self.writer.capture_precondition(self.control_disable_guard_entity_id).state == "off"
-        except Exception:
-            return False
-
 
 __all__ = ["PolicyActuationResult", "SolisPolicyActuator"]

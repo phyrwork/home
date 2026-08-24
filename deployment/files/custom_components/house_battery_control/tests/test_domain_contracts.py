@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from custom_components.house_battery_control import contracts
+from custom_components.house_battery_control import model
 from custom_components.house_battery_control.domain_constants import (
     BATTERY_CYCLE_COST_PER_KWH,
     FORCE_CHARGE_SOC_PERCENT,
@@ -69,7 +70,8 @@ def test_slot_rejects_invalid_values() -> None:
         intent(end=datetime(2026, 1, 1, 0, tzinfo=timezone.utc))
     with pytest.raises(ValueError):
         intent(expiry=datetime(2026, 1, 1, 1, tzinfo=timezone.utc))
-    assert intent(expiry=datetime(2026, 1, 1, 1, 59, tzinfo=timezone.utc)).expiry < intent().end
+    with pytest.raises(ValueError):
+        intent(expiry=datetime(2026, 1, 1, 1, 59, tzinfo=timezone.utc))
 
 
 def test_enums_and_structural_exclusivity() -> None:
@@ -90,3 +92,32 @@ def test_enums_and_structural_exclusivity() -> None:
     assert [mode.value for mode in contracts.StorageMode] == [
         "Self-Use", "Feed-In Priority", "Off-Grid"
     ]
+
+
+def test_logical_intent_accepts_adjacent_same_direction_segments() -> None:
+    first = intent(end=datetime(2026, 1, 1, 2, tzinfo=timezone.utc), expiry=datetime(2026, 1, 1, 2, tzinfo=timezone.utc))
+    second = intent(start=datetime(2026, 1, 1, 2, tzinfo=timezone.utc), end=datetime(2026, 1, 1, 3, tzinfo=timezone.utc), expiry=datetime(2026, 1, 1, 3, tzinfo=timezone.utc))
+    logical = contracts.LogicalIntent((first, second))
+    assert logical.start == first.start
+    assert logical.end == second.end
+
+
+def test_logical_intent_rejects_overlap_or_mixed_direction() -> None:
+    first = intent(end=datetime(2026, 1, 1, 2, tzinfo=timezone.utc), expiry=datetime(2026, 1, 1, 2, tzinfo=timezone.utc))
+    with pytest.raises(ValueError):
+        contracts.LogicalIntent((first, intent(start=datetime(2026, 1, 1, 1, 30, tzinfo=timezone.utc), end=datetime(2026, 1, 1, 3, tzinfo=timezone.utc), expiry=datetime(2026, 1, 1, 3, tzinfo=timezone.utc))))
+    with pytest.raises(ValueError):
+        contracts.LogicalIntent((first, intent(start=datetime(2026, 1, 1, 2, tzinfo=timezone.utc), end=datetime(2026, 1, 1, 3, tzinfo=timezone.utc), expiry=datetime(2026, 1, 1, 3, tzinfo=timezone.utc), direction=contracts.SlotDirection.DISCHARGE)))
+
+
+def test_new_shared_slot_intent_has_no_physical_slot_ownership() -> None:
+    shared = model.SlotIntent(
+        owner=model.SlotOwner.CHEAP_CHARGING,
+        direction=model.SlotDirection.CHARGE,
+        start=datetime(2026, 1, 1, 1, tzinfo=timezone.utc),
+        end=datetime(2026, 1, 1, 2, tzinfo=timezone.utc),
+        current=Decimal("2"),
+        target_soc=Decimal("100"),
+        expiry=datetime(2026, 1, 1, 2, tzinfo=timezone.utc),
+    )
+    assert not hasattr(shared, "physical_slot")

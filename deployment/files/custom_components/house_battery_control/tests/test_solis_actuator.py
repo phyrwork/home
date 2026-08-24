@@ -96,11 +96,9 @@ def fixture(*, now=NOW):
             states[direction.time_entity_id] = _state("00:00-00:00")
             states[direction.current_entity_id] = _capability("1", "A", "10")
             states[direction.target_soc_entity_id] = _capability("50", "%")
-    guard = "input_boolean.house_battery_control_disable"
-    states[guard] = _state("off")
     observation = read_solis_state(solis, states, now)
     assert observation.snapshot is not None
-    return solis, states, guard, observation
+    return solis, states, observation
 
 
 def intent(**changes):
@@ -149,9 +147,9 @@ def reserve_intent(**changes):
 
 
 def actuator(*, now=NOW, inverter_timezone=timezone.utc):
-    solis, states, guard, observation = fixture(now=now)
+    solis, states, observation = fixture(now=now)
     ha = FakeHA(states)
-    return SolisSlotActuator(solis, HomeAssistantWriter(ha), control_disable_guard_entity_id=guard, inverter_timezone=inverter_timezone), ha, observation
+    return SolisSlotActuator(solis, HomeAssistantWriter(ha), inverter_timezone=inverter_timezone), ha, observation
 
 
 def enable_ids(controller):

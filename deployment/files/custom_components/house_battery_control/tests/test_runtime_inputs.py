@@ -146,9 +146,7 @@ async def test_stale_dispatch_window_is_a_recoverable_runtime_failure(hass) -> N
     from custom_components.house_battery_control.strategy import CycleState
 
     source = yaml.safe_load((Path(__file__).parents[3] / "house_battery_control.yaml").read_text())
-    source["dynamic_control_enabled"] = True
     config = from_mapping(source)
-    hass.states.async_set(config.control_disable_guard_entity_id, "off")
 
     state = SimpleNamespace(state="10", attributes={})
     import_rates = (SimpleNamespace(end=NOW + timedelta(hours=1)),)

@@ -42,9 +42,7 @@ class Config:
     tariff: TariffConfig
     solar: SolarConfig
     solis: SolisConfig
-    control_disable_guard_entity_id: str
     cycle_discharge_duration_entity_id: str
-    dynamic_control_enabled: bool = False
 
 
 def from_mapping(value: Mapping[str, Any]) -> Config:
@@ -56,10 +54,8 @@ def from_mapping(value: Mapping[str, Any]) -> Config:
             "tariff",
             "solar",
             "solis",
-            "control_disable_guard_entity_id",
             "cycle_discharge_duration_entity_id",
         },
-        optional={"dynamic_control_enabled"},
         name="config",
     )
 
@@ -105,23 +101,17 @@ def from_mapping(value: Mapping[str, Any]) -> Config:
     if not isinstance(entry_id, str) or not entry_id:
         raise ValueError("solar.config_entry_id must be a non-empty string")
 
-    guard = _entity(source["control_disable_guard_entity_id"], "control_disable_guard_entity_id", "input_boolean")
     cycle_duration = _entity(
         source["cycle_discharge_duration_entity_id"],
         "cycle_discharge_duration_entity_id",
         "input_number",
     )
-    enabled = source.get("dynamic_control_enabled", False)
-    if type(enabled) is not bool:
-        raise ValueError("dynamic_control_enabled must be Boolean")
     return Config(
         battery=battery_config,
         tariff=tariff_config,
         solar=SolarConfig(entry_id),
         solis=solis_from_mapping(_mapping(source["solis"], "solis")),
-        control_disable_guard_entity_id=guard,
         cycle_discharge_duration_entity_id=cycle_duration,
-        dynamic_control_enabled=enabled,
     )
 
 

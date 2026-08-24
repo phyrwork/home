@@ -30,7 +30,6 @@ def config() -> integration_config.Config:
 
     path = Path(__file__).parents[3] / "house_battery_control.yaml"
     source = yaml.safe_load(path.read_text())
-    source["dynamic_control_enabled"] = False
     return integration_config.from_mapping(source)
 
 
@@ -76,145 +75,13 @@ def observation(
     )
 
 
-async def test_disabled_controller_applies_safe_state_once(hass: HomeAssistant) -> None:
-    coordinator = Coordinator(hass, config())
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
-    actuator = policy(coordinator)
-    with patch(
-        "custom_components.house_battery_control.coordinator.read_solis_state",
-        return_value=observation(),
-    ):
-        first = await coordinator._async_update_data()
-        second = await coordinator._async_update_data()
-
-    assert first.action is StrategyAction.FAIL_SAFE
-    assert second.action is StrategyAction.STOP
-    assert second.reason == "dynamic control is disabled"
-    assert second.health is ControllerHealth.HEALTHY
-    actuator.async_apply_safe_baseline.assert_awaited_once_with()
-
-
-async def test_disabled_healthy_snapshot_includes_exact_reserve_diagnostics(
-    hass: HomeAssistant,
-) -> None:
-    coordinator = Coordinator(hass, config())
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
-    actuator = policy(coordinator)
-    runtime = SimpleNamespace(
-        strategy=SimpleNamespace(reserve_soc_percent=Decimal("38")),
-        reserve=SimpleNamespace(reserve_energy_kwh=Decimal("12.345678")),
-    )
-    with (
-        patch(
-            "custom_components.house_battery_control.coordinator.read_solis_state",
-            return_value=observation(),
-        ),
-        patch(
-            "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
-            AsyncMock(return_value=runtime),
-        ),
-    ):
-        await coordinator._async_update_data()
-        result = await coordinator._async_update_data()
-
-    assert result.health is ControllerHealth.HEALTHY
-    assert result.reserve_soc_percent == Decimal("38")
-    assert result.battery_energy_kwh == Decimal("17.68448")
-    assert result.reserve_target_energy_kwh == Decimal("12.345678")
-    assert result.reserve_balance_kwh == Decimal("5.338802")
-    actuator.async_apply_safe_baseline.assert_awaited_once_with()
-    actuator.async_apply_healthy.assert_not_awaited()
-
-
-async def test_disabled_diagnostic_failure_does_not_degrade_proven_safe_state(
-    hass: HomeAssistant,
-) -> None:
-    coordinator = Coordinator(hass, config())
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
-    actuator = policy(coordinator)
-    with (
-        patch(
-            "custom_components.house_battery_control.coordinator.read_solis_state",
-            return_value=observation(),
-        ),
-        patch(
-            "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
-            AsyncMock(side_effect=RuntimeError("forecast unavailable")),
-        ),
-    ):
-        await coordinator._async_update_data()
-        result = await coordinator._async_update_data()
-
-    assert result.health is ControllerHealth.HEALTHY
-    assert result.battery_energy_kwh == Decimal("17.68448")
-    assert result.reserve_target_energy_kwh is None
-    assert result.reserve_balance_kwh is None
-    actuator.async_apply_safe_baseline.assert_awaited_once_with()
-
-
-async def test_disabled_controller_fault_reports_fail_safe_without_write_loop(
-    hass: HomeAssistant,
-) -> None:
-    coordinator = Coordinator(hass, config())
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
-    actuator = policy(coordinator)
-    with patch(
-        "custom_components.house_battery_control.coordinator.read_solis_state",
-        side_effect=(observation(), observation(ControllerHealth.DEGRADED), observation(ControllerHealth.DEGRADED)),
-    ):
-        await coordinator._async_update_data()
-        await coordinator._async_update_data()
-        failed = await coordinator._async_update_data()
-        repeated = await coordinator._async_update_data()
-
-    assert failed.health is ControllerHealth.FAIL_SAFE
-    assert repeated.health is ControllerHealth.FAIL_SAFE
-    assert actuator.async_apply_safe_baseline.await_count == 3
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    (
-        ("storage_mode", "Feed-In Priority"),
-        ("battery_reserve", True),
-        ("slot_enabled", True),
-    ),
-)
-async def test_disabled_controller_reapplies_safe_state_after_external_drift(
-    hass: HomeAssistant,
-    field: str,
-    value: object,
-) -> None:
-    coordinator = Coordinator(hass, config())
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "on")
-    actuator = policy(coordinator)
-    safe = observation()
-    drifted = observation(**{field: value})
-    with patch(
-        "custom_components.house_battery_control.coordinator.read_solis_state",
-        side_effect=(safe, drifted, safe),
-    ):
-        first = await coordinator._async_update_data()
-        healthy = await coordinator._async_update_data()
-        drift = await coordinator._async_update_data()
-        recovered = await coordinator._async_update_data()
-
-    assert first.health is ControllerHealth.FAIL_SAFE
-    assert healthy.health is ControllerHealth.HEALTHY
-    assert drift.health is ControllerHealth.FAIL_SAFE
-    assert recovered.health is ControllerHealth.HEALTHY
-    assert actuator.async_apply_safe_baseline.await_count == 2
-
-
 async def test_enabled_controller_recovers_from_fresh_degraded_telemetry(
     hass: HomeAssistant,
 ) -> None:
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     degraded = SimpleNamespace(
         solis=observation(ControllerHealth.DEGRADED),
@@ -254,8 +121,7 @@ async def test_enabled_controller_recovers_from_fresh_degraded_telemetry(
     assert first.action is StrategyAction.STOP
     assert repeated.health is ControllerHealth.DEGRADED
     assert recovered.health is ControllerHealth.HEALTHY
-    assert hass.states.get(coordinator.config.control_disable_guard_entity_id).state == "off"
-    actuator.async_apply_safe_baseline.assert_awaited_once_with()
+    assert actuator.async_apply_safe_baseline.await_count == 2
     actuator.async_apply_healthy.assert_awaited_once()
 
 
@@ -265,9 +131,7 @@ async def test_degraded_runtime_reconciles_again_when_cached_baseline_drifts(
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     safe = observation()
     drifted = observation(storage_mode="Feed-In Priority")
@@ -326,9 +190,7 @@ async def test_degraded_baseline_failure_escalates_to_fail_safe(
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator, safe=False)
     degraded = SimpleNamespace(
         solis=observation(ControllerHealth.DEGRADED),
@@ -355,9 +217,7 @@ async def test_degraded_coordinator_delegates_retry_to_policy(
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     actuator.async_apply_safe_baseline = AsyncMock(
         return_value=PolicyActuationResult(True, True, "retry proven")
@@ -387,9 +247,7 @@ async def test_runtime_unavailable_exception_is_recoverable_degraded(
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     with patch(
         "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
@@ -418,9 +276,7 @@ async def test_future_or_interval_provenance_fault_fails_safe(
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     rates = (SimpleNamespace(end=NOW + timedelta(hours=1)),)
     state = SimpleNamespace(state="10", attributes={})
@@ -489,9 +345,7 @@ async def test_missing_or_unavailable_tariff_attribute_is_degraded(
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     rates = (SimpleNamespace(end=NOW + timedelta(hours=1)),)
     import_attributes = {
@@ -508,7 +362,6 @@ async def test_missing_or_unavailable_tariff_attribute_is_degraded(
         "rate_source_entity_id": "sensor.export",
     }
     states = (
-        SimpleNamespace(state="off", entity_id=coordinator.config.control_disable_guard_entity_id, attributes={}),
         SimpleNamespace(
             state="available",
             entity_id=coordinator.config.tariff.import_rates_entity_id,
@@ -559,9 +412,7 @@ async def test_hard_fault_reconciles_again_after_degraded_baseline(
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     with patch(
         "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
@@ -584,9 +435,7 @@ async def test_enabled_unexpected_failure_fails_safe(hass: HomeAssistant) -> Non
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     with patch(
         "custom_components.house_battery_control.coordinator.async_read_runtime_inputs",
@@ -604,9 +453,7 @@ async def test_cycle_deadline_is_stored_and_reused_across_heartbeats(hass: HomeA
     source = yaml.safe_load(
         (__import__("pathlib").Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
     )
-    source["dynamic_control_enabled"] = True
     coordinator = Coordinator(hass, integration_config.from_mapping(source))
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     actuator = policy(coordinator)
     deadline = NOW + timedelta(minutes=10)
     intent = SlotIntent(
@@ -677,17 +524,15 @@ async def test_stop_is_idempotent_and_unsubscribes(hass: HomeAssistant) -> None:
     policy_instance.async_apply_safe_baseline.assert_awaited_once_with()
 
 
-async def test_shutdown_applies_baseline_without_latching_guard(
+async def test_shutdown_applies_baseline_once(
     hass: HomeAssistant,
 ) -> None:
     coordinator = Coordinator(hass, config())
-    hass.states.async_set(coordinator.config.control_disable_guard_entity_id, "off")
     policy(coordinator)
 
     await coordinator.async_stop()
 
-    assert coordinator._safe_state_applied
-    assert hass.states.get(coordinator.config.control_disable_guard_entity_id).state == "off"
+    assert coordinator._stopping
 
 
 def test_heartbeat_interval_is_one_minute() -> None:

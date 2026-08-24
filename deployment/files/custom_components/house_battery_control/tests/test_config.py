@@ -21,7 +21,6 @@ def test_deployed_mapping_is_strict_and_decimal() -> None:
     assert parsed.battery.capacity_kwh == Decimal("32.1536")
     assert parsed.battery.minimum_soc_percent == Decimal("10")
     assert parsed.battery.minimum_energy_kwh == Decimal("3.21536")
-    assert parsed.dynamic_control_enabled is True
     assert parsed.solis.telemetry.battery_power_entity_id.endswith("battery_power")
 
 
@@ -32,7 +31,7 @@ def test_home_assistant_schema_returns_typed_config() -> None:
 
 @pytest.mark.parametrize(
     ("path", "value"),
-    (("battery.capacity_kwh", 0), ("battery.minimum_soc_percent", 20), ("dynamic_control_enabled", "yes")),
+    (("battery.capacity_kwh", 0), ("battery.minimum_soc_percent", 20)),
 )
 def test_invalid_safety_or_control_values_are_rejected(path: str, value: object) -> None:
     source = deployed()

@@ -5,37 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
-from enum import Enum
 from typing import Any
 
 from .contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
 from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
+from .model import CycleState, StrategyAction
 from .octopus_windows import CheapWindow
-
-
-class StrategyAction(str, Enum):
-    FAIL_SAFE = "FAIL_SAFE"
-    STOP = "STOP"
-    CHEAP_CHARGE = "CHEAP_CHARGE"
-    RESERVE_DISCHARGE = "RESERVE_DISCHARGE"
-    CYCLE_DISCHARGE = "CYCLE_DISCHARGE"
-    IDLE = "IDLE"
-
-
-class CycleState(str, Enum):
-    IDLE = "IDLE"
-    RESERVE_DISCHARGING = "RESERVE_DISCHARGING"
-    DISCHARGING = "DISCHARGING"
-    CHARGING = "CHARGING"
-    STOPPING = "STOPPING"
 
 
 @dataclass(frozen=True, slots=True)
 class StrategyInputs:
     now: datetime
     health: ControllerHealth
-    control_enabled: bool
-    guard_off: bool
     soc_percent: Decimal
     reserve_soc_percent: Decimal
     cheap_window: CheapWindow | None = None
@@ -108,8 +89,6 @@ def _valid_inputs(inputs: StrategyInputs) -> None:
     _aware(inputs.now, "now")
     if type(inputs.health) is not ControllerHealth:
         raise ValueError("health is invalid")
-    if type(inputs.control_enabled) is not bool or type(inputs.guard_off) is not bool:
-        raise ValueError("control flags are invalid")
     for name in ("soc_percent", "reserve_soc_percent", "maximum_soc_percent", "minimum_soc_percent"):
         value = _decimal(getattr(inputs, name), name)
         if not Decimal(0) <= value <= Decimal(100):
@@ -176,10 +155,6 @@ def select_strategy(inputs: StrategyInputs | object) -> StrategyResult:
         _valid_inputs(inputs)
         if inputs.health is not ControllerHealth.HEALTHY:
             return _result(StrategyAction.FAIL_SAFE, "controller is not healthy")
-        if not inputs.control_enabled:
-            return _result(StrategyAction.FAIL_SAFE, "dynamic control is disabled")
-        if not inputs.guard_off:
-            return _result(StrategyAction.FAIL_SAFE, "control-disable guard is asserted")
         if inputs.soc_percent < inputs.minimum_soc_percent:
             return _result(StrategyAction.FAIL_SAFE, "SOC is below the safety floor")
 
