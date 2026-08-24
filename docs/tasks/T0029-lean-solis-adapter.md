@@ -180,5 +180,13 @@ Consolidate Solis behavior tests into `test_solis.py` covering:
 - Valid idle still never infers a stop, but full-intent matching now remains
   false until every slot enable is explicitly observed off. Active and unknown
   idle-slot regressions preserve that distinction for T0030 reconciliation.
+
+## Review
+
+Two independent small-model reviewers approved final commit `8729b50` with no
+blockers. The accepted implementation includes the amended invariant that all
+12 enables are observed before any persistent preparation: idle requires every
+direction explicitly off, while a non-idle intent permits only its exact
+compatible active directions.
   Persistent idle reconciliation is likewise blocked by any active or unknown
   enable, so it cannot alter inverter policy ahead of a required stop.
