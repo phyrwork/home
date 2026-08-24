@@ -16,7 +16,7 @@ from custom_components.house_battery_control import config as integration_config
 from custom_components.house_battery_control.controller import (
     BACKSTOP_INTERVAL,
     Controller,
-    DEGRADED_FAILSAFE_TIMEOUT,
+    IMPORTANT_STOP_FAILSAFE_TIMEOUT,
     START_RETRY_DELAYS,
     WRITE_DEADLINE,
     StartRetry,
@@ -329,7 +329,7 @@ async def test_stop_publishes_degraded_context_before_blocking_service(
     solis.stop.side_effect = stop
     await controller._attempt_stop(debt, observation(enabled=key), NOW, 0)
 
-    assert key not in controller._stop_debts
+    assert key in controller._stop_debts
     solis.stop.assert_awaited_once()
 
 
@@ -383,12 +383,21 @@ async def test_later_on_drift_recreates_previously_proved_stop_debt(
     solis.conflicting_enabled_keys.return_value = (key,)
     current = observation(enabled=key)
     with (
-        patch("custom_components.house_battery_control.controller.read_state", return_value=current),
+        patch(
+            "custom_components.house_battery_control.controller.read_state",
+            side_effect=(
+                current,
+                observation(enabled=key, enabled_state="off"),
+                current,
+            ),
+        ),
         patch(
             "custom_components.house_battery_control.controller.build_plan",
             AsyncMock(return_value=plan()),
         ),
     ):
+        await controller._reconcile()
+        assert key in controller._stop_debts
         await controller._reconcile()
         assert key not in controller._stop_debts
         await controller._reconcile()
@@ -662,7 +671,7 @@ async def test_conflicting_direction_is_stopped_before_start(
     solis.next_start_change.assert_not_called()
 
 
-async def test_fifteen_minute_fail_safe_latches_until_fresh_controller_setup(
+async def test_prolonged_planning_degradation_recovers_without_fail_safe(
     hass: HomeAssistant,
 ) -> None:
     controller = Controller(hass, config())
@@ -679,20 +688,98 @@ async def test_fifteen_minute_fail_safe_latches_until_fresh_controller_setup(
         ) as build,
     ):
         await controller._reconcile()
-        clock[0] = DEGRADED_FAILSAFE_TIMEOUT.total_seconds()
+        clock[0] = IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds() + 1
         await controller._reconcile()
-        clock[0] += 1
+        assert not controller._fail_safe_latched
+        assert controller.data.health is ControllerHealth.DEGRADED
+        build.side_effect = None
+        build.return_value = plan()
         with patch(
             "custom_components.house_battery_control.controller.read_state",
-            return_value=observation(mode="Self-Use"),
+            return_value=observation(),
         ):
             await controller._reconcile()
 
-    assert controller._fail_safe_latched
-    assert controller.data.health is ControllerHealth.FAIL_SAFE
-    solis.set_mode.assert_awaited_once()
-    assert build.await_count == 1
+    assert not controller._fail_safe_latched
+    assert controller.data.health is ControllerHealth.HEALTHY
+    solis.set_mode.assert_not_awaited()
+    assert build.await_count == 3
     assert not Controller(hass, config())._fail_safe_latched
+
+
+async def test_stop_deadline_is_not_renewed_by_retries_or_events(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    solis.stop.return_value = WriteResult("switch.slot", WriteOutcome.SERVICE_ERROR, "failed")
+    clock = [0.0]
+    with patch.object(Controller, "_monotonic", side_effect=lambda: clock[0]):
+        controller._add_stop(key, NOW, clock[0])
+        debt = controller._stop_debts[key]
+        assert debt.first_seen == 0
+        assert debt.fail_safe_deadline == IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds()
+        for _ in range(3):
+            controller.trigger()
+            clock[0] = controller._stop_debts[key].next_attempt
+            await controller._attempt_stop(controller._stop_debts[key], observation(enabled=key), NOW, clock[0])
+        assert controller._stop_debts[key].first_seen == debt.first_seen
+        assert controller._stop_debts[key].fail_safe_deadline == debt.fail_safe_deadline
+
+
+async def test_stop_proved_before_deadline_clears_without_latching(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    clock = [0.0]
+    with patch.object(Controller, "_monotonic", side_effect=lambda: clock[0]):
+        controller._add_stop(key, NOW, clock[0])
+        clock[0] = IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds() - 1
+        controller._retire_proven_stops(observation(enabled=key, enabled_state="off"))
+    assert key not in controller._stop_debts
+    assert not controller._fail_safe_latched
+
+
+async def test_unproved_stop_deadline_latches_and_keeps_retrying(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    clock = [0.0]
+    solis.stop.side_effect = (
+        WriteResult("switch.slot", WriteOutcome.SERVICE_ERROR, "failed"),
+        WriteResult("switch.slot", WriteOutcome.APPLIED, "provisional"),
+    )
+    with (
+        patch.object(Controller, "_now", side_effect=lambda: NOW + timedelta(seconds=clock[0])),
+        patch.object(Controller, "_monotonic", side_effect=lambda: clock[0]),
+        patch("custom_components.house_battery_control.controller.read_state", return_value=observation(enabled=key)),
+    ):
+        controller._add_stop(key, NOW, clock[0])
+        await controller._reconcile()
+        clock[0] = IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds()
+        await controller._reconcile()
+        assert controller._fail_safe_latched
+        assert controller.data.health is ControllerHealth.FAIL_SAFE
+        assert key in controller._stop_debts
+        clock[0] += 1
+        await controller._reconcile()
+    assert solis.stop.await_count == 2
+    assert solis.set_mode.await_count == 1
+
+
+def test_distinct_stop_debt_receives_a_new_deadline(hass: HomeAssistant) -> None:
+    controller = Controller(hass, config())
+    first = SlotKey(1, SlotDirection.CHARGE)
+    second = SlotKey(2, SlotDirection.DISCHARGE)
+    controller._add_stop(first, NOW, 0)
+    controller._retire_proven_stops(observation(enabled=first, enabled_state="off"))
+    controller._add_stop(second, NOW + timedelta(seconds=100), 100)
+    assert controller._stop_debts[second].first_seen == 100
+    assert controller._stop_debts[second].fail_safe_deadline == 100 + IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds()
 
 
 async def test_fail_safe_retries_only_mode_then_continues_known_stop(
@@ -733,7 +820,7 @@ async def test_fail_safe_retries_only_mode_then_continues_known_stop(
             await controller._reconcile()
 
     assert solis.set_mode.await_count == 2
-    solis.stop.assert_awaited_once()
+    assert solis.stop.await_count == 2
     solis.apply.assert_not_awaited()
     assert controller.data.health is ControllerHealth.FAIL_SAFE
 
@@ -800,6 +887,7 @@ async def test_retry_deadline_precedes_boundary_and_backstop(hass: HomeAssistant
     controller._stop_debts[key] = SimpleNamespace(
         next_attempt=5.0,
         next_retry_at=NOW + timedelta(seconds=5),
+        fail_safe_deadline=900.0,
     )
     remove = MagicMock()
     with (

@@ -47,7 +47,7 @@ BACKSTOP_INTERVAL = timedelta(minutes=1)
 # another 30 seconds in its final request. Keep one outer bound with room for
 # the adapter's 15-second readback, below the three-minute crash sentinel.
 WRITE_DEADLINE = timedelta(seconds=80)
-DEGRADED_FAILSAFE_TIMEOUT = timedelta(minutes=15)
+IMPORTANT_STOP_FAILSAFE_TIMEOUT = timedelta(minutes=15)
 START_RETRY_DELAYS = (timedelta(0), timedelta(seconds=15), timedelta(seconds=60))
 MAXIMUM_RETRY_DELAY = timedelta(seconds=60)
 AMBIGUOUS_OUTCOMES = frozenset(
@@ -93,6 +93,8 @@ class StopDebt:
     next_attempt: float
     next_retry_at: datetime
     ambiguous: bool = False
+    first_seen: float = 0.0
+    fail_safe_deadline: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +127,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         self._last_plan: Plan | None = None
         self._last_healthy_at: datetime | None = None
         self._degraded_since: datetime | None = None
-        self._degraded_since_mono: float | None = None
         self._fail_safe_since: datetime | None = None
         self._fail_safe_latched = False
         self._mode_attempt = 0
@@ -220,17 +221,19 @@ class Controller(DataUpdateCoordinator[Snapshot]):
     async def _reconcile(self) -> None:
         now = self._now()
         monotonic = self._monotonic()
-        if (
-            not self._fail_safe_latched
-            and self._degraded_since_mono is not None
-            and monotonic - self._degraded_since_mono
-            >= DEGRADED_FAILSAFE_TIMEOUT.total_seconds()
-        ):
-            self._latch_fail_safe(now)
-
         observation = read_state(self.hass, self.config.solis, now=now)
         self._discover_unconditional_stops(observation, now, monotonic)
         self._retire_proven_stops(observation)
+
+        if (
+            not self._fail_safe_latched
+            and any(
+                debt.fail_safe_deadline > 0
+                and monotonic >= debt.fail_safe_deadline
+                for debt in self._stop_debts.values()
+            )
+        ):
+            self._latch_fail_safe(now)
 
         if self._fail_safe_latched:
             await self._reconcile_fail_safe(observation, now, monotonic)
@@ -429,7 +432,16 @@ class Controller(DataUpdateCoordinator[Snapshot]):
     def _add_stop(self, key: SlotKey, now: datetime, monotonic: float) -> None:
         self.config.solis.direction(key)
         if key not in self._stop_debts:
-            self._stop_debts[key] = StopDebt(key, 0, monotonic, now)
+            self._stop_debts[key] = StopDebt(
+                key,
+                0,
+                monotonic,
+                now,
+                first_seen=monotonic,
+                fail_safe_deadline=(
+                    monotonic + IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds()
+                ),
+            )
 
     def _due_stop(self, monotonic: float) -> StopDebt | None:
         due = [debt for debt in self._stop_debts.values() if debt.next_attempt <= monotonic]
@@ -442,6 +454,13 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         now: datetime,
         monotonic: float,
     ) -> None:
+        if (
+            not self._fail_safe_latched
+            and debt.fail_safe_deadline > 0
+            and monotonic >= debt.fail_safe_deadline
+        ):
+            self._latch_fail_safe(now)
+            self._dirty = True
         if debt.next_attempt > monotonic:
             self._degrade(
                 now,
@@ -487,7 +506,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 debt.key in self._bonus_charge_keys
                 and observation.direction(debt.key).enabled is True
             )
-            if bonus_still_enabled:
+            if bonus_still_enabled or observation.direction(debt.key).enabled is not False:
                 delay = _stop_retry_delay(debt.attempt)
                 retry_at = now + delay
                 self._stop_debts[debt.key] = replace(
@@ -496,8 +515,9 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                     next_attempt=monotonic + delay.total_seconds(),
                     next_retry_at=retry_at,
                 )
-                self._awaiting_off_proof.add(debt.key)
-            else:
+                if debt.key in self._bonus_charge_keys:
+                    self._awaiting_off_proof.add(debt.key)
+            elif observation.direction(debt.key).enabled is False:
                 self._stop_debts.pop(debt.key, None)
                 self._owned_expiry.pop(debt.key, None)
             if debt.key in self._bonus_charge_keys:
@@ -523,12 +543,12 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         ambiguous = debt.ambiguous or result.outcome in AMBIGUOUS_OUTCOMES
         next_attempt = monotonic + delay.total_seconds()
         retry_at = now + delay
-        self._stop_debts[debt.key] = StopDebt(
-            debt.key,
-            attempt,
-            next_attempt,
-            retry_at,
-            ambiguous,
+        self._stop_debts[debt.key] = replace(
+            debt,
+            attempt=attempt,
+            next_attempt=next_attempt,
+            next_retry_at=retry_at,
+            ambiguous=ambiguous,
         )
         self._degrade(
             now,
@@ -817,15 +837,8 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         observation: SolisState | None,
         **kwargs: object,
     ) -> None:
-        if self._degraded_since_mono is None:
-            self._degraded_since_mono = self._monotonic()
+        if self._degraded_since is None:
             self._degraded_since = now
-        if (
-            self._monotonic() - self._degraded_since_mono
-            >= DEGRADED_FAILSAFE_TIMEOUT.total_seconds()
-        ):
-            self._latch_fail_safe(now)
-            self._dirty = True
         health = ControllerHealth.FAIL_SAFE if self._fail_safe_latched else ControllerHealth.DEGRADED
         self._publish(now, health, plan, reason, observation, **kwargs)
 
@@ -851,7 +864,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
     ) -> None:
         if health is ControllerHealth.HEALTHY and not self._fail_safe_latched:
             self._degraded_since = None
-            self._degraded_since_mono = None
         telemetry = None if observation is None else observation.telemetry
         actual = None if plan is None else plan.battery_energy_kwh
         if actual is None:
@@ -905,12 +917,13 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 candidates.append(plan.cycle_deadline)
         for debt in self._stop_debts.values():
             candidates.append(now + timedelta(seconds=max(0.0, debt.next_attempt - monotonic)))
+            fail_safe_deadline = getattr(debt, "fail_safe_deadline", 0.0)
+            if fail_safe_deadline > monotonic:
+                candidates.append(now + timedelta(seconds=fail_safe_deadline - monotonic))
         if self._start_retry is not None and not self._start_retry.suppressed:
             candidates.append(now + timedelta(seconds=max(0.0, self._start_retry.next_attempt - monotonic)))
         if self._mode_next_retry_at is not None:
             candidates.append(self._mode_next_retry_at)
-        if self._degraded_since is not None and not self._fail_safe_latched:
-            candidates.append(self._degraded_since + DEGRADED_FAILSAFE_TIMEOUT)
         future = [_instant(candidate) for candidate in candidates if _instant(candidate) > _instant(now)]
         wake_at = min(future) if future else now + timedelta(milliseconds=100)
         self._unsub_wakeup = async_track_point_in_utc_time(
@@ -1044,11 +1057,16 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             )
             for direction in directions:
                 if direction.enabled is True and direction.key not in shutdown_debt:
+                    first_seen = self._monotonic()
                     shutdown_debt[direction.key] = StopDebt(
                         direction.key,
                         0,
-                        self._monotonic(),
+                        first_seen,
                         self._now(),
+                        first_seen=first_seen,
+                        fail_safe_deadline=(
+                            first_seen + IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds()
+                        ),
                     )
             for key, debt in tuple(shutdown_debt.items()):
                 enabled = observation.direction(key).enabled
@@ -1199,7 +1217,7 @@ def _stop_text(key: SlotKey) -> str:
 __all__ = [
     "BACKSTOP_INTERVAL",
     "Controller",
-    "DEGRADED_FAILSAFE_TIMEOUT",
+    "IMPORTANT_STOP_FAILSAFE_TIMEOUT",
     "Snapshot",
     "START_RETRY_DELAYS",
     "StopDebt",

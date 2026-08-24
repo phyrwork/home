@@ -1,6 +1,6 @@
 # T0040 — Scope fail-safe escalation and heartbeat handling
 
-Status: Approved — implementation pending
+Status: Implemented locally — local acceptance complete; live acceptance pending
 
 Depends on: T0026, T0030, T0039
 
@@ -82,3 +82,27 @@ important stop escalates as specified.
 
 Do not deploy T0040 without T0039. The two may be locally implemented and
 deployed atomically after both review councils approve.
+
+## Implementation evidence
+
+- Removed the blanket `DEGRADED_FAILSAFE_TIMEOUT` escalation and wakeup.
+  Ordinary planning, tariff, telemetry and other input degradation remains
+  recoverable; healthy input recovery clears the degraded diagnostic state
+  without selecting Self-Use.
+- Added `IMPORTANT_STOP_FAILSAFE_TIMEOUT = 15 minutes`. Each in-memory
+  `StopDebt` captures immutable monotonic `first_seen` and `fail_safe_deadline`;
+  retry attempts, events, heartbeats and provisional revisions preserve both.
+  Debt is retired only after authoritative off proof. Expiry latches the
+  existing fail-safe path while the existing unbounded stop retry continues.
+- Preserved the one-minute reconciliation/heartbeat backstop, independent
+  three-minute sentinel, 30-minute telemetry and 26-hour tariff checks, hard
+  invariant latch, and strict shutdown ordering and retry behavior.
+- Added focused controller timeline coverage for prolonged recoverable
+  degradation, proof before deadline, non-renewing retries/events, deadline
+  expiry and retry continuation, and distinct stop debt deadlines.
+- Local gates: component tests and deployment tests pass. No 1Password, network,
+  SSH, live Home Assistant or deployment access was used.
+
+Live acceptance remains required before closing rollout: reproduce prolonged
+recoverable planning degradation and passive recovery without Self-Use, then
+separately prove one bounded unresolved important stop escalates as specified.
