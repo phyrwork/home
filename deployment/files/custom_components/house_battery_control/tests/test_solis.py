@@ -312,6 +312,25 @@ def test_conflicting_or_unknown_enable_blocks_persistent_start_preparation() -> 
     ) is None
 
 
+def test_active_or_unknown_enable_blocks_idle_persistent_reconciliation() -> None:
+    parsed, states = fixture()
+    states[parsed.persistent.storage_mode_entity_id]["state"] = "Self-Use"
+    active = parsed.slots[0].charge
+    states[active.enable_entity_id]["state"] = "on"
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+
+    observed = read_state(states, parsed, now=NOW)
+    assert adapter.next_start_change(
+        observed, None, reserve_soc_percent=Decimal("10")
+    ) is None
+
+    states[active.enable_entity_id]["state"] = "unavailable"
+    observed = read_state(states, parsed, now=NOW)
+    assert adapter.next_start_change(
+        observed, None, reserve_soc_percent=Decimal("10")
+    ) is None
+
+
 def test_disabled_stored_overlap_is_ignored_and_idle_observes_without_cleaning_slots() -> None:
     parsed, states = fixture()
     disabled = parsed.slots[0].discharge

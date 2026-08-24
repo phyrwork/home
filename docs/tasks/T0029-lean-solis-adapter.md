@@ -140,8 +140,9 @@ Consolidate Solis behavior tests into `test_solis.py` covering:
   covers every enabled segment. Unknown or conflicting enables block starts;
   this complete all-12 validation precedes even persistent start-preparation
   writes. Disabled stored schedules never participate in overlap decisions.
-  Valid idle observes every enable and matches only when all are confirmed off,
-  while deliberately returning no inferred cleanup write.
+  Valid idle also requires all 12 enables explicitly off before persistent
+  reconciliation, observes every enable, and matches only when all are
+  confirmed off, while deliberately returning no inferred cleanup write.
 - `split_intent` keeps aware UTC segments temporally adjacent. The strict
   `solis.midnight_end` setting is currently `24:00`, the continuous candidate
   requiring live commissioning. `23:59` is also modeled and tested as native
@@ -166,8 +167,8 @@ Consolidate Solis behavior tests into `test_solis.py` covering:
   and their abstraction tests. No production import of an absorbed module
   remains.
 - The Solis implementation reduced from 3,152 lines across seven modules to
-  1,176 lines in `solis.py`, a reduction of 1,976 lines (62.7%).
-- Local verification: 75 component tests and 45 deployment tests pass;
+  1,179 lines in `solis.py`, a reduction of 1,973 lines (62.6%).
+- Local verification: 76 component tests and 45 deployment tests pass;
   `compileall`, absorbed-import search and `git diff --check` pass. No auth,
   network, live Home Assistant or deployment access was used.
 
@@ -179,3 +180,5 @@ Consolidate Solis behavior tests into `test_solis.py` covering:
 - Valid idle still never infers a stop, but full-intent matching now remains
   false until every slot enable is explicitly observed off. Active and unknown
   idle-slot regressions preserve that distinction for T0030 reconciliation.
+  Persistent idle reconciliation is likewise blocked by any active or unknown
+  enable, so it cannot alter inverter policy ahead of a required stop.

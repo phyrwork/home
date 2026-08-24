@@ -721,20 +721,23 @@ class SolisAdapter:
         if state.health is not ControllerHealth.HEALTHY or state.persistent is None:
             return None
 
-        # A start must not prepare persistent controls until every enable is
-        # known and every already-active direction belongs to the complete
-        # desired intent. Otherwise even the preparatory writes could alter
-        # inverter behaviour while an unowned schedule is active.
+        # Persistent controls must not be prepared until every enable is known.
+        # For a start, every already-active direction must also belong to the
+        # complete desired intent. Otherwise even preparatory writes could
+        # alter inverter behaviour while an unowned schedule is active.
+        directions = tuple(
+            direction
+            for slot in state.slots
+            for direction in (slot.charge, slot.discharge)
+        )
         native: tuple[_NativeIntent, ...] = ()
-        if intent is not None:
+        if intent is None:
+            if any(direction.enabled is not False for direction in directions):
+                return None
+        else:
             native = self._native_intent(intent)
             if _native_overlap(native):
                 raise ValueError("logical Solis segments overlap")
-            directions = tuple(
-                direction
-                for slot in state.slots
-                for direction in (slot.charge, slot.discharge)
-            )
             if any(direction.enabled is None for direction in directions):
                 return None
             desired = {item.key: item for item in native}
