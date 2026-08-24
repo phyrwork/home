@@ -202,8 +202,7 @@
         component_full_name: hultenvp/solis-sensor
         component_domain: solis
         component_version: "v4.0.1"
-        component_overlay_dir: >-
-          {{ playbook_dir }}/files/custom_component_overlays/solis-v4.0.1-poll-recovery
+        component_source_revision: pristine-v4.0.1
 
     - role: custom_component
       vars:

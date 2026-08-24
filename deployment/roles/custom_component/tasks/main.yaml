@@ -9,6 +9,9 @@
     component_source_id: >-
       {{ component_full_name }}@{{ component_version }}{{
         '#zip' if component_archive_format | default('tar.gz') == 'zip' else ''
+      }}{{
+        '#' ~ component_source_revision
+        if component_source_revision is defined else ''
       }}
     component_archive_path: >-
       /tmp/{{ component_domain }}-{{ component_version | regex_replace('[^A-Za-z0-9_.-]', '_') }}.{{
