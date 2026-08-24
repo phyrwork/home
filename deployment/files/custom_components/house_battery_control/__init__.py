@@ -8,9 +8,8 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT
 from homeassistant.core import CoreState, Event, HomeAssistant
 from homeassistant.helpers.discovery import async_load_platform
 
-from .config import Config, from_mapping
-from .const import DOMAIN
-from .coordinator import Coordinator
+from .config import Config, DOMAIN, from_mapping
+from .controller import Controller
 
 CONFIG_SCHEMA = vol.Schema({DOMAIN: vol.All(dict, from_mapping)}, extra=vol.ALLOW_EXTRA)
 
@@ -24,8 +23,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     if previous is not None and hasattr(previous, "async_stop"):
         await _async_teardown(hass, previous)
 
-    coordinator = Coordinator(hass, typed_config)
-    hass.data[DOMAIN] = coordinator
+    controller = Controller(hass, typed_config)
+    hass.data[DOMAIN] = controller
     await async_load_platform(hass, "sensor", DOMAIN, {}, config)
 
     listeners: list[Callable[[], None]] = []
@@ -48,10 +47,10 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         listeners.append(remove)
 
     async def async_start(_event: Event[dict[str, object]] | None = None) -> None:
-        await coordinator.async_start()
+        await controller.async_start()
 
     async def async_stop(_event: Event[dict[str, object]]) -> None:
-        await _async_teardown(hass, coordinator)
+        await _async_teardown(hass, controller)
 
     listen_once(EVENT_HOMEASSISTANT_STOP, async_stop)
     if hass.state is CoreState.running:
@@ -62,15 +61,15 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     return True
 
 
-async def _async_teardown(hass: HomeAssistant, coordinator: Coordinator) -> None:
+async def _async_teardown(hass: HomeAssistant, controller: Controller) -> None:
     """Stop one instance and remove its event subscriptions exactly once."""
 
     listeners = hass.data.pop(f"{DOMAIN}.listeners", ())
     for listener in listeners:
         listener()
-    await coordinator.async_stop()
-    if hass.data.get(DOMAIN) is coordinator:
+    await controller.async_stop()
+    if hass.data.get(DOMAIN) is controller:
         hass.data.pop(DOMAIN, None)
 
 
-__all__ = ["CONFIG_SCHEMA", "async_setup"]
+__all__ = ["CONFIG_SCHEMA", "DOMAIN", "async_setup"]

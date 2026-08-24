@@ -1,13 +1,14 @@
-"""Pure, immutable contracts for the refactored house-battery controller.
+"""Small shared value model for the house-battery controller."""
 
-This module deliberately has no Home Assistant imports. It describes the
-observations and intents exchanged by the live runtime adapters.
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+
+FULL_SOC_PERCENT = 100
+MINIMUM_SOC_PERCENT = 10
 
 
 class _TextEnum(str, Enum):
@@ -19,6 +20,21 @@ class ControllerHealth(_TextEnum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     FAIL_SAFE = "fail_safe"
+
+
+class StrategyAction(_TextEnum):
+    IDLE = "IDLE"
+    CHEAP_CHARGE = "CHEAP_CHARGE"
+    RESERVE_DISCHARGE = "RESERVE_DISCHARGE"
+    CYCLE_DISCHARGE = "CYCLE_DISCHARGE"
+
+
+class CycleState(_TextEnum):
+    IDLE = "IDLE"
+    RESERVE_DISCHARGING = "RESERVE_DISCHARGING"
+    CYCLE_DISCHARGING = "CYCLE_DISCHARGING"
+    CHARGING = "CHARGING"
+    STOPPING = "STOPPING"
 
 
 class SlotDirection(_TextEnum):
@@ -35,13 +51,10 @@ class SlotOwner(_TextEnum):
 class StorageMode(_TextEnum):
     SELF_USE = "Self-Use"
     FEED_IN_PRIORITY = "Feed-In Priority"
-    OFF_GRID = "Off-Grid"
 
 
 @dataclass(frozen=True, slots=True)
 class ObservedCapability:
-    """A numeric capability observed from an external entity."""
-
     current_value: Decimal
     minimum: Decimal
     maximum: Decimal
@@ -66,23 +79,21 @@ class ObservedCapability:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeCapabilities:
+    """Live inverter current limits used by planning and native slots."""
     maximum_charge_current: ObservedCapability
     maximum_discharge_current: ObservedCapability
 
 
 def _validate_percent(value: Decimal, name: str) -> None:
-    if (
-        not isinstance(value, Decimal)
-        or not value.is_finite()
-        or not Decimal(0) <= value <= Decimal(100)
-    ):
+    if not isinstance(value, Decimal) or not value.is_finite() or not Decimal(0) <= value <= Decimal(100):
         raise ValueError(f"{name} must be a percentage from 0 to 100")
 
 
 @dataclass(frozen=True, slots=True)
 class SlotIntent:
+    """One bounded logical segment; physical allocation belongs to Solis."""
+
     owner: SlotOwner
-    physical_slot: int
     direction: SlotDirection
     start: datetime
     end: datetime
@@ -91,14 +102,49 @@ class SlotIntent:
     expiry: datetime
 
     def __post_init__(self) -> None:
-        if not isinstance(self.physical_slot, int) or isinstance(self.physical_slot, bool) or not 1 <= self.physical_slot <= 6:
-            raise ValueError("physical_slot must be in the Solis range 1 through 6")
-        if self.start.tzinfo is None or self.start.utcoffset() is None or self.end.tzinfo is None or self.end.utcoffset() is None or self.expiry.tzinfo is None or self.expiry.utcoffset() is None:
+        if any(value.tzinfo is None or value.utcoffset() is None for value in (self.start, self.end, self.expiry)):
             raise ValueError("slot datetimes must be timezone-aware")
         if self.start >= self.end:
             raise ValueError("slot interval must be ordered")
         if self.expiry <= self.start:
             raise ValueError("slot expiry must be later than slot start")
+        if self.end > self.expiry:
+            raise ValueError("slot interval must not exceed expiry")
         if not isinstance(self.current, Decimal) or not self.current.is_finite() or self.current < 0:
             raise ValueError("slot current must not be negative")
         _validate_percent(self.target_soc, "target_soc")
+
+
+@dataclass(frozen=True, slots=True)
+class LogicalIntent:
+    """One or two adjacent, same-direction segments of one logical action."""
+
+    segments: tuple[SlotIntent, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.segments) not in (1, 2):
+            raise ValueError("logical intent must contain one or two segments")
+        first = self.segments[0]
+        for segment in self.segments:
+            if (segment.owner, segment.direction, segment.current, segment.target_soc) != (
+                first.owner, first.direction, first.current, first.target_soc
+            ):
+                raise ValueError("logical intent segments must share owner, direction and values")
+        for previous, current in zip(self.segments, self.segments[1:]):
+            if previous.end != current.start or previous.end > current.start:
+                raise ValueError("logical intent segments must be adjacent and ordered")
+
+    @property
+    def start(self) -> datetime:
+        return self.segments[0].start
+
+    @property
+    def end(self) -> datetime:
+        return self.segments[-1].end
+
+
+__all__ = [
+    "ControllerHealth", "CycleState", "FULL_SOC_PERCENT", "LogicalIntent",
+    "MINIMUM_SOC_PERCENT", "ObservedCapability", "RuntimeCapabilities",
+    "SlotDirection", "SlotIntent", "SlotOwner", "StorageMode", "StrategyAction",
+]

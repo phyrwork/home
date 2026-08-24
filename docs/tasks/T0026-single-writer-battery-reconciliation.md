@@ -1,6 +1,6 @@
 # T0026 — Lean house-battery control integration
 
-Status: Accepted
+Status: Implemented locally — live acceptance pending
 
 ## Objective
 
@@ -197,7 +197,7 @@ A fresh heartbeat suppresses the sentinel regardless of `HEALTHY`, `DEGRADED`,
 recovery state and never writes slots, reserve, grid charging, currents or
 targets.
 
-## Target implementation
+## Current implementation
 
 Target seven source modules plus tests:
 
@@ -275,6 +275,39 @@ Tests must prove:
 Council review must approve the final implementation against this card and
 confirm that the production integration is materially smaller and contains no
 duplicate active control path.
+
+## T0031 local release evidence
+
+The final cleanup reduced the staged production boundary from 10 Python modules
+and 3,905 nonblank Python lines to the required 7 modules and 3,850 nonblank
+lines, plus `manifest.json`. More importantly, the three remaining duplicate or
+compatibility modules and both obsolete HA write surfaces were deleted. T0026
+began from the earlier 21-module, roughly 6,000-line implementation.
+
+Local gates on the T0031 worktree:
+
+- battery component suite: 93 passed;
+- deployment suite: 41 passed;
+- direct imports, `compileall`, battery YAML parsing and Ansible
+  `--syntax-check`: passed;
+- exact source-shape, deleted-import/config, single-writer, sentinel-only,
+  unmanaged-Peak-Shaving/feed-limit, rsync-filter and tracked-bytecode searches:
+  passed; and
+- full repository command
+  `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=files python -m pytest -q
+  --import-mode=importlib`: 157 substantive tests passed, with one teardown
+  error in the unrelated `energy_cost_saving_tracker` test
+  `test_power_tracker_uses_existing_internal_rate_before_rate_change`.
+
+The full-repository gate is explicitly blocked, not green, by that pre-existing
+unrelated teardown error: its finite mocked `dt_util.utcnow` iterator is
+exhausted by a lingering source-update task. The focused test produces one
+passing test body followed by the same teardown error on unchanged `main` and on
+T0031. This battery task does not expand scope to change that component.
+
+No 1Password, SSH, browser, network, deployment or live Solis access was used.
+T0026 remains incomplete until the authenticated live and 24-hour acceptance
+below.
 
 ## Live acceptance
 

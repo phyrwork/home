@@ -1,23 +1,46 @@
-"""Pure tests for trusted Octopus rates and export-cycle windows."""
+"""Behavior tests for the consolidated house-battery planner."""
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
+import yaml
 
-from custom_components.house_battery_control.octopus_windows import (
+from custom_components.house_battery_control import config as integration_config
+from custom_components.house_battery_control.model import (
+    ControllerHealth,
+    CycleState,
+    SlotDirection,
+    SlotOwner,
+    StrategyAction,
+)
+from custom_components.house_battery_control.planner import (
     AdjustedRateInterval,
     CheapClassification,
     CoverageStatus,
     DispatchSourceObservation,
+    EnergyInterval,
     ExportRateInterval,
     RateSourceObservation,
+    ReserveInputInterval,
+    ReservePlanResult,
+    TimeInterval,
+    build_plan,
     evaluate_cheap_windows,
     evaluate_trusted_import_rates,
+    forecast_load,
     parse_fused_export_rates,
     parse_fused_import_rates,
+    plan_reserve,
+    prorated_energy,
 )
+from custom_components.house_battery_control.solis import read_state
+from custom_components.house_battery_control.tests.test_solis import fixture as solis_fixture
 
 
 UTC = timezone.utc
@@ -494,3 +517,193 @@ def test_complete_coverage_across_both_dst_folds_uses_utc_instants() -> None:
         export_source=RateSourceObservation(fold_now, EXPORT_SOURCE),
     )
     assert result.coverage_status is CoverageStatus.COMPLETE
+
+
+def test_load_forecast_preserves_local_profiles_and_exact_proration() -> None:
+    london = ZoneInfo("Europe/London")
+    weekday = datetime(2026, 7, 6, 8, 30, tzinfo=UTC)
+    forecast = forecast_load(now=weekday, horizon_end=weekday + timedelta(hours=1), timezone=london)
+    assert [item.energy_kwh for item in forecast] == [Decimal("0.2768"), Decimal("0.2585")]
+    weekend = forecast_load(
+        now=datetime(2026, 7, 4, 8, tzinfo=UTC),
+        horizon_end=datetime(2026, 7, 4, 9, tzinfo=UTC),
+        timezone=london,
+    )
+    assert weekend[0].energy_kwh == Decimal("0.3296")
+    source = EnergyInterval(TimeInterval(weekday, weekday + timedelta(hours=1)), Decimal("2"))
+    middle = TimeInterval(weekday + timedelta(minutes=15), weekday + timedelta(minutes=45))
+    assert prorated_energy(middle, (source,), required=True) == Decimal("1.0")
+
+
+def test_reverse_reserve_handles_grid_limit_cheap_refill_and_external_pv() -> None:
+    interval = TimeInterval(NOW, NOW + timedelta(hours=1))
+
+    def reserve(load: str, solar: str = "0", classification=CheapClassification.NOT_CHEAP):
+        return plan_reserve(
+            intervals=(ReserveInputInterval(interval, Decimal(load), Decimal(solar), classification),),
+            capacity_kwh=Decimal("10"), minimum_energy_kwh=Decimal("1"),
+            reserve_margin_kwh=Decimal("0"), charge_efficiency=Decimal("0.95"),
+            discharge_efficiency=Decimal("0.95"), maximum_charge_power_kw=Decimal("5"),
+            maximum_discharge_power_kw=Decimal("5"),
+        )
+
+    assert reserve("1").reserve_energy_kwh == Decimal("1.947368421052631578947368421")
+    assert reserve("0", classification=CheapClassification.STANDARD_CHEAP).reserve_energy_kwh == Decimal("1")
+    assert reserve("0", solar="2").reserve_energy_kwh == Decimal("1")
+    assert reserve("6").issue == "forecast demand exceeds battery and grid power"
+    with_margin = plan_reserve(
+        intervals=(ReserveInputInterval(
+            interval, Decimal("0"), Decimal("0"), CheapClassification.STANDARD_CHEAP,
+        ),),
+        capacity_kwh=Decimal("10"), minimum_energy_kwh=Decimal("1"),
+        reserve_margin_kwh=Decimal("0.5"), charge_efficiency=Decimal("0.95"),
+        discharge_efficiency=Decimal("0.95"), maximum_charge_power_kw=Decimal("5"),
+        maximum_discharge_power_kw=Decimal("5"),
+    )
+    assert with_margin.reserve_energy_kwh == Decimal("1.5")
+
+
+def _config():
+    source = yaml.safe_load((Path(__file__).parents[3] / "house_battery_control.yaml").read_text())
+    return integration_config.from_mapping(source)
+
+
+def _solis(*, soc: str = "55"):
+    parsed, states = solis_fixture()
+    states[parsed.telemetry.state_of_charge_entity_id]["state"] = soc
+    result = read_state(states, parsed, now=datetime(2026, 8, 22, 12, tzinfo=UTC))
+    assert result.health is ControllerHealth.HEALTHY
+    return result
+
+
+async def _build(
+    hass,
+    *,
+    cheap: bool,
+    soc: str = "55",
+    state: CycleState = CycleState.IDLE,
+    deadline: datetime | None = None,
+    window_minutes: int = 60,
+    coverage: CoverageStatus = CoverageStatus.COMPLETE,
+    reserve_energy: Decimal = Decimal("5"),
+):
+    config = _config()
+    for entity_id, value in (
+        (config.tariff.import_rates_entity_id, "available"),
+        (config.tariff.export_rates_entity_id, "available"),
+        (config.cycle_discharge_duration_entity_id, "10"),
+    ):
+        hass.states.async_set(entity_id, value, {"rates": ("placeholder",)})
+    imports = _import_rates(
+        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+    )
+    exports = _export()
+    windows = _result(imports, exports).windows if cheap else ()
+    if windows and window_minutes != 60:
+        windows = (replace(windows[0], end=NOW + timedelta(minutes=window_minutes)),)
+    window_result = SimpleNamespace(
+        coverage_status=coverage,
+        issues=() if coverage is CoverageStatus.COMPLETE else ("untrusted tariff input",),
+        windows=windows,
+    )
+    trusted = SimpleNamespace(
+        coverage_status=CoverageStatus.COMPLETE, issues=(), intervals=imports,
+    )
+    reserve_interval = ReserveInputInterval(
+        TimeInterval(NOW, NOW + timedelta(minutes=30)), Decimal("0.2"), Decimal("0"),
+        CheapClassification.STANDARD_CHEAP if cheap else CheapClassification.NOT_CHEAP,
+    )
+    with (
+        patch("custom_components.house_battery_control.planner.parse_fused_import_rates", return_value=imports),
+        patch("custom_components.house_battery_control.planner.parse_fused_export_rates", return_value=exports),
+        patch("custom_components.house_battery_control.planner._rate_source", return_value=RateSourceObservation(NOW, IMPORT_SOURCE)),
+        patch("custom_components.house_battery_control.planner._dispatch_source", return_value=DispatchSourceObservation(NOW, DISPATCH_SOURCE)),
+        patch("custom_components.house_battery_control.planner.evaluate_cheap_windows", return_value=window_result),
+        patch("custom_components.house_battery_control.planner.evaluate_trusted_import_rates", return_value=trusted),
+        patch("custom_components.house_battery_control.planner._forecast_intervals", AsyncMock(return_value=(reserve_interval,))),
+        patch("custom_components.house_battery_control.planner.plan_reserve", return_value=ReservePlanResult(reserve_energy)),
+    ):
+        return await build_plan(
+            hass, config, _solis(soc=soc), now=NOW, cycle_state=state,
+            cycle_deadline=deadline,
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_plan_selects_all_three_actions_and_reports_reserve(hass) -> None:
+    charge = await _build(hass, cheap=True)
+    reserve = await _build(hass, cheap=False)
+    cycle = await _build(hass, cheap=True, soc="100")
+
+    assert charge.action is StrategyAction.CHEAP_CHARGE
+    assert charge.intent.segments[0].direction is SlotDirection.CHARGE  # type: ignore[union-attr]
+    assert charge.intent.start == NOW  # type: ignore[union-attr]
+    assert charge.intent.end == NOW + timedelta(minutes=30)  # type: ignore[union-attr]
+    assert reserve.action is StrategyAction.RESERVE_DISCHARGE
+    assert reserve.intent.segments[0].owner is SlotOwner.RESERVE_EXPORT  # type: ignore[union-attr]
+    assert cycle.action is StrategyAction.CYCLE_DISCHARGE
+    assert cycle.next_cycle_state is CycleState.CYCLE_DISCHARGING
+    assert reserve.reserve_energy_kwh == Decimal("5")
+    assert reserve.battery_energy_kwh == Decimal("17.68448")
+    assert reserve.reserve_balance_kwh == Decimal("12.68448")
+    assert reserve.maximum_charge_power_kw == Decimal("5.12")
+    assert reserve.maximum_discharge_power_kw == Decimal("5.12")
+
+
+@pytest.mark.asyncio
+async def test_build_plan_clamps_reserve_to_absolute_soc_floor(hass) -> None:
+    result = await _build(hass, cheap=False, reserve_energy=Decimal("1"))
+    assert result.reserve_soc_percent == Decimal("10")
+    assert result.intent.segments[0].target_soc == Decimal("10")  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_build_plan_cycle_deadline_is_fixed_and_requires_recharge_time(hass) -> None:
+    started = await _build(hass, cheap=True, soc="100")
+    assert started.cycle_deadline == NOW + timedelta(minutes=10)
+    continued = await _build(
+        hass, cheap=True, soc="80", state=CycleState.CYCLE_DISCHARGING,
+        deadline=started.cycle_deadline,
+    )
+    assert continued.action is StrategyAction.CYCLE_DISCHARGE
+    assert continued.intent.end == started.cycle_deadline  # type: ignore[union-attr]
+    too_short = await _build(hass, cheap=True, soc="100", window_minutes=15)
+    assert too_short.action is StrategyAction.IDLE
+    assert too_short.intent is None
+
+
+@pytest.mark.asyncio
+async def test_build_plan_outputs_aware_utc_logical_intents_without_physical_slots(hass) -> None:
+    result = await _build(hass, cheap=False)
+    assert result.intent is not None
+    assert not hasattr(result.intent, "physical_slot")
+    for segment in result.intent.segments:
+        assert segment.start.tzinfo is UTC
+        assert segment.end.tzinfo is UTC
+        assert segment.expiry.tzinfo is UTC
+        assert not hasattr(segment, "physical_slot")
+
+
+@pytest.mark.asyncio
+async def test_unavailable_input_returns_one_issue_and_preserves_bounded_cycle(hass) -> None:
+    config = _config()
+    deadline = NOW + timedelta(minutes=8)
+    result = await build_plan(
+        hass, config, _solis(), now=NOW,
+        cycle_state=CycleState.CYCLE_DISCHARGING, cycle_deadline=deadline,
+    )
+    assert result.action is StrategyAction.IDLE
+    assert result.intent is None
+    assert result.issue is not None
+    assert result.next_cycle_state is CycleState.CYCLE_DISCHARGING
+    assert result.cycle_deadline == deadline
+
+
+@pytest.mark.parametrize("coverage", (CoverageStatus.UNAVAILABLE, CoverageStatus.GAPPED, CoverageStatus.INVALID))
+@pytest.mark.asyncio
+async def test_untrusted_or_incomplete_input_returns_no_intent(hass, coverage) -> None:
+    result = await _build(hass, cheap=True, coverage=coverage)
+    assert result.action is StrategyAction.IDLE
+    assert result.intent is None
+    assert result.issue is not None

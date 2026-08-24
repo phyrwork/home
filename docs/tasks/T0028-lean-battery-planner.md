@@ -1,6 +1,6 @@
 # T0028 — Consolidate battery planning
 
-Status: Accepted
+Status: Implemented by T0032 and T0033
 
 Depends on: T0027
 

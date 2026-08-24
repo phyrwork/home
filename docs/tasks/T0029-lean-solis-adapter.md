@@ -1,6 +1,6 @@
 # T0029 — Consolidate the Solis boundary
 
-Status: Accepted
+Status: Implemented
 
 Depends on: T0028
 
@@ -24,7 +24,8 @@ Expose:
 def read_state(hass, config, *, now) -> SolisState
 def split_intent(intent, *, timezone, midnight_end) -> LogicalIntent
 class SolisAdapter:
-    def next_start_change(state, intent) -> SolisChange | None: ...
+    def next_start_change(state, intent, *,
+                          reserve_soc_percent: Decimal) -> SolisChange | None: ...
     async def apply(change, *, deadline) -> WriteResult: ...
     async def stop(slot_key, *, deadline) -> WriteResult: ...
     async def set_mode(mode, *, deadline) -> WriteResult: ...
@@ -45,6 +46,11 @@ policy, fail-safe and shutdown sequencing.
 4. enable as the final change.
 
 It returns no start change while any conflicting enable is on or unknown.
+The explicit reserve keyword is required because the planner's dynamic reserve
+is separate from a slot's target SOC, especially for charge-to-full intents.
+`LogicalIntent` remains slot-only. A valid-idle `intent=None` reconciles only
+mode, grid-charging permission and reserve controls; it never infers slot
+cleanup. A plan with an issue is not passed to the adapter.
 
 ## Read and write contract
 
@@ -116,3 +122,71 @@ Consolidate Solis behavior tests into `test_solis.py` covering:
 - The adapter is materially smaller than the absorbed stack.
 - Retry/lifecycle logic exists only in the later controller.
 - Focused and full local tests pass.
+
+## Implementation evidence
+
+- `solis.py` is the single Solis state/write boundary. It owns the compact
+  configuration, strict reader, frozen state/revision/change/results, local
+  schedule split/allocation and one-lock CAS/readback writer.
+- The reader normalizes positive-charging battery power, validates device and
+  extrapolated inverter time, observes live capabilities and records every one
+  of the 12 enable directions, including unknown states. Legitimate adjacent
+  split segments are no longer rejected merely because two enables are on.
+- `next_start_change` requires the separately planned dynamic reserve SOC,
+  quantizes it against the observed capability, and advances exactly one
+  ordered change. Feed-In Priority, grid charging and reserve controls precede
+  disabled slot time/current/SOC configuration; enable is final.
+- Allocation uses only the T0027 owner map. Full logical-intent comparison
+  covers every enabled segment. Unknown or conflicting enables block starts;
+  this complete all-12 validation precedes even persistent start-preparation
+  writes. Disabled stored schedules never participate in overlap decisions.
+  Valid idle also requires all 12 enables explicitly off before persistent
+  reconciliation, observes every enable, and matches only when all are
+  confirmed off, while deliberately returning no inferred cleanup write.
+- `split_intent` keeps aware UTC segments temporally adjacent. The strict
+  `solis.midnight_end` setting is currently `24:00`, the continuous candidate
+  requiring live commissioning. `23:59` is also modeled and tested as native
+  ranges `[start, 23:59)` and `[00:00, end)`, preserving its explicit one-minute
+  limitation rather than describing it as adjacent.
+- `apply` performs a second exact revision/capability CAS after acquiring one
+  ordinary lock. Only successful blocking service completion plus matching new
+  HA state is provisional success. Timeout/error remain ambiguous even after
+  an optimistic event; cancellation propagates and later drift is visible on
+  the next read.
+- `stop` writes only the validated requested enable switch, and `set_mode`
+  writes only the requested commissioned storage mode. No broad cleanup,
+  Peak-Shaving/feed-limit write, retry loop, transaction, reentrant lock or
+  cleanup workflow remains.
+- The temporary coordinator physical-slot bridge is deleted. The staged
+  coordinator consumes `SolisAdapter` directly and advances at most one change
+  per pass. T0030 remains responsible for start/stop retries, fail-safe latch,
+  minimum-SOC work and the authoritative Self-Use-then-observed-on shutdown
+  sequence; T0029 deliberately does not implement a partial shutdown ordering.
+- Deleted `solis_config.py`, `solis_state.py`, `solis_reader.py`,
+  `solis_policy.py`, `solis_actuator.py`, `ha_writer.py`, `write_contracts.py`
+  and their abstraction tests. No production import of an absorbed module
+  remains.
+- The Solis implementation reduced from 3,152 lines across seven modules to
+  1,179 lines in `solis.py`, a reduction of 1,973 lines (62.6%).
+- Local verification: 76 component tests and 45 deployment tests pass;
+  `compileall`, absorbed-import search and `git diff --check` pass. No auth,
+  network, live Home Assistant or deployment access was used.
+
+## Review amendment
+
+- The all-12 enable precondition was moved ahead of every persistent
+  start-preparation change. A regression proves that a persistent mismatch
+  cannot produce a write while another direction is conflicting or unknown.
+- Valid idle still never infers a stop, but full-intent matching now remains
+  false until every slot enable is explicitly observed off. Active and unknown
+  idle-slot regressions preserve that distinction for T0030 reconciliation.
+
+## Review
+
+Two independent small-model reviewers approved final commit `8729b50` with no
+blockers. The accepted implementation includes the amended invariant that all
+12 enables are observed before any persistent preparation: idle requires every
+direction explicitly off, while a non-idle intent permits only its exact
+compatible active directions.
+  Persistent idle reconciliation is likewise blocked by any active or unknown
+  enable, so it cannot alter inverter policy ahead of a required stop.

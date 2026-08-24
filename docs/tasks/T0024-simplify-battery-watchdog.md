@@ -1,6 +1,9 @@
 # T0024 — Simplify the independent battery watchdog
 
-Status: Implemented
+Status: Superseded by T0026/T0030
+
+Historical implementation evidence below is retained. The broad watchdog,
+guard and script were replaced by the mode-only stale-heartbeat sentinel.
 
 ## Objective
 

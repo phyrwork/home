@@ -1,6 +1,6 @@
 # T0032 — Consolidate planning algorithms
 
-Status: Accepted
+Status: Implemented
 
 Depends on: T0027
 Contributes to: T0028
@@ -70,3 +70,27 @@ Delete assertions that exist only for old result/status class identities.
 - Production logic LOC is materially lower than the combined sources.
 - Component/deployment tests, compile and diff checks pass.
 - Commit from an isolated worktree; do not deploy or access credentials.
+
+## Implementation evidence
+
+- `planner.py` owns the tariff, interval/energy validation and proration, load
+  forecast, and reserve recurrence implementations; it imports neither
+  `runtime_inputs.py` nor `strategy.py`.
+- `runtime_inputs.py`, the transitional coordinator and strategy import their
+  moved types and algorithms directly from `planner.py`.
+- The five absorbed modules contain import-only compatibility exports and no
+  functions or classes. T0033 deletes those files with the runtime cutover.
+- The reserve status/issue/trajectory hierarchy was replaced by one exact
+  reserve-energy-or-issue result; no mathematical or runtime decision changed.
+- Algorithm source reduced from 1,171 to 1,036 lines (11.5%); nonblank,
+  noncomment lines reduced from 1,002 to 895 (10.7%). Compatibility exports
+  contain no implementation.
+- Local verification: 196 component tests and 45 deployment tests pass;
+  `compileall` and `git diff --check` pass.
+- Deferred to T0033 as designed: `build_plan`, HA input collection, strategy
+  selection, compatibility-file deletion and remaining planner model cleanup.
+
+## Review
+
+Two independent small-model reviewers approved the staged implementation with
+no blockers.

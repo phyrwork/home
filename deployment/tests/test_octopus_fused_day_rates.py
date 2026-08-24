@@ -8,7 +8,7 @@ from jinja2 import Environment
 import pytest
 import yaml
 
-from custom_components.house_battery_control.octopus_windows import (
+from custom_components.house_battery_control.planner import (
     parse_fused_export_rates,
     parse_fused_import_rates,
 )
