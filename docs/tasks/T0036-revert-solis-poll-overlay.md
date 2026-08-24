@@ -1,6 +1,6 @@
 # T0036 — Revert Solis poll-recovery overlay for A/B commissioning
 
-Status: Implemented locally — deployment and live A/B verification pending
+Status: Deployed — A/B result recorded; telemetry recovery pending
 
 Depends on: T0035
 
@@ -46,5 +46,25 @@ live verification are separate, explicit steps.
 ## Local verification
 
 - `deployment/tests/test_solis_component_config.py` passes.
-- No deployment or live Home Assistant mutation has been performed by this
-  task.
+- Focused deployment and evidence tests: 17 passed.
+- Ansible syntax check passed.
+
+## Live A/B result — 2026-08-24
+
+- Deployment completed with `failed=0` after Home Assistant configuration
+  validation.
+- The Solis component directory was replaced from the upstream v4.0.1 archive;
+  the live `service.py` checksum exactly matched the pristine v4.0.1 source.
+- The live source marker is
+  `hultenvp/solis-sensor@v4.0.1#pristine-v4.0.1`.
+- Pristine v4.0.1 immediately reproduced `No inverters found` during discovery.
+- At the same time, the independent Solis Cloud Control integration received
+  repeated HTTP 502 responses from the same SolisCloud service.
+- Telemetry timestamp, battery SOC and battery power remained restored and
+  unavailable after the first pristine discovery attempts.
+
+Conclusion: the removed poll-recovery overlay did not cause the login/discovery
+failure. Its changes run after discovery, whereas both the overlay and pristine
+build failed during discovery. Keep pristine v4.0.1 deployed as the simpler
+commissioning baseline. Do not add another telemetry patch until the SolisCloud
+service recovers and a concrete remaining failure can be observed.
