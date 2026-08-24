@@ -386,6 +386,74 @@ def test_conflict_projection_is_exact_read_only_and_omits_unknown() -> None:
     )
 
 
+def test_active_reserve_discharge_survives_minute_start_shift_only_while_exact() -> None:
+    parsed, states = fixture()
+    active = intent(
+        SlotOwner.RESERVE_EXPORT,
+        SlotDirection.DISCHARGE,
+        start=NOW,
+        end=NOW + timedelta(hours=2),
+        current="100",
+        target="20",
+    )
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    advance(adapter, states, active)
+    key = parsed.allocation(SlotOwner.RESERVE_EXPORT)[0]
+
+    next_minute = NOW + timedelta(minutes=1)
+    continued = intent(
+        SlotOwner.RESERVE_EXPORT,
+        SlotDirection.DISCHARGE,
+        start=next_minute,
+        end=active.end,
+        current="100",
+        target="20",
+    )
+    observed = read_state(states, parsed, now=next_minute)
+    assert adapter.conflicting_enabled_keys(observed, continued) == ()
+    assert adapter.intent_matches(
+        observed, continued, reserve_soc_percent=Decimal("10")
+    )
+
+    before_desired_start = read_state(states, parsed, now=NOW)
+    assert adapter.conflicting_enabled_keys(
+        before_desired_start, continued
+    ) == (key,)
+    for outside in (active.end, active.end + timedelta(minutes=1)):
+        outside_observation = read_state(states, parsed, now=outside)
+        assert adapter.conflicting_enabled_keys(
+            outside_observation, continued
+        ) == (key,)
+
+    changed_end = intent(
+        SlotOwner.RESERVE_EXPORT,
+        SlotDirection.DISCHARGE,
+        start=next_minute,
+        end=active.end + timedelta(minutes=1),
+        current="100",
+        target="20",
+    )
+    assert adapter.conflicting_enabled_keys(observed, changed_end) == (key,)
+    changed_target = intent(
+        SlotOwner.RESERVE_EXPORT,
+        SlotDirection.DISCHARGE,
+        start=next_minute,
+        end=active.end,
+        current="100",
+        target="21",
+    )
+    assert adapter.conflicting_enabled_keys(observed, changed_target) == (key,)
+    changed_current = intent(
+        SlotOwner.RESERVE_EXPORT,
+        SlotDirection.DISCHARGE,
+        start=next_minute,
+        end=active.end,
+        current="99",
+        target="20",
+    )
+    assert adapter.conflicting_enabled_keys(observed, changed_current) == (key,)
+
+
 class FakeHA:
     def __init__(self, states: dict[str, object], behavior: str = "success") -> None:
         self.states = SimpleNamespace(get=states.get)
@@ -402,19 +470,30 @@ class FakeHA:
 
     async def async_call(self, domain, service, data, *, blocking=True):
         self.calls.append((domain, service, dict(data)))
-        if self.behavior in {"success", "error", "block", "ignore_cancel"}:
+        if self.behavior in {
+            "success",
+            "error",
+            "block",
+            "ignore_cancel",
+            "idempotent_off",
+        }:
             entity_id = data["entity_id"]
             target = (
                 "on" if service == "turn_on" else "off" if service == "turn_off"
                 else data.get("option", data.get("value", data.get("datetime")))
             )
             item = self._states[entity_id]
-            item["state"] = str(target)
-            item["last_updated"] = item["last_updated"] + timedelta(seconds=1)
-            item["context_id"] = "service"
-            for callback in tuple(self.listeners.get(entity_id, ())):
-                callback({"state": item["state"], "last_updated": item["last_updated"],
-                          "context_id": item["context_id"], "attributes": item.get("attributes", {})})
+            if not (
+                self.behavior == "idempotent_off"
+                and item["state"] == "off"
+                and target == "off"
+            ):
+                item["state"] = str(target)
+                item["last_updated"] = item["last_updated"] + timedelta(seconds=1)
+                item["context_id"] = "service"
+                for callback in tuple(self.listeners.get(entity_id, ())):
+                    callback({"state": item["state"], "last_updated": item["last_updated"],
+                              "context_id": item["context_id"], "attributes": item.get("attributes", {})})
         if self.behavior == "error":
             raise RuntimeError("boom")
         if self.behavior in {"block", "ignore_cancel"}:
@@ -526,6 +605,18 @@ async def test_forced_ambiguous_stop_requires_blocking_call_and_newer_readback()
     assert forced.outcome is WriteOutcome.APPLIED
     assert [call[2]["entity_id"] for call in fake.calls] == [enabled]
 
+    parsed, states = fixture()
+    unchanged_at = states[enabled]["last_updated"]
+    fake = FakeHA(states, "idempotent_off")
+    adapter = SolisAdapter(fake, parsed, timezone=LONDON)
+    idempotent = await adapter.stop(
+        key,
+        deadline=asyncio.get_running_loop().time() + 1,
+        force=True,
+    )
+    assert idempotent.outcome is WriteOutcome.APPLIED
+    assert states[enabled]["last_updated"] == unchanged_at
+
     for behavior, outcome in (
         ("error", WriteOutcome.SERVICE_ERROR),
         ("block", WriteOutcome.SERVICE_TIMEOUT),
@@ -572,6 +663,37 @@ async def test_cancellation_ignoring_service_never_overlaps_forced_stop_retry() 
     )
     assert third.outcome is WriteOutcome.APPLIED
     assert len(fake.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_pinned_retry_can_finish_beyond_old_ten_second_cutoff_without_sleep() -> None:
+    parsed, states = fixture()
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    fake = FakeHA(states, "block")
+    adapter = SolisAdapter(fake, parsed, timezone=LONDON)
+    real_wait = asyncio.wait
+    observed_timeouts: list[float | None] = []
+
+    async def complete_within_outer_bound(tasks, *, timeout):
+        observed_timeouts.append(timeout)
+        fake.block.set()
+        await asyncio.sleep(0)
+        return await real_wait(tasks, timeout=0.1)
+
+    with patch(
+        "custom_components.house_battery_control.solis.asyncio.wait",
+        new=complete_within_outer_bound,
+    ):
+        result = await adapter.stop(
+            key,
+            deadline=asyncio.get_running_loop().time() + 80,
+            force=True,
+        )
+
+    assert result.outcome is WriteOutcome.APPLIED
+    assert observed_timeouts and observed_timeouts[0] is not None
+    assert observed_timeouts[0] > 60
+    assert len(fake.calls) == 1
 
 
 def test_housekeeping_targets_only_one_confirmed_off_used_slot() -> None:

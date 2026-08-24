@@ -42,7 +42,10 @@ from .solis import (
 _LOGGER = logging.getLogger(__name__)
 
 BACKSTOP_INTERVAL = timedelta(minutes=1)
-WRITE_DEADLINE = timedelta(seconds=30)
+# Pinned Solis Cloud Control v2.21.0 may spend 30 seconds retrying and then
+# another 30 seconds in its final request. Keep one outer bound with room for
+# the adapter's 15-second readback, below the three-minute crash sentinel.
+WRITE_DEADLINE = timedelta(seconds=80)
 DEGRADED_FAILSAFE_TIMEOUT = timedelta(minutes=15)
 START_RETRY_DELAYS = (timedelta(0), timedelta(seconds=15), timedelta(seconds=60))
 MAXIMUM_RETRY_DELAY = timedelta(seconds=60)
@@ -387,6 +390,15 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             self._stop_debts.pop(debt.key, None)
             self._dirty = True
             return
+        self._degrade(
+            now,
+            self._last_plan,
+            "important slot stop is in progress",
+            observation,
+            pending_operation=_stop_text(debt.key),
+            attempt=debt.attempt,
+            next_retry_at=debt.next_retry_at,
+        )
         try:
             result = await self.solis.stop(
                 debt.key,

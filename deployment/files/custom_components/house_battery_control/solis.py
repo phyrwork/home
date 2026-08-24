@@ -29,7 +29,6 @@ from .model import (
 MAXIMUM_TELEMETRY_AGE = timedelta(minutes=30)
 MAXIMUM_FUTURE_CLOCK_SKEW = timedelta(minutes=1)
 MAXIMUM_INVERTER_CLOCK_SKEW = timedelta(minutes=1)
-SERVICE_TIMEOUT = timedelta(seconds=10)
 READBACK_TIMEOUT = timedelta(seconds=15)
 MIDNIGHT_END_OPTIONS = frozenset(("24:00", "23:59"))
 _UNKNOWN = frozenset(("unknown", "unavailable"))
@@ -747,7 +746,11 @@ class SolisAdapter:
                 if not direction.enabled:
                     continue
                 expected = desired.get(direction.key)
-                if expected is None or not _direction_matches(direction, expected):
+                if expected is None or not _direction_matches(
+                    direction,
+                    expected,
+                    now_minute=_local_minute(state.observed_at, self.timezone),
+                ):
                     return None
 
         reserve = _quantize(
@@ -828,7 +831,12 @@ class SolisAdapter:
         native = self._native_intent(intent)
         expected = {item.key: item for item in native}
         return len(enabled) == len(native) and all(
-            direction.key in expected and _direction_matches(direction, expected[direction.key])
+            direction.key in expected
+            and _direction_matches(
+                direction,
+                expected[direction.key],
+                now_minute=_local_minute(state.observed_at, self.timezone),
+            )
             for direction in enabled
         )
 
@@ -861,7 +869,11 @@ class SolisAdapter:
             if direction.enabled is True
             and (
                 direction.key not in desired
-                or not _direction_matches(direction, desired[direction.key])
+                or not _direction_matches(
+                    direction,
+                    desired[direction.key],
+                    now_minute=_local_minute(state.observed_at, self.timezone),
+                )
             )
         )
 
@@ -1041,6 +1053,17 @@ class SolisAdapter:
                 in_flight = False
             if optimistic_match or _matching_new_revision(self._get(change.entity_id), change, normalized):
                 return WriteResult(change.entity_id, WriteOutcome.APPLIED, "successful service and matching HA revision")
+            if (
+                force_service
+                and change.target is False
+                and change.precondition.state == "off"
+                and _state_value(self._get(change.entity_id)) == "off"
+            ):
+                return WriteResult(
+                    change.entity_id,
+                    WriteOutcome.APPLIED,
+                    "successful forced stop and exact off state",
+                )
             end = min(deadline, asyncio.get_running_loop().time() + READBACK_TIMEOUT.total_seconds())
             while True:
                 remaining = end - asyncio.get_running_loop().time()
@@ -1082,7 +1105,7 @@ class SolisAdapter:
         task = asyncio.ensure_future(result)
         self._inflight_service = task
         task.add_done_callback(self._service_finished)
-        timeout = min(SERVICE_TIMEOUT.total_seconds(), max(0.0, deadline - asyncio.get_running_loop().time()))
+        timeout = max(0.0, deadline - asyncio.get_running_loop().time())
         try:
             done, _ = await asyncio.wait((task,), timeout=timeout)
         except asyncio.CancelledError:
@@ -1147,15 +1170,43 @@ def _schedules_overlap(left: NativeSchedule, right: NativeSchedule) -> bool:
     return any(max(a, c) < min(b, d) for a, b in left.ranges() for c, d in right.ranges())
 
 
-def _direction_matches(state: SolisDirectionState, desired: _NativeIntent) -> bool:
-    return (
+def _direction_matches(
+    state: SolisDirectionState,
+    desired: _NativeIntent,
+    *,
+    now_minute: int,
+) -> bool:
+    values_match = (
         state.enabled is True
-        and state.time_text == desired.time_text
         and state.current is not None
         and state.current.current_value == desired.segment.current
         and state.target_soc is not None
         and state.target_soc.current_value == desired.segment.target_soc
     )
+    if not values_match:
+        return False
+    if state.time_text == desired.time_text:
+        return True
+    schedule = state.schedule
+    return (
+        state.owner is SlotOwner.RESERVE_EXPORT
+        and desired.segment.owner is SlotOwner.RESERVE_EXPORT
+        and state.key == desired.key
+        and state.key.direction is SlotDirection.DISCHARGE
+        and schedule is not None
+        and (schedule.end_minute, schedule.midnight_end)
+        == (desired.schedule.end_minute, desired.schedule.midnight_end)
+        and any(start <= now_minute < end for start, end in schedule.ranges())
+        and any(
+            start <= now_minute < end
+            for start, end in desired.schedule.ranges()
+        )
+    )
+
+
+def _local_minute(value: datetime, timezone: tzinfo) -> int:
+    local = value.astimezone(timezone)
+    return local.hour * 60 + local.minute
 
 
 def _quantize(target: Decimal, capability: ObservedCapability) -> Decimal:

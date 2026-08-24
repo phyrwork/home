@@ -18,6 +18,7 @@ from custom_components.house_battery_control.controller import (
     Controller,
     DEGRADED_FAILSAFE_TIMEOUT,
     START_RETRY_DELAYS,
+    WRITE_DEADLINE,
     StartRetry,
     _stop_retry_delay,
 )
@@ -41,6 +42,11 @@ from custom_components.house_battery_control.solis import (
 from custom_components.house_battery_control.tests.test_solis import fixture as solis_fixture
 
 NOW = datetime(2026, 8, 22, 12, 0, 10, tzinfo=UTC)
+
+
+def test_write_deadline_covers_pinned_service_retry_and_readback() -> None:
+    assert WRITE_DEADLINE >= timedelta(seconds=75)
+    assert WRITE_DEADLINE < timedelta(minutes=3)
 
 
 def config() -> integration_config.Config:
@@ -269,6 +275,32 @@ async def test_ambiguous_stop_debt_survives_optimistic_off_and_forces_proof(
 
     assert key not in controller._stop_debts
     assert solis.stop.await_args_list[1].kwargs["force"] is True
+
+
+async def test_stop_publishes_degraded_context_before_blocking_service(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    controller._add_stop(key, NOW, 0)
+    debt = controller._stop_debts[key]
+
+    async def stop(*_args, **_kwargs):
+        snapshot = controller.data
+        assert snapshot is not None
+        assert snapshot.health is ControllerHealth.DEGRADED
+        assert snapshot.heartbeat_at == NOW
+        assert snapshot.pending_operation == "stop slot 2 discharge"
+        assert snapshot.attempt == 0
+        assert snapshot.next_retry_at == NOW
+        return WriteResult("switch.slot", WriteOutcome.APPLIED, "proved off")
+
+    solis.stop.side_effect = stop
+    await controller._attempt_stop(debt, observation(enabled=key), NOW, 0)
+
+    assert key not in controller._stop_debts
+    solis.stop.assert_awaited_once()
 
 
 async def test_stop_retries_remain_unbounded_and_capped_and_cancellation_is_ambiguous(
