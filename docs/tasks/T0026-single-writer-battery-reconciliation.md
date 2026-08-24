@@ -59,9 +59,10 @@ actual battery energy, reserve target energy and reserve balance.
 
 ## Strategy
 
-There is at most one desired direction. A logical schedule may use two adjacent
-native slots when it crosses inverter-local midnight; charge and discharge both
-support this split. Never encode an overnight logical interval as one native
+There is at most one desired direction. A logical schedule may use two native
+slots with adjacent time intervals when it crosses inverter-local midnight;
+charge and discharge both support this split. The physical slot indices need not
+be consecutive. Never encode an overnight logical interval as one native
 cross-midnight slot until that behavior is physically proven. The exact midnight
 end representation (`24:00` if accepted, otherwise the commissioned supported
 boundary) is a required live commissioning result. If only `23:59` works, the
