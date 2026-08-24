@@ -11,7 +11,7 @@ from homeassistant.core import CoreState, HomeAssistant
 from custom_components.house_battery_control import async_setup
 from custom_components.house_battery_control import config as integration_config
 from custom_components.house_battery_control.const import DOMAIN
-from custom_components.house_battery_control.coordinator import Coordinator
+from custom_components.house_battery_control.controller import Controller
 
 
 def config() -> integration_config.Config:
@@ -19,8 +19,8 @@ def config() -> integration_config.Config:
     return integration_config.from_mapping(yaml.safe_load(path.read_text()))
 
 
-def coordinator() -> MagicMock:
-    instance = MagicMock(spec=Coordinator)
+def controller() -> MagicMock:
+    instance = MagicMock(spec=Controller)
     instance.async_start = AsyncMock()
     instance.async_stop = AsyncMock()
     return instance
@@ -54,10 +54,10 @@ def strict_one_shot_remove_check(hass: HomeAssistant, monkeypatch) -> list[str]:
     return removed_after_fire
 
 
-async def test_running_home_assistant_starts_coordinator(hass: HomeAssistant) -> None:
-    instance = coordinator()
+async def test_running_home_assistant_starts_controller(hass: HomeAssistant) -> None:
+    instance = controller()
     with (
-        patch("custom_components.house_battery_control.Coordinator", return_value=instance),
+        patch("custom_components.house_battery_control.Controller", return_value=instance),
         patch("custom_components.house_battery_control.async_load_platform", AsyncMock()),
     ):
         assert await async_setup(hass, {DOMAIN: config()})
@@ -68,9 +68,9 @@ async def test_running_home_assistant_starts_coordinator(hass: HomeAssistant) ->
 
 async def test_start_is_deferred_until_home_assistant_started(hass: HomeAssistant) -> None:
     hass.set_state(CoreState.starting)
-    instance = coordinator()
+    instance = controller()
     with (
-        patch("custom_components.house_battery_control.Coordinator", return_value=instance),
+        patch("custom_components.house_battery_control.Controller", return_value=instance),
         patch("custom_components.house_battery_control.async_load_platform", AsyncMock()),
     ):
         assert await async_setup(hass, {DOMAIN: config()})
@@ -86,10 +86,10 @@ async def test_started_then_stop_does_not_remove_fired_one_shot_listeners(
     monkeypatch,
 ) -> None:
     hass.set_state(CoreState.starting)
-    instance = coordinator()
+    instance = controller()
     removed_after_fire = strict_one_shot_remove_check(hass, monkeypatch)
     with (
-        patch("custom_components.house_battery_control.Coordinator", return_value=instance),
+        patch("custom_components.house_battery_control.Controller", return_value=instance),
         patch("custom_components.house_battery_control.async_load_platform", AsyncMock()),
     ):
         assert await async_setup(hass, {DOMAIN: config()})
@@ -108,10 +108,10 @@ async def test_running_stop_does_not_remove_fired_one_shot_listener(
     hass: HomeAssistant,
     monkeypatch,
 ) -> None:
-    instance = coordinator()
+    instance = controller()
     removed_after_fire = strict_one_shot_remove_check(hass, monkeypatch)
     with (
-        patch("custom_components.house_battery_control.Coordinator", return_value=instance),
+        patch("custom_components.house_battery_control.Controller", return_value=instance),
         patch("custom_components.house_battery_control.async_load_platform", AsyncMock()),
     ):
         assert await async_setup(hass, {DOMAIN: config()})
@@ -123,10 +123,10 @@ async def test_running_stop_does_not_remove_fired_one_shot_listener(
     instance.async_stop.assert_awaited_once_with()
 
 
-async def test_stop_unsubscribes_and_removes_coordinator(hass: HomeAssistant) -> None:
-    instance = coordinator()
+async def test_stop_unsubscribes_and_removes_controller(hass: HomeAssistant) -> None:
+    instance = controller()
     with (
-        patch("custom_components.house_battery_control.Coordinator", return_value=instance),
+        patch("custom_components.house_battery_control.Controller", return_value=instance),
         patch("custom_components.house_battery_control.async_load_platform", AsyncMock()),
     ):
         assert await async_setup(hass, {DOMAIN: config()})
@@ -138,11 +138,11 @@ async def test_stop_unsubscribes_and_removes_coordinator(hass: HomeAssistant) ->
 
 
 async def test_reload_stops_previous_instance_before_replacing_it(hass: HomeAssistant) -> None:
-    previous = coordinator()
-    current = coordinator()
+    previous = controller()
+    current = controller()
     with (
         patch(
-            "custom_components.house_battery_control.Coordinator",
+            "custom_components.house_battery_control.Controller",
             side_effect=(previous, current),
         ),
         patch("custom_components.house_battery_control.async_load_platform", AsyncMock()),
@@ -155,7 +155,7 @@ async def test_reload_stops_previous_instance_before_replacing_it(hass: HomeAssi
 
 
 async def test_concurrent_stop_is_idempotent(hass: HomeAssistant) -> None:
-    instance = coordinator()
+    instance = controller()
     release = asyncio.Event()
 
     async def delayed_stop() -> None:
@@ -163,7 +163,7 @@ async def test_concurrent_stop_is_idempotent(hass: HomeAssistant) -> None:
 
     instance.async_stop.side_effect = delayed_stop
     with (
-        patch("custom_components.house_battery_control.Coordinator", return_value=instance),
+        patch("custom_components.house_battery_control.Controller", return_value=instance),
         patch("custom_components.house_battery_control.async_load_platform", AsyncMock()),
     ):
         await async_setup(hass, {DOMAIN: config()})

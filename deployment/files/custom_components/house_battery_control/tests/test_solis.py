@@ -352,6 +352,40 @@ def test_disabled_stored_overlap_is_ignored_and_idle_observes_without_cleaning_s
     assert adapter.intent_matches(observed, None, reserve_soc_percent=Decimal("10"))
 
 
+def test_conflict_projection_is_exact_read_only_and_omits_unknown() -> None:
+    parsed, states = fixture()
+    desired = intent(
+        start=datetime(2026, 12, 1, 22, tzinfo=UTC),
+        end=datetime(2026, 12, 2, 1, tzinfo=UTC),
+    )
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    first, second = parsed.allocation(SlotOwner.CHEAP_CHARGING)
+    for key, time_text in ((first, "22:00-24:00"), (second, "00:00-01:00")):
+        direction = parsed.direction(key)
+        states[direction.time_entity_id]["state"] = time_text
+        states[direction.target_soc_entity_id]["state"] = "100"
+        states[direction.enable_entity_id]["state"] = "on"
+    observed = read_state(states, parsed, now=NOW)
+    assert adapter.conflicting_enabled_keys(observed, desired) == ()
+
+    mismatch = parsed.direction(first)
+    states[mismatch.time_entity_id]["state"] = "21:59-24:00"
+    extra = parsed.slots[0].discharge
+    states[extra.enable_entity_id]["state"] = "on"
+    unknown = parsed.slots[2].charge
+    states[unknown.enable_entity_id]["state"] = "unavailable"
+    observed = read_state(states, parsed, now=NOW)
+    assert adapter.conflicting_enabled_keys(observed, desired) == (
+        first,
+        SlotKey(1, SlotDirection.DISCHARGE),
+    )
+    assert adapter.conflicting_enabled_keys(observed, None) == (
+        first,
+        SlotKey(1, SlotDirection.DISCHARGE),
+        second,
+    )
+
+
 class FakeHA:
     def __init__(self, states: dict[str, object], behavior: str = "success") -> None:
         self.states = SimpleNamespace(get=states.get)
@@ -368,7 +402,7 @@ class FakeHA:
 
     async def async_call(self, domain, service, data, *, blocking=True):
         self.calls.append((domain, service, dict(data)))
-        if self.behavior in {"success", "error", "block"}:
+        if self.behavior in {"success", "error", "block", "ignore_cancel"}:
             entity_id = data["entity_id"]
             target = (
                 "on" if service == "turn_on" else "off" if service == "turn_off"
@@ -383,8 +417,13 @@ class FakeHA:
                           "context_id": item["context_id"], "attributes": item.get("attributes", {})})
         if self.behavior == "error":
             raise RuntimeError("boom")
-        if self.behavior == "block":
-            await self.block.wait()
+        if self.behavior in {"block", "ignore_cancel"}:
+            try:
+                await self.block.wait()
+            except asyncio.CancelledError:
+                if self.behavior != "ignore_cancel":
+                    raise
+                await self.block.wait()
 
 
 def first_slot_change(adapter: SolisAdapter, states: dict[str, object]) -> SolisChange:
@@ -462,3 +501,104 @@ async def test_narrow_stop_and_mode_write_only_the_resolved_entities() -> None:
         enabled, parsed.persistent.storage_mode_entity_id,
     ]
     assert not any("peak" in str(call).lower() or "feed_in_power" in str(call).lower() for call in fake.calls)
+
+
+@pytest.mark.asyncio
+async def test_forced_ambiguous_stop_requires_blocking_call_and_newer_readback() -> None:
+    parsed, states = fixture()
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    enabled = parsed.direction(key).enable_entity_id
+    fake = FakeHA(states)
+    adapter = SolisAdapter(fake, parsed, timezone=LONDON)
+
+    already_off = await adapter.stop(
+        key,
+        deadline=asyncio.get_running_loop().time() + 1,
+    )
+    assert already_off.outcome is WriteOutcome.NO_CHANGE
+    assert fake.calls == []
+
+    forced = await adapter.stop(
+        key,
+        deadline=asyncio.get_running_loop().time() + 1,
+        force=True,
+    )
+    assert forced.outcome is WriteOutcome.APPLIED
+    assert [call[2]["entity_id"] for call in fake.calls] == [enabled]
+
+    for behavior, outcome in (
+        ("error", WriteOutcome.SERVICE_ERROR),
+        ("block", WriteOutcome.SERVICE_TIMEOUT),
+    ):
+        parsed, states = fixture()
+        fake = FakeHA(states, behavior)
+        adapter = SolisAdapter(fake, parsed, timezone=LONDON)
+        result = await adapter.stop(
+            key,
+            deadline=asyncio.get_running_loop().time() + 0.01,
+            force=True,
+        )
+        assert result.outcome is outcome
+
+
+@pytest.mark.asyncio
+async def test_cancellation_ignoring_service_never_overlaps_forced_stop_retry() -> None:
+    parsed, states = fixture()
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    fake = FakeHA(states, "ignore_cancel")
+    adapter = SolisAdapter(fake, parsed, timezone=LONDON)
+
+    first = await adapter.stop(
+        key,
+        deadline=asyncio.get_running_loop().time() + 0.01,
+        force=True,
+    )
+    second = await adapter.stop(
+        key,
+        deadline=asyncio.get_running_loop().time() + 0.01,
+        force=True,
+    )
+    assert first.outcome is WriteOutcome.SERVICE_TIMEOUT
+    assert second.outcome is WriteOutcome.SERVICE_TIMEOUT
+    assert len(fake.calls) == 1
+
+    fake.block.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    third = await adapter.stop(
+        key,
+        deadline=asyncio.get_running_loop().time() + 1,
+        force=True,
+    )
+    assert third.outcome is WriteOutcome.APPLIED
+    assert len(fake.calls) == 2
+
+
+def test_housekeeping_targets_only_one_confirmed_off_used_slot() -> None:
+    parsed, states = fixture()
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    configured = parsed.direction(key)
+    states[configured.time_entity_id]["state"] = "09:00-10:00"
+    states[configured.current_entity_id]["state"] = "25"
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    observed = read_state(states, parsed, now=NOW)
+
+    first = adapter.next_housekeeping_change(observed, key)
+    assert first is not None
+    assert (first.entity_id, first.target) == (
+        configured.time_entity_id,
+        "00:00-00:00",
+    )
+
+    states[configured.time_entity_id]["state"] = "00:00-00:00"
+    observed = read_state(states, parsed, now=NOW)
+    second = adapter.next_housekeeping_change(observed, key)
+    assert second is not None
+    assert (second.entity_id, second.target) == (
+        configured.current_entity_id,
+        Decimal("0"),
+    )
+
+    states[configured.enable_entity_id]["state"] = "on"
+    observed = read_state(states, parsed, now=NOW)
+    assert adapter.next_housekeeping_change(observed, key) is None

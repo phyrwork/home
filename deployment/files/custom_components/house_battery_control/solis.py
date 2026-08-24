@@ -707,6 +707,7 @@ class SolisAdapter:
         self.config = config
         self.timezone = timezone
         self._lock = asyncio.Lock()
+        self._inflight_service: asyncio.Future[object] | None = None
         self._managed = frozenset(_writable_entities(config))
 
     def next_start_change(
@@ -830,7 +831,69 @@ class SolisAdapter:
             for direction in enabled
         )
 
+    def conflicting_enabled_keys(
+        self,
+        state: SolisState,
+        intent: LogicalIntent | None,
+    ) -> tuple[SlotKey, ...]:
+        """Project explicitly-on directions that conflict with one intent."""
+
+        directions = tuple(
+            direction
+            for slot in state.slots
+            for direction in (slot.charge, slot.discharge)
+        )
+        if intent is None:
+            return tuple(direction.key for direction in directions if direction.enabled is True)
+        try:
+            native = self._native_intent(intent)
+            if _native_overlap(native):
+                return ()
+        except (IndexError, TypeError, ValueError):
+            # Invalid intent is handled as a hard controller invariant. Never
+            # manufacture stop debt from a projection that cannot be proven.
+            return ()
+        desired = {item.key: item for item in native}
+        return tuple(
+            direction.key
+            for direction in directions
+            if direction.enabled is True
+            and (
+                direction.key not in desired
+                or not _direction_matches(direction, desired[direction.key])
+            )
+        )
+
+    def next_housekeeping_change(
+        self,
+        state: SolisState,
+        slot_key: SlotKey,
+    ) -> SolisChange | None:
+        """Reset one confirmed-off used slot field, without sweeping slots."""
+
+        direction = state.direction(slot_key)
+        if direction.enabled is not False or direction.current is None:
+            return None
+        config = self.config.direction(slot_key)
+        for entity_id, target, capability in (
+            (config.time_entity_id, "00:00-00:00", None),
+            (config.current_entity_id, direction.current.minimum, direction.current),
+        ):
+            change = self._change(state, entity_id, target, capability)
+            if change is not None:
+                return change
+        return None
+
     async def apply(self, change: SolisChange, *, deadline: float) -> WriteResult:
+        return await self._apply(change, deadline=deadline, force_service=False)
+
+    async def _apply(
+        self,
+        change: SolisChange,
+        *,
+        deadline: float,
+        force_service: bool,
+    ) -> WriteResult:
         if change.entity_id not in self._managed:
             return WriteResult(change.entity_id, WriteOutcome.REJECTED, "entity is not in the configured Solis map")
         remaining = deadline - asyncio.get_running_loop().time()
@@ -841,20 +904,34 @@ class SolisAdapter:
         except asyncio.TimeoutError:
             return WriteResult(change.entity_id, WriteOutcome.SERVICE_TIMEOUT, "writer lock deadline exhausted")
         try:
-            return await self._apply_locked(change, deadline=deadline)
+            return await self._apply_locked(
+                change,
+                deadline=deadline,
+                force_service=force_service,
+            )
         finally:
             self._lock.release()
 
-    async def stop(self, slot_key: SlotKey, *, deadline: float) -> WriteResult:
+    async def stop(
+        self,
+        slot_key: SlotKey,
+        *,
+        deadline: float,
+        force: bool = False,
+    ) -> WriteResult:
         config = self.config.direction(slot_key)
         revision = _capture_revision(self._get(config.enable_entity_id), config.enable_entity_id)
         if revision is None:
             return WriteResult(config.enable_entity_id, WriteOutcome.REJECTED, "slot enable is unknown or has no revision")
-        if revision.state == "off":
+        if revision.state == "off" and not force:
             return WriteResult(config.enable_entity_id, WriteOutcome.NO_CHANGE, "slot is already off")
-        if revision.state != "on":
+        if revision.state not in {"on", "off"}:
             return WriteResult(config.enable_entity_id, WriteOutcome.REJECTED, "slot enable is not on or off")
-        return await self.apply(SolisChange(config.enable_entity_id, False, revision), deadline=deadline)
+        return await self._apply(
+            SolisChange(config.enable_entity_id, False, revision),
+            deadline=deadline,
+            force_service=force,
+        )
 
     async def set_mode(self, mode: StorageMode, *, deadline: float) -> WriteResult:
         if mode not in (StorageMode.SELF_USE, StorageMode.FEED_IN_PRIORITY):
@@ -910,7 +987,13 @@ class SolisAdapter:
         except (AttributeError, TypeError):
             return lambda: None
 
-    async def _apply_locked(self, change: SolisChange, *, deadline: float) -> WriteResult:
+    async def _apply_locked(
+        self,
+        change: SolisChange,
+        *,
+        deadline: float,
+        force_service: bool,
+    ) -> WriteResult:
         current = self._get(change.entity_id)
         if not _revision_matches(current, change.precondition):
             return WriteResult(change.entity_id, WriteOutcome.CONFLICT, "captured HA revision no longer matches")
@@ -918,7 +1001,10 @@ class SolisAdapter:
         if isinstance(validated, WriteResult):
             return validated
         normalized, domain, service, data = validated
-        if _value_matches(change.entity_id, normalized, _state_value(current)):
+        if (
+            not force_service
+            and _value_matches(change.entity_id, normalized, _state_value(current))
+        ):
             return WriteResult(change.entity_id, WriteOutcome.NO_CHANGE, "Home Assistant already has target")
 
         event = asyncio.Event()
@@ -978,6 +1064,11 @@ class SolisAdapter:
     async def _call_service(
         self, domain: str, service: str, data: Mapping[str, object], *, deadline: float
     ) -> None:
+        existing = self._inflight_service
+        if existing is not None:
+            if not existing.done():
+                raise asyncio.TimeoutError
+            self._service_finished(existing)
         services = getattr(self.hass, "services", None)
         call = getattr(services, "async_call", None)
         if not callable(call):
@@ -988,18 +1079,23 @@ class SolisAdapter:
         if not inspect.isawaitable(result):
             raise TypeError("Home Assistant service call must return an awaitable")
         task = asyncio.ensure_future(result)
+        self._inflight_service = task
+        task.add_done_callback(self._service_finished)
         timeout = min(SERVICE_TIMEOUT.total_seconds(), max(0.0, deadline - asyncio.get_running_loop().time()))
         try:
             done, _ = await asyncio.wait((task,), timeout=timeout)
         except asyncio.CancelledError:
             task.cancel()
-            task.add_done_callback(_consume)
             raise
         if not done:
             task.cancel()
-            task.add_done_callback(_consume)
             raise asyncio.TimeoutError
         task.result()
+
+    def _service_finished(self, task: asyncio.Future[object]) -> None:
+        _consume(task)
+        if self._inflight_service is task:
+            self._inflight_service = None
 
 
 def _writable_entities(config: SolisConfig) -> tuple[str, ...]:

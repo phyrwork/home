@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import Coordinator
+from .controller import Controller
 
 
 async def async_setup_platform(
@@ -19,22 +19,22 @@ async def async_setup_platform(
     async_add_entities: AddEntitiesCallback,
     discovery_info: Mapping[str, Any] | None = None,
 ) -> None:
-    coordinator = hass.data.get(DOMAIN)
-    if isinstance(coordinator, Coordinator):
+    controller = hass.data.get(DOMAIN)
+    if isinstance(controller, Controller):
         async_add_entities(
             (
-                HeartbeatSensor(coordinator),
-                HealthSensor(coordinator),
-                ActionSensor(coordinator),
-                ReserveSensor(coordinator),
-                BatteryEnergySensor(coordinator),
-                ReserveTargetSensor(coordinator),
-                ReserveBalanceSensor(coordinator),
+                HeartbeatSensor(controller),
+                HealthSensor(controller),
+                ActionSensor(controller),
+                ReserveSensor(controller),
+                BatteryEnergySensor(controller),
+                ReserveTargetSensor(controller),
+                ReserveBalanceSensor(controller),
             )
         )
 
 
-class _SnapshotSensor(CoordinatorEntity[Coordinator], SensorEntity):
+class _SnapshotSensor(CoordinatorEntity[Controller], SensorEntity):
     @property
     def available(self) -> bool:
         return super().available and self.coordinator.data is not None
@@ -57,6 +57,8 @@ class HeartbeatSensor(_SnapshotSensor):
         return {
             "last_healthy_at": None if data.last_healthy_at is None else data.last_healthy_at.isoformat(),
             "last_error": data.last_error,
+            "degraded_since": None if data.degraded_since is None else data.degraded_since.isoformat(),
+            "fail_safe_since": None if data.fail_safe_since is None else data.fail_safe_since.isoformat(),
         }
 
 
@@ -94,6 +96,9 @@ class ActionSensor(_SnapshotSensor):
             "next_cheap_window": data.next_cheap_window,
             "actuation": data.actuation_message,
             "last_error": data.last_error,
+            "pending_operation": data.pending_operation,
+            "attempt": data.attempt,
+            "next_retry_at": None if data.next_retry_at is None else data.next_retry_at.isoformat(),
         }
 
 
