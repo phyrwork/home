@@ -103,3 +103,11 @@ Consolidate into `test_planner.py` and prove all T0028 behavior plus:
 - Local verification: 160 component tests and 45 deployment tests pass;
   `compileall` and `git diff --check` pass. No credentials, network, live HA or
   deployment access was used.
+
+## Review
+
+Two independent small-model reviewers approved commit `70df4b6` with no
+blockers. They separately confirmed the issue-versus-idle semantics, preserved
+cycle state on planning failure, UTC logical-intent boundary, substantive test
+coverage, deletion of all superseded modules, and containment of the temporary
+physical-slot bridge for mandatory removal by T0029.
