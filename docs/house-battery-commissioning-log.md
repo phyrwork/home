@@ -181,9 +181,10 @@ Conclusion: TOU-v2 native charge slots work on this inverter when Feed-In
 Priority and Allow Grid Charging are enabled and Grid Peak Shaving is disabled.
 This is the working reference configuration for controller implementation.
 
-Grid Peak Shaving is commissioned disabled and is not a runtime dependency.
-Charge slots require it disabled; battery discharge/load following does not
-require it. See the
+The Grid Peak Shaving maximum-grid-power limit is manually commissioned at
+100 W (0.1 kW) and remains unmanaged. Runtime owns only the enable switch:
+reserve following enables it, while bounded charge/discharge slots disable it
+after their native slot is authoritatively armed. See the
 [SolisCloud remote-control setting reference](https://solis-service.solisinverters.com/en/support/solutions/articles/44002638862-solis-cloud-remote-control-settings-desktop-version)
 and the
 [peak-shaving operating overview](https://www.solinteg.com/seo-blog/what-is-peak-shaving-commercial-energy-costs.html).
@@ -196,8 +197,8 @@ The ownership boundary is:
   commissioned Feed-In Priority baseline once.
 - Allow Grid Charging, Battery Reserve and its target, and
   all six charge/discharge slot fields are runtime-owned.
-- Grid Peak Shaving is disabled as a one-time commissioned setting and is not
-  runtime-managed.
+- Grid Peak Shaving's enable switch is runtime-owned; its 100 W limit is an
+  installation invariant and is never discovered or written at runtime.
 - Enabled directions are reconciled against the one logical intent. After a
   controller-owned direction is confirmed off, its time and current may be
   reset once as best-effort housekeeping; there is no all-slot normalization

@@ -152,6 +152,16 @@ class ReserveTargetSensor(_ReserveEnergySensor):
         data = self.coordinator.data
         return None if data is None else data.reserve_target_energy_kwh
 
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data
+        if data is None:
+            return None
+        return {
+            "control_reserve_soc_percent": _float(data.control_reserve_soc_percent),
+            "control_reserve_energy_kwh": _float(data.control_reserve_energy_kwh),
+        }
+
 
 class ReserveBalanceSensor(_ReserveEnergySensor):
     _attr_name = "House Battery Reserve Balance"
@@ -160,6 +170,17 @@ class ReserveBalanceSensor(_ReserveEnergySensor):
     def _value(self) -> object:
         data = self.coordinator.data
         return None if data is None else data.reserve_balance_kwh
+
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data
+        if data is None:
+            return None
+        return {
+            "control_reserve_soc_percent": _float(data.control_reserve_soc_percent),
+            "control_reserve_energy_kwh": _float(data.control_reserve_energy_kwh),
+            "control_reserve_balance_kwh": _float(data.control_reserve_balance_kwh),
+        }
 
 
 def _float(value: object) -> float | None:

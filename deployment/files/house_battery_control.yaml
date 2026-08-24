@@ -1,5 +1,6 @@
-# One-time SolisCloud commissioning is complete: EMS is disabled, Feed-In
-# Priority is commissioned, Peak Shaving and Feed-In Power Limit are disabled.
+# One-time SolisCloud commissioning is complete: EMS is disabled and Feed-In
+# Priority is commissioned. Grid Peak Shaving's manually commissioned maximum
+# grid-power limit is 0.1 kW; runtime owns only its enable switch.
 
 battery:
   capacity_kwh: 32.1536
@@ -30,6 +31,7 @@ solis:
   persistent:
     storage_mode_entity_id: select.garage_inverter_control_storage_mode
     allow_grid_charging_entity_id: switch.garage_inverter_control_allow_grid_charging
+    grid_peak_shaving_entity_id: switch.garage_inverter_control_grid_peak_shaving
     inverter_time_entity_id: datetime.garage_inverter_control_inverter_time
   protection:
     battery_reserve_entity_id: switch.garage_inverter_control_battery_reserve

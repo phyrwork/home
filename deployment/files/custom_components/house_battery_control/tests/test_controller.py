@@ -91,10 +91,12 @@ def observation(
     mode: str = "Feed-In Priority",
     target_state: str | None = None,
     time_state: str | None = None,
+    peak_state: str = "on",
 ) -> SolisState:
     parsed, states = solis_fixture()
     states[parsed.telemetry.state_of_charge_entity_id]["state"] = soc
     states[parsed.persistent.storage_mode_entity_id]["state"] = mode
+    states[parsed.persistent.grid_peak_shaving_entity_id]["state"] = peak_state
     if enabled is not None:
         states[parsed.direction(enabled).enable_entity_id]["state"] = enabled_state
         if target_state is not None:
@@ -139,6 +141,9 @@ def adapter(controller: Controller, *, reconciled: bool = True) -> MagicMock:
     )
     result.set_mode = AsyncMock(
         return_value=WriteResult("select.mode", WriteOutcome.APPLIED, "Self-Use")
+    )
+    result.set_peak_shaving = AsyncMock(
+        return_value=WriteResult("switch.peak", WriteOutcome.APPLIED, "on")
     )
     controller.solis = result
     return result
@@ -213,6 +218,61 @@ async def test_start_retries_at_exact_generation_offsets_then_suppresses(
     )
     assert controller._start_retry is not None
     assert controller._start_retry.suppressed
+
+
+async def test_peak_off_failure_uses_bounded_start_retry_without_slot_cleanup(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    forced = replace(
+        plan(),
+        action=StrategyAction.RESERVE_DISCHARGE,
+        intent=LogicalIntent((SlotIntent(
+            SlotOwner.RESERVE_EXPORT,
+            SlotDirection.DISCHARGE,
+            NOW,
+            NOW + timedelta(minutes=15),
+            Decimal("50"),
+            Decimal("20"),
+            NOW + timedelta(minutes=15),
+        ),)),
+        reserve_soc_percent=Decimal("20"),
+    )
+    change = SimpleNamespace(
+        entity_id=controller.config.solis.persistent.grid_peak_shaving_entity_id,
+        target=False,
+    )
+    solis.next_start_change.return_value = change
+    solis.apply.return_value = WriteResult(
+        change.entity_id, WriteOutcome.SERVICE_ERROR, "Peak Shaving write failed"
+    )
+    current = observation(
+        soc="55", enabled=key, target_state="20", time_state="11:00-13:00", peak_state="off"
+    )
+    assert current.health is ControllerHealth.HEALTHY, current.issues
+    with (
+        patch(
+            "custom_components.house_battery_control.controller.read_state",
+            return_value=current,
+        ),
+        patch(
+            "custom_components.house_battery_control.controller.build_plan",
+            AsyncMock(return_value=forced),
+        ),
+    ):
+        await controller._reconcile()
+
+    assert solis.apply.await_count == 1
+    solis.stop.assert_not_awaited()
+    solis.next_housekeeping_change.assert_not_called()
+    assert not controller._stop_debts
+    assert key not in controller._used_slots
+    assert key not in controller._owned_expiry
+    assert controller._start_retry is not None
+    assert controller._start_retry.attempt == 1
+    assert not controller._start_retry.suppressed
 
 
 async def test_start_generation_ignores_unrelated_refresh_but_resets_for_pending_or_intent_change(
@@ -305,6 +365,71 @@ async def test_ambiguous_stop_debt_survives_optimistic_off_and_forces_proof(
 
     assert key not in controller._stop_debts
     assert solis.stop.await_args_list[1].kwargs["force"] is True
+
+
+async def test_peak_handover_is_one_attempt_then_important_stop(hass: HomeAssistant) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    off = replace(observation(enabled=key), grid_peak_shaving=False)
+    controller._add_stop(key, NOW, 0)
+    debt = controller._stop_debts[key]
+
+    await controller._attempt_stop(debt, off, NOW, 0)
+    assert solis.set_peak_shaving.await_count == 1
+    solis.stop.assert_not_awaited()
+    assert controller._stop_debts[key].peak_shaving_handover_attempted
+
+    await controller._attempt_stop(controller._stop_debts[key], off, NOW, 0)
+    solis.stop.assert_awaited_once()
+
+
+@pytest.mark.parametrize("peak_state", (None, False))
+async def test_unavailable_peak_handover_skips_write_but_stops_on_next_due_pass(
+    hass: HomeAssistant, peak_state: bool | None,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    unknown_observation = observation(enabled=key)
+    revisions = dict(unknown_observation.revisions)
+    revisions.pop(controller.config.solis.persistent.grid_peak_shaving_entity_id)
+    unknown = replace(
+        unknown_observation,
+        grid_peak_shaving=peak_state,
+        revisions=MappingProxyType(revisions),
+    )
+    controller._add_stop(key, NOW, 0)
+
+    await controller._attempt_stop(controller._stop_debts[key], unknown, NOW, 0)
+    solis.set_peak_shaving.assert_not_awaited()
+    solis.stop.assert_not_awaited()
+    await controller._attempt_stop(controller._stop_debts[key], unknown, NOW, 0)
+    solis.stop.assert_awaited_once()
+
+
+def test_minimum_soc_bypass_upgrades_existing_stop_debt(hass: HomeAssistant) -> None:
+    controller = Controller(hass, config())
+    key = SlotKey(2, SlotDirection.DISCHARGE)
+    controller._add_stop(key, NOW, 0)
+    assert not controller._stop_debts[key].peak_shaving_handover_attempted
+    controller._add_stop(key, NOW, 0, bypass_peak_handover=True)
+    assert controller._stop_debts[key].peak_shaving_handover_attempted
+
+
+def test_recurring_native_schedule_does_not_infer_restart_expiry(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    key = SlotKey(1, SlotDirection.CHARGE)
+    base = observation(
+        soc="40", enabled=key, target_state="100", time_state="10:00-11:00"
+    )
+    invalid_policy = replace(base, persistent=None)
+
+    controller._discover_unconditional_stops(invalid_policy, NOW, 0)
+
+    assert key not in controller._stop_debts
 
 
 async def test_stop_publishes_degraded_context_before_blocking_service(

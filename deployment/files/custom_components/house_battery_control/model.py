@@ -24,6 +24,7 @@ class ControllerHealth(_TextEnum):
 
 class StrategyAction(_TextEnum):
     IDLE = "IDLE"
+    RESERVE_FOLLOW = "RESERVE_FOLLOW"
     CHEAP_CHARGE = "CHEAP_CHARGE"
     RESERVE_DISCHARGE = "RESERVE_DISCHARGE"
     CYCLE_DISCHARGE = "CYCLE_DISCHARGE"

@@ -57,6 +57,7 @@ class SolisTelemetryConfig:
 class SolisPersistentConfig:
     storage_mode_entity_id: str
     allow_grid_charging_entity_id: str
+    grid_peak_shaving_entity_id: str
     inverter_time_entity_id: str
 
 
@@ -129,7 +130,7 @@ def config_from_mapping(source: Mapping[str, object]) -> SolisConfig:
     telemetry = _mapping(root["telemetry"], "solis.telemetry")
     _keys(telemetry, {"state_of_charge_entity_id", "battery_power_entity_id", "battery_power_sign", "battery_voltage_entity_id", "device_timestamp_entity_id"}, "solis.telemetry")
     persistent = _mapping(root["persistent"], "solis.persistent")
-    _keys(persistent, {"storage_mode_entity_id", "allow_grid_charging_entity_id", "inverter_time_entity_id"}, "solis.persistent")
+    _keys(persistent, {"storage_mode_entity_id", "allow_grid_charging_entity_id", "grid_peak_shaving_entity_id", "inverter_time_entity_id"}, "solis.persistent")
     protection = _mapping(root["protection"], "solis.protection")
     _keys(protection, {"battery_reserve_entity_id", "battery_reserve_soc_entity_id"}, "solis.protection")
     capability = _mapping(root["capability"], "solis.capability")
@@ -149,6 +150,7 @@ def config_from_mapping(source: Mapping[str, object]) -> SolisConfig:
         persistent=SolisPersistentConfig(
             _entity(persistent["storage_mode_entity_id"], "select", "storage mode"),
             _entity(persistent["allow_grid_charging_entity_id"], "switch", "allow grid charging"),
+            _entity(persistent["grid_peak_shaving_entity_id"], "switch", "grid peak shaving"),
             _entity(persistent["inverter_time_entity_id"], "datetime", "inverter time"),
         ),
         protection=SolisProtectionConfig(
@@ -336,6 +338,7 @@ class SolisState:
     revisions: Mapping[str, Revision]
     issues: tuple[SolisIssue, ...]
     observed_at: datetime
+    grid_peak_shaving: bool | None
 
     def direction(self, key: "SlotKey") -> SolisDirectionState:
         slot = self.slots[key.physical_slot - 1]
@@ -369,6 +372,7 @@ class _Reader:
     def read(self) -> SolisState:
         telemetry = self._telemetry()
         persistent = self._persistent()
+        grid_peak_shaving = self._peak_shaving()
         charge = self._capability(self.config.capability.battery_max_charge_current_entity_id, "A", "maximum charge current")
         discharge = self._capability(self.config.capability.battery_max_discharge_current_entity_id, "A", "maximum discharge current")
         slots = tuple(
@@ -393,7 +397,7 @@ class _Reader:
         return SolisState(
             ControllerHealth.HEALTHY if complete and not self.issues else ControllerHealth.DEGRADED,
             telemetry, persistent, capabilities, slots, MappingProxyType(dict(self.revisions)),
-            tuple(self.issues), self.now,
+            tuple(self.issues), self.now, grid_peak_shaving,
         )
 
     def _telemetry(self) -> SolisTelemetry | None:
@@ -467,6 +471,12 @@ class _Reader:
         if mode is None or allow_grid is None or inverter_time is None or reserve is None or reserve_soc is None:
             return None
         return SolisPersistentState(str(mode), allow_grid, inverter_time, reserve, reserve_soc)
+
+    def _peak_shaving(self) -> bool | None:
+        """Read Peak Shaving independently from the persistent mode state."""
+
+        entity_id = self.config.persistent.grid_peak_shaving_entity_id
+        return self._switch(entity_id)
 
     def _direction(self, physical_slot: int, kind: SlotDirection, config: SolisDirectionConfig) -> SolisDirectionState:
         enabled = self._switch(config.enable_entity_id)
@@ -716,10 +726,13 @@ class SolisAdapter:
         intent: LogicalIntent | None,
         *,
         reserve_soc_percent: Decimal,
+        peak_shaving: bool,
     ) -> SolisChange | None:
         """Return the next ordered idempotent start change, never a stop."""
 
         if state.health is not ControllerHealth.HEALTHY or state.persistent is None:
+            return None
+        if state.grid_peak_shaving is None:
             return None
 
         # Persistent controls must not be prepared until every enable is known.
@@ -753,6 +766,28 @@ class SolisAdapter:
                 ):
                     return None
 
+        fully_armed = intent is not None and all(
+            state.direction(item.key).enabled is True
+            and _direction_matches(
+                state.direction(item.key),
+                item,
+                now_minute=_local_minute(state.observed_at, self.timezone),
+            )
+            for item in native
+        )
+        # A forced slot must prove Peak Shaving on before any policy or slot
+        # preparation. The final off handover is deferred until policy and
+        # every native direction are both authoritative.
+        if intent is not None and not fully_armed:
+            peak_change = self._change(
+                state,
+                self.config.persistent.grid_peak_shaving_entity_id,
+                True,
+                None,
+            )
+            if peak_change is not None:
+                return peak_change
+
         reserve = _quantize(
             max(Decimal(MINIMUM_SOC_PERCENT), reserve_soc_percent),
             state.persistent.battery_reserve_soc,
@@ -768,11 +803,6 @@ class SolisAdapter:
             if change is not None:
                 return change
 
-        # Valid idle reconciles the operating policy only. Slot cleanup and
-        # stop selection remain controller responsibilities.
-        if intent is None:
-            return None
-
         for item in native:
             direction = state.direction(item.key)
             if direction.enabled:
@@ -787,6 +817,15 @@ class SolisAdapter:
                 change = self._change(state, entity_id, target, capability)
                 if change is not None:
                     return change
+
+        peak_change = self._change(
+            state,
+            self.config.persistent.grid_peak_shaving_entity_id,
+            peak_shaving,
+            None,
+        )
+        if peak_change is not None:
+            return peak_change
         return None
 
     def intent_matches(
@@ -795,11 +834,13 @@ class SolisAdapter:
         intent: LogicalIntent | None,
         *,
         reserve_soc_percent: Decimal,
+        peak_shaving: bool,
     ) -> bool:
         """Return whether the full policy and complete desired intent match."""
 
         if self.next_start_change(
-            state, intent, reserve_soc_percent=reserve_soc_percent
+            state, intent, reserve_soc_percent=reserve_soc_percent,
+            peak_shaving=peak_shaving,
         ) is not None:
             return False
         if state.health is not ControllerHealth.HEALTHY or state.persistent is None:
@@ -813,6 +854,8 @@ class SolisAdapter:
             or not state.persistent.allow_grid_charging
             or not state.persistent.battery_reserve
             or state.persistent.battery_reserve_soc.current_value != reserve
+            or state.grid_peak_shaving is None
+            or state.grid_peak_shaving != peak_shaving
         ):
             return False
         enabled = tuple(
@@ -954,6 +997,15 @@ class SolisAdapter:
         if revision is None:
             return WriteResult(entity_id, WriteOutcome.REJECTED, "storage mode is unknown or has no revision")
         return await self.apply(SolisChange(entity_id, mode.value, revision), deadline=deadline)
+
+    async def set_peak_shaving(self, enabled: bool, *, deadline: float) -> WriteResult:
+        """Set only the commissioned Peak Shaving enable switch."""
+
+        entity_id = self.config.persistent.grid_peak_shaving_entity_id
+        revision = _capture_revision(self._get(entity_id), entity_id)
+        if revision is None or revision.state not in {"on", "off"}:
+            return WriteResult(entity_id, WriteOutcome.REJECTED, "Peak Shaving state is unknown or has no revision")
+        return await self.apply(SolisChange(entity_id, enabled, revision), deadline=deadline)
 
     def _native_intent(self, intent: LogicalIntent) -> tuple[_NativeIntent, ...]:
         split = split_intent(intent, timezone=self.timezone, midnight_end=self.config.midnight_end)
@@ -1126,6 +1178,7 @@ def _writable_entities(config: SolisConfig) -> tuple[str, ...]:
     values = [
         config.persistent.storage_mode_entity_id,
         config.persistent.allow_grid_charging_entity_id,
+        config.persistent.grid_peak_shaving_entity_id,
         config.persistent.inverter_time_entity_id,
         config.protection.battery_reserve_entity_id,
         config.protection.battery_reserve_soc_entity_id,

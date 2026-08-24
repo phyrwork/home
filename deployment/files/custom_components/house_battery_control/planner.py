@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone, tzinfo
-from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from decimal import Decimal, InvalidOperation
 from enum import Enum
+from math import gcd, lcm
 from typing import Any, Mapping, Sequence
 
 from .model import (
@@ -27,6 +28,9 @@ OCTOPUS_EXPORT_SOURCE_MAX_AGE = timedelta(hours=26)
 OCTOPUS_RATE_SOURCE_MAX_AGE = timedelta(hours=26)
 BONUS_CHARGE_LEASE_DURATION = timedelta(minutes=15)
 OCTOPUS_RATE_UNIT = "GBP/kWh"
+# Solis reports whole-percent SOC. Reserve export must clear the one-percent
+# reporting uncertainty before it can be physically actionable.
+RESERVE_SOC_UNCERTAINTY_PERCENT = Decimal("1")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1064,8 +1068,11 @@ class Plan:
     next_cheap_window: CheapWindow | None = None
     reserve_soc_percent: Decimal | None = None
     reserve_energy_kwh: Decimal | None = None
+    control_reserve_soc_percent: Decimal | None = None
+    control_reserve_energy_kwh: Decimal | None = None
     battery_energy_kwh: Decimal | None = None
     reserve_balance_kwh: Decimal | None = None
+    control_reserve_balance_kwh: Decimal | None = None
     maximum_charge_power_kw: Decimal | None = None
     maximum_discharge_power_kw: Decimal | None = None
     issue: str | None = None
@@ -1203,9 +1210,9 @@ async def build_plan(
         if reserve.reserve_energy_kwh is None:
             raise ValueError("household reserve is unavailable: " + (reserve.issue or "unknown planner failure"))
 
-        reserve_soc = max(
+        exact_reserve_soc = max(
             Decimal(MINIMUM_SOC_PERCENT),
-            _soc_ceiling(reserve.reserve_energy_kwh, config.battery.capacity_kwh),
+            reserve.reserve_energy_kwh * Decimal(FULL_SOC_PERCENT) / config.battery.capacity_kwh,
         )
         telemetry = solis_state.telemetry
         if telemetry.state_of_charge_percent < Decimal(MINIMUM_SOC_PERCENT):
@@ -1213,6 +1220,26 @@ async def build_plan(
         charge_state = solis_state.slots[0].charge
         cycle_slot_state = solis_state.slots[0].discharge
         reserve_slot_state = solis_state.slots[1].discharge
+        reserve_capabilities = [solis_state.persistent.battery_reserve_soc]
+        reserve_capabilities.extend(
+            solis_state.direction(key).target_soc
+            for key in config.solis.allocation(SlotOwner.RESERVE_EXPORT)
+        )
+        reserve_capabilities.extend(
+            solis_state.direction(key).target_soc
+            for key in config.solis.allocation(SlotOwner.FULL_SOC_CYCLING)
+        )
+        if any(capability is None for capability in reserve_capabilities):
+            raise ValueError("reserve target capability is unavailable")
+        control_reserve_soc = _common_quantize_target(
+            exact_reserve_soc,
+            tuple(capability for capability in reserve_capabilities if capability is not None),
+        )
+        control_reserve_energy = (
+            config.battery.capacity_kwh
+            * control_reserve_soc
+            / Decimal(FULL_SOC_PERCENT)
+        )
 
         charge_intent: SlotIntent | None = None
         effective_charge_lease_deadline = charge_lease_deadline
@@ -1256,25 +1283,22 @@ async def build_plan(
                     cycle_start,
                     cycle_end,
                     cycle_slot_state.current.maximum,
-                    max(reserve_soc, cycle_slot_state.target_soc.minimum),
+                    max(control_reserve_soc, cycle_slot_state.target_soc.minimum),
                     cycle_end,
                 )
 
         reserve_intent: SlotIntent | None = None
-        if current_window is None and actual_energy > reserve.reserve_energy_kwh:
-            reserve_target = _quantize_target(
-                reserve_soc,
-                reserve_slot_state.target_soc.minimum,
-                reserve_slot_state.target_soc.maximum,
-                reserve_slot_state.target_soc.step,
-            )
+        if (
+            current_window is None
+            and _reserve_export_allowed(telemetry.state_of_charge_percent, control_reserve_soc)
+        ):
             reserve_intent = _intent(
                 SlotOwner.RESERVE_EXPORT,
                 SlotDirection.DISCHARGE,
                 _minute_floor(now),
                 reserve_end,
                 reserve_slot_state.current.maximum,
-                reserve_target,
+                control_reserve_soc,
                 reserve_end,
             )
 
@@ -1293,7 +1317,7 @@ async def build_plan(
             _StrategyFacts(
                 now=now,
                 soc_percent=telemetry.state_of_charge_percent,
-                reserve_soc_percent=reserve_soc,
+                reserve_soc_percent=control_reserve_soc,
                 cheap_window=current_window,
                 cheap_charge=charge_intent,
                 reserve_discharge=reserve_intent,
@@ -1313,10 +1337,13 @@ async def build_plan(
             charge_lease_deadline=effective_charge_lease_deadline,
             current_cheap_window=current_window,
             next_cheap_window=next_window,
-            reserve_soc_percent=reserve_soc,
+            reserve_soc_percent=control_reserve_soc,
             reserve_energy_kwh=reserve.reserve_energy_kwh,
             battery_energy_kwh=actual_energy,
             reserve_balance_kwh=actual_energy - reserve.reserve_energy_kwh,
+            control_reserve_soc_percent=control_reserve_soc,
+            control_reserve_energy_kwh=control_reserve_energy,
+            control_reserve_balance_kwh=actual_energy - control_reserve_energy,
             maximum_charge_power_kw=maximum_charge_power,
             maximum_discharge_power_kw=maximum_discharge_power,
         )
@@ -1335,13 +1362,18 @@ async def build_plan(
 
 
 def _select(facts: _StrategyFacts) -> _Choice:
-    if facts.cycle_state is CycleState.STOPPING:
-        return _Choice(StrategyAction.IDLE, None, CycleState.IDLE, None)
-
     cheap = _window_active(facts.cheap_window, facts.now)
+    if facts.cycle_state is CycleState.STOPPING:
+        return _Choice(
+            StrategyAction.IDLE if cheap else StrategyAction.RESERVE_FOLLOW,
+            None,
+            CycleState.IDLE,
+            None,
+        )
+
     if facts.cycle_state is CycleState.RESERVE_DISCHARGING:
         target = _effective_reserve(facts.reserve_soc_percent, facts.reserve_discharge)
-        if not cheap and facts.reserve_discharge is not None and facts.soc_percent > target:
+        if not cheap and facts.reserve_discharge is not None and _reserve_export_allowed(facts.soc_percent, target):
             return _Choice(
                 StrategyAction.RESERVE_DISCHARGE,
                 _safe_intent(facts.reserve_discharge, target),
@@ -1387,14 +1419,18 @@ def _select(facts: _StrategyFacts) -> _Choice:
             facts.cycle_discharge.end,
         )
     target = _effective_reserve(facts.reserve_soc_percent, facts.reserve_discharge)
-    if not cheap and facts.reserve_discharge is not None and facts.soc_percent > target:
+    if not cheap and facts.reserve_discharge is not None and _reserve_export_allowed(facts.soc_percent, target):
         return _Choice(
             StrategyAction.RESERVE_DISCHARGE,
             _safe_intent(facts.reserve_discharge, target),
             CycleState.RESERVE_DISCHARGING,
             None,
         )
-    return _Choice(StrategyAction.IDLE, None, CycleState.IDLE, None)
+    if cheap:
+        return _Choice(StrategyAction.IDLE, None, CycleState.IDLE, None)
+    # Normal load following is an active policy: Feed-In Priority with
+    # Battery Reserve and Peak Shaving enabled, and no native slot.
+    return _Choice(StrategyAction.RESERVE_FOLLOW, None, CycleState.IDLE, None)
 
 
 def _window_active(window: CheapWindow | None, now: datetime) -> bool:
@@ -1447,6 +1483,10 @@ def _charge_phase_end(window: CheapWindow, now: datetime) -> tuple[datetime, boo
 
 def _effective_reserve(reserve_soc: Decimal, intent: SlotIntent | None) -> Decimal:
     return max(Decimal(MINIMUM_SOC_PERCENT), reserve_soc, Decimal(0) if intent is None else intent.target_soc)
+
+
+def _reserve_export_allowed(soc_percent: Decimal, control_target: Decimal) -> bool:
+    return soc_percent > control_target + RESERVE_SOC_UNCERTAINTY_PERCENT
 
 
 def _safe_intent(intent: SlotIntent, minimum_soc: Decimal) -> SlotIntent:
@@ -1554,13 +1594,76 @@ def _cycle_duration(state: Any) -> timedelta:
     return timedelta(minutes=int(value))
 
 
-def _quantize_target(requested: Decimal, minimum: Decimal, maximum: Decimal, step: Decimal) -> Decimal:
-    if step <= 0 or minimum > maximum:
-        raise ValueError("target capability is invalid")
-    target = minimum + ((max(minimum, requested) - minimum) / step).to_integral_value(rounding=ROUND_CEILING) * step
-    if target > maximum:
-        raise ValueError("target capability cannot represent the reserve")
-    return target
+def _common_quantize_target(requested: Decimal, capabilities: Sequence[Any]) -> Decimal:
+    """Return the smallest common native SOC supported by every target."""
+
+    if not isinstance(requested, Decimal) or not requested.is_finite() or not capabilities:
+        raise ValueError("reserve target capabilities are unavailable")
+    decimals = [requested, Decimal(MINIMUM_SOC_PERCENT)]
+    for capability in capabilities:
+        values = (capability.minimum, capability.maximum, capability.step)
+        if any(not isinstance(value, Decimal) or not value.is_finite() for value in values):
+            raise ValueError("reserve target capability is invalid")
+        if capability.step <= 0 or capability.minimum > capability.maximum:
+            raise ValueError("reserve target capability is invalid")
+        decimals.extend(values)
+    scale = _decimal_scale(decimals)
+    lower = max(
+        _scale_decimal(requested, scale),
+        _scale_decimal(Decimal(MINIMUM_SOC_PERCENT), scale),
+        *(_scale_decimal(capability.minimum, scale) for capability in capabilities),
+    )
+    upper = min(_scale_decimal(capability.maximum, scale) for capability in capabilities)
+    if lower > upper:
+        raise ValueError("reserve target capabilities have no common representable SOC")
+
+    first = capabilities[0]
+    residue = _scale_decimal(first.minimum, scale) % _scale_decimal(first.step, scale)
+    modulus = _scale_decimal(first.step, scale)
+    for capability in capabilities[1:]:
+        residue, modulus = _merge_congruences(
+            residue,
+            modulus,
+            _scale_decimal(capability.minimum, scale),
+            _scale_decimal(capability.step, scale),
+        )
+    candidate = residue
+    if candidate < lower:
+        candidate += ((lower - candidate + modulus - 1) // modulus) * modulus
+    if candidate > upper or any(
+        (candidate - _scale_decimal(capability.minimum, scale))
+        % _scale_decimal(capability.step, scale)
+        != 0
+        for capability in capabilities
+    ):
+        raise ValueError("reserve target capabilities have no common representable SOC")
+    return Decimal(candidate) / Decimal(scale)
+
+
+def _decimal_scale(values: Sequence[Decimal]) -> int:
+    places = max(0, *(-value.as_tuple().exponent for value in values))
+    return 10 ** places
+
+
+def _scale_decimal(value: Decimal, scale: int) -> int:
+    return int(value * scale)
+
+
+def _merge_congruences(
+    residue: int,
+    modulus: int,
+    other_residue: int,
+    other_modulus: int,
+) -> tuple[int, int]:
+    common = gcd(modulus, other_modulus)
+    difference = other_residue - residue
+    if difference % common:
+        raise ValueError("reserve target capabilities have no common representable SOC")
+    left = modulus // common
+    right = other_modulus // common
+    offset = 0 if right == 1 else (difference // common * pow(left, -1, right)) % right
+    combined = lcm(modulus, other_modulus)
+    return (residue + modulus * offset) % combined, combined
 
 
 async def _forecast_intervals(
@@ -1628,10 +1731,6 @@ def _actual_battery_energy(config: Any, solis_state: Any) -> Decimal | None:
         return None
 
 
-def _soc_ceiling(energy: Decimal, capacity: Decimal) -> Decimal:
-    return (energy * Decimal(FULL_SOC_PERCENT) / capacity).to_integral_value(rounding=ROUND_CEILING)
-
-
 def _minute_floor(value: datetime) -> datetime:
     return value.replace(second=0, microsecond=0)
 
@@ -1653,4 +1752,5 @@ __all__ = [
     "TimeInterval", "TrustedImportResult", "evaluate_cheap_windows",
     "evaluate_trusted_import_rates", "forecast_load", "parse_fused_export_rates",
     "parse_fused_import_rates", "plan_reserve", "prorated_energy", "build_plan",
+    "RESERVE_SOC_UNCERTAINTY_PERCENT", "_common_quantize_target",
 ]

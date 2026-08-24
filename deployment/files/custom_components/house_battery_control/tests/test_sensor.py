@@ -50,6 +50,9 @@ def snapshot() -> Snapshot:
         battery_energy_kwh=Decimal("17.68448"),
         reserve_target_energy_kwh=Decimal("12.345678"),
         reserve_balance_kwh=Decimal("5.338802"),
+        control_reserve_soc_percent=Decimal("17"),
+        control_reserve_energy_kwh=Decimal("5.466112"),
+        control_reserve_balance_kwh=Decimal("12.218368"),
         state_of_charge_percent=Decimal("55"),
         battery_power_kw=Decimal("-0.2"),
         last_healthy_at=NOW,
@@ -105,6 +108,15 @@ def test_sensors_report_disabled_snapshot(hass: HomeAssistant) -> None:
     assert energy.native_value == 17.68448
     assert reserve_target.native_value == 12.345678
     assert reserve_balance.native_value == 5.338802
+    assert reserve_target.extra_state_attributes == {
+        "control_reserve_soc_percent": 17.0,
+        "control_reserve_energy_kwh": 5.466112,
+    }
+    assert reserve_balance.extra_state_attributes == {
+        "control_reserve_soc_percent": 17.0,
+        "control_reserve_energy_kwh": 5.466112,
+        "control_reserve_balance_kwh": 12.218368,
+    }
     assert [sensor.unique_id for sensor in (energy, reserve_target, reserve_balance)] == [
         "house_battery_control_energy",
         "house_battery_control_reserve_target",

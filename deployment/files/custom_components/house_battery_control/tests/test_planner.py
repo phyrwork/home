@@ -18,6 +18,7 @@ from custom_components.house_battery_control.model import (
     SlotDirection,
     SlotOwner,
     StrategyAction,
+    ObservedCapability,
 )
 from custom_components.house_battery_control.planner import (
     AdjustedRateInterval,
@@ -41,6 +42,8 @@ from custom_components.house_battery_control.planner import (
     parse_fused_import_rates,
     plan_reserve,
     prorated_energy,
+    RESERVE_SOC_UNCERTAINTY_PERCENT,
+    _common_quantize_target,
     _charge_phase_end,
 )
 from custom_components.house_battery_control.solis import read_state
@@ -572,9 +575,13 @@ def _config():
     return integration_config.from_mapping(source)
 
 
-def _solis(*, soc: str = "55"):
+def _solis(*, soc: str = "55", cycle_target_step: str | None = None):
     parsed, states = solis_fixture()
     states[parsed.telemetry.state_of_charge_entity_id]["state"] = soc
+    if cycle_target_step is not None:
+        cycle_key = parsed.allocation(SlotOwner.FULL_SOC_CYCLING)[0]
+        cycle_target = parsed.direction(cycle_key).target_soc_entity_id
+        states[cycle_target]["attributes"]["step"] = cycle_target_step
     result = read_state(states, parsed, now=datetime(2026, 8, 22, 12, tzinfo=UTC))
     assert result.health is ControllerHealth.HEALTHY
     return result
@@ -592,6 +599,7 @@ async def _build(
     reserve_energy: Decimal = Decimal("5"),
     bonus: bool = False,
     charge_lease_deadline: datetime | None = None,
+    cycle_target_step: str | None = None,
 ):
     config = _config()
     for entity_id, value in (
@@ -641,7 +649,7 @@ async def _build(
         patch("custom_components.house_battery_control.planner.plan_reserve", return_value=ReservePlanResult(reserve_energy)),
     ):
         return await build_plan(
-            hass, config, _solis(soc=soc), now=NOW, cycle_state=state,
+            hass, config, _solis(soc=soc, cycle_target_step=cycle_target_step), now=NOW, cycle_state=state,
             cycle_deadline=deadline, charge_lease_deadline=charge_lease_deadline,
         )
 
@@ -665,6 +673,23 @@ async def test_build_plan_selects_all_three_actions_and_reports_reserve(hass) ->
     assert reserve.reserve_balance_kwh == Decimal("12.68448")
     assert reserve.maximum_charge_power_kw == Decimal("5.12")
     assert reserve.maximum_discharge_power_kw == Decimal("5.12")
+
+
+@pytest.mark.asyncio
+async def test_cycle_target_capability_is_in_common_reserve_quantization_domain(hass) -> None:
+    result = await _build(
+        hass,
+        cheap=True,
+        soc="100",
+        reserve_energy=Decimal("5.4649418"),
+        cycle_target_step="2",
+    )
+
+    assert result.action is StrategyAction.CYCLE_DISCHARGE
+    assert result.reserve_soc_percent == Decimal("18")
+    assert result.control_reserve_soc_percent == Decimal("18")
+    assert result.intent is not None
+    assert result.intent.segments[0].target_soc == Decimal("18")
 
 
 @pytest.mark.asyncio
@@ -741,6 +766,73 @@ async def test_build_plan_clamps_reserve_to_absolute_soc_floor(hass) -> None:
     result = await _build(hass, cheap=False, reserve_energy=Decimal("1"))
     assert result.reserve_soc_percent == Decimal("10")
     assert result.intent.segments[0].target_soc == Decimal("10")  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_reserve_export_uses_one_percent_soc_uncertainty_band(hass) -> None:
+    at_boundary = await _build(
+        hass, cheap=False, soc="18", reserve_energy=Decimal("5.4649418")
+    )
+    above_boundary = await _build(
+        hass, cheap=False, soc="19", reserve_energy=Decimal("5.4649418")
+    )
+
+    assert RESERVE_SOC_UNCERTAINTY_PERCENT == Decimal("1")
+    assert at_boundary.reserve_energy_kwh == Decimal("5.4649418")
+    assert at_boundary.control_reserve_soc_percent == Decimal("17")
+    assert at_boundary.control_reserve_energy_kwh == Decimal("5.466112")
+    assert at_boundary.action is StrategyAction.RESERVE_FOLLOW
+    assert at_boundary.intent is None
+    assert above_boundary.action is StrategyAction.RESERVE_DISCHARGE
+    assert above_boundary.intent is not None
+    assert above_boundary.intent.segments[0].target_soc == Decimal("17")
+
+
+def test_common_reserve_quantizer_preserves_decimal_capability_values() -> None:
+    capabilities = (
+        ObservedCapability(Decimal("10"), Decimal("0"), Decimal("100"), Decimal("0.5"), "%"),
+        ObservedCapability(Decimal("10"), Decimal("0"), Decimal("100"), Decimal("0.5"), "%"),
+    )
+    assert _common_quantize_target(Decimal("17.1"), capabilities) == Decimal("17.5")
+
+
+def test_common_reserve_quantizer_handles_tiny_compatible_steps() -> None:
+    capabilities = (
+        ObservedCapability(Decimal("10"), Decimal("0"), Decimal("100"), Decimal("0.0001"), "%"),
+        ObservedCapability(Decimal("10"), Decimal("0"), Decimal("100"), Decimal("0.5"), "%"),
+    )
+    assert _common_quantize_target(Decimal("17.10001"), capabilities) == Decimal("17.5")
+
+
+def test_common_reserve_quantizer_handles_dense_decimal_steps() -> None:
+    capabilities = (
+        ObservedCapability(Decimal("0"), Decimal("0"), Decimal("100"), Decimal("0.0001"), "%"),
+        ObservedCapability(Decimal("0"), Decimal("0"), Decimal("100"), Decimal("0.000100001"), "%"),
+    )
+    assert _common_quantize_target(Decimal("17.1234"), capabilities) == Decimal("20.0002")
+
+
+def test_common_reserve_quantizer_handles_offset_progressions() -> None:
+    capabilities = (
+        ObservedCapability(Decimal("1"), Decimal("1"), Decimal("20"), Decimal("2"), "%"),
+        ObservedCapability(Decimal("0"), Decimal("0"), Decimal("30"), Decimal("3"), "%"),
+    )
+    assert _common_quantize_target(Decimal("0"), capabilities) == Decimal("15")
+
+
+def test_common_reserve_quantizer_rejects_incompatible_or_out_of_range() -> None:
+    incompatible = (
+        ObservedCapability(Decimal("10"), Decimal("0"), Decimal("100"), Decimal("2"), "%"),
+        ObservedCapability(Decimal("11"), Decimal("1"), Decimal("100"), Decimal("2"), "%"),
+    )
+    with pytest.raises(ValueError, match="common"):
+        _common_quantize_target(Decimal("17"), incompatible)
+    out_of_range = (
+        ObservedCapability(Decimal("0"), Decimal("0"), Decimal("10"), Decimal("2"), "%"),
+        ObservedCapability(Decimal("0"), Decimal("0"), Decimal("8"), Decimal("3"), "%"),
+    )
+    with pytest.raises(ValueError, match="common"):
+        _common_quantize_target(Decimal("9"), out_of_range)
 
 
 @pytest.mark.asyncio

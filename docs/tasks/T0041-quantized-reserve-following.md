@@ -1,6 +1,13 @@
 # T0041 — Quantized reserve following and slot handover
 
-Status: Approved — implementation pending
+Status: Implemented locally — focused validation complete; live acceptance remains deployment-gated
+
+Local evidence: planner, Solis adapter/controller, sensor, configuration, and
+deployment mapping changes are implemented on
+`codex/t0041-quantized-reserve-following`. The focused integration suite passes
+(133 tests) and the deployment suite passes (53 tests) with frozen local
+dependencies and compiled component sources. Tests remain local; no live Home
+Assistant, SSH, token, or deployment access is used for this card.
 
 Depends on: T0001, T0003, T0026, T0030, T0039, T0040
 
@@ -13,8 +20,9 @@ remains manually commissioned and unmanaged.
 
 ## Objective
 
-Make reserve decisions in the same integer-SOC domain that Solis accepts, and
-hand the battery directly between forced slots and normal house-load following.
+Make reserve decisions in the same native SOC capability domain that Solis
+accepts, and hand the battery directly between forced slots and normal
+house-load following.
 
 Normal load following is a real controller action, `RESERVE_FOLLOW`, not idle:
 
@@ -35,9 +43,9 @@ controller repeatedly armed a 100 A discharge slot targeted at 17% and reported
 the house imported from the grid.
 
 The controller compared estimated battery energy with the exact model result,
-but the inverter could act only on the upward-rounded integer-SOC target. The
-approximately 1.17 Wh exact difference was not a physically actionable reserve
-surplus.
+but the inverter could act only on the upward-rounded native capability target.
+The approximately 1.17 Wh exact difference was not a physically actionable
+reserve surplus.
 
 The preceding transition also proved that stopping the forced discharge slot
 while Grid Peak Shaving was off left the battery idle rather than load-following.
@@ -54,8 +62,9 @@ Keep two deliberately distinct reserve values:
 
 Derive the control target by converting exact reserve energy to SOC and choosing
 the smallest supported percentage at or above it that is representable by both
-the Battery Reserve SOC capability and every configured reserve-export slot
-target capability. Clamp to the safety floor and the common capability range;
+the Battery Reserve SOC capability and every configured reserve-export and
+full-SOC-cycle discharge slot target capability. Clamp to the safety floor and
+the common capability range;
 report planning unavailable if no common value exists. Convert the resulting
 SOC back to energy. This common quantizer is the sole reserve control domain;
 the adapter must not independently round it to different values.
@@ -70,18 +79,19 @@ sensors; do not add entities. In the model, retain `reserve_energy_kwh` and
 
 Use a stateless boundary:
 
-- start reserve export only when reported SOC is strictly above the quantized
-  control target;
-- stop it at or below that target; and
+- Solis reports integer SOC, so define a one-percent uncertainty band;
+- start or continue reserve export only when reported SOC is strictly above
+  the quantized control target plus that one-percent band;
+- stop it at or below that boundary; and
 - keep the independent 10% safety stop stronger than either rule.
 
-Do not add durable hysteresis, restart state, or an assumed extra percentage
-point. Live verification may justify a separate follow-up change if integer SOC
-chatter is actually observed.
+Do not add durable hysteresis, restart state, or any further uncertainty beyond
+this one-percent reporting band. Live verification may justify a separate
+follow-up change if integer SOC telemetry chatter is actually observed.
 
-For the captured example, the control target is 17% / 5.466112 kWh. The exact
-1.17 Wh difference must not independently create a slot or a positive control
-balance.
+For the captured example, the control target is 17% / 5.466112 kWh. Reported
+SOC 18% follows reserve and reported SOC 19% permits export. The exact 1.17 Wh
+difference must not independently create a slot or any export action.
 
 ## Runtime states
 
@@ -89,6 +99,7 @@ The desired physical states are:
 
 | Action | Peak Shaving | Native slot |
 |---|---:|---|
+| `IDLE` (cheap window with no charge/cycle action) | off | none |
 | `RESERVE_FOLLOW` | on | none |
 | `RESERVE_DISCHARGE` / `CYCLE_DISCHARGE` | off | bounded discharge slot |
 | `CHEAP_CHARGE` | off | bounded charge slot |
@@ -134,13 +145,14 @@ debt may record one in-memory, best-effort Peak-Shaving-on handover attempt:
    pass without treating it as on or off;
 4. whether an attempted write fails, times out, or remains unknown, the next due
    pass stops the slot without another Peak Shaving prerequisite; and
-5. the absolute minimum-SOC stop and restart-created stop debt bypass even this
-   one attempt.
+5. only the absolute minimum-SOC stop bypasses this one attempt.
 
 This preserves one-write-per-pass and normally avoids an import gap, while a
 failed Peak Shaving write can delay an important stop by at most one bounded
-service attempt. The existing `StopDebt` may gain one boolean recording this
-ephemeral attempt; add no separate handover object or persistent state.
+service attempt. The existing `StopDebt` records one boolean for this ephemeral
+attempt, at most once for the active debt during one controller lifetime. A
+restart may repeat it; add no restart marker, separate handover object or
+persistent state.
 
 This single pre-stop write is the sole exception to T0030's generic rule that
 known stop debt is serviced before an ordinary start/control write. The debt
@@ -179,17 +191,22 @@ uses the normal forced-slot entry sequence.
 ## Restart and unavailable-input reconstruction
 
 Before planning, inspect every authoritative enabled configured direction. Its
-native local schedule is a physical bound available without tariff, forecast,
-telemetry, Peak Shaving, or remembered ownership. When authoritative
-inverter-local time is also available and the current minute lies outside that
-half-open schedule, create important stop debt. An unknown enable, schedule, or
-inverter clock is reread and never written speculatively; already-known stop
-debt remains active while any of those inputs is unavailable.
+date-less recurring native local schedule is only a physical bound on the
+programmed inverter direction. It cannot identify which occurrence was
+pre-armed after a restart, so the controller must not infer an occurrence
+expiry or create restart-only stop debt from the current minute. The inverter
+clock remains part of the persistent state read; unknown inputs are reread and
+never written speculatively;
+already-known stop debt remains active while any of those inputs is unavailable.
 
 An enabled slot still inside its native bound is preserved until valid current
 inputs can prove it conflicting, target-complete, lease-invalid or otherwise
-unwanted. Do not persist or resurrect the previous desired intent. This scan is
-also the restart reconstruction for memory-only expiry state.
+unwanted. Explicit UTC `_owned_expiry` and bonus-lease deadlines continue to
+drive their own stop obligations, while target and minimum-SOC safety stops and
+valid-plan conflict stops remain authoritative. Do not persist or resurrect the
+previous desired intent, and do not add a restart-only force-stop. Restart
+reconciliation may reconstruct an ephemeral lease only from a valid matching
+plan and live slot state.
 
 ## Failure, fail-safe and shutdown
 
@@ -197,8 +214,10 @@ also the restart reconstruction for memory-only expiry state.
   fail-safe trigger.
 - Existing bounded start retries, scoped T0040 escalation, and unbounded
   important-stop retries remain unchanged.
-- Target, safety, native-schedule and lease stops are important even when Peak
-  Shaving, tariff, forecast or telemetry inputs are unknown or unavailable.
+- Target, safety and lease stops are important even when Peak Shaving, tariff,
+  forecast or telemetry inputs are unknown or unavailable. A recurring native
+  schedule remains a physical inverter bound, not an inferred occurrence
+  expiry.
 - Existing fail-safe and shutdown continue to select and prove Self-Use and to
   reconcile observed enabled slots off. Self-Use is the physical fallback;
   Peak Shaving need not be normalized during fallback.
@@ -213,15 +232,16 @@ also the restart reconstruction for memory-only expiry state.
   `5.466112 kWh` as the control target.
 - Prove every reserve eligibility, completion and native target comparison uses
   the quantized domain.
-- At reported SOC 17% with target 17%, plan `RESERVE_FOLLOW` and no discharge
-  slot; above 17%, permit reserve export.
+- With target 17%, reported SOC 18% plans `RESERVE_FOLLOW` and no discharge
+  slot; reported SOC 19% permits reserve export.
 - Prove a raw difference smaller than one SOC step cannot create a phantom
   reserve action.
 - Preserve the independent 10% safety floor.
 - Distinguish exact and control targets/balances in diagnostics without adding
   helper entities.
 - Prove the common quantizer across Battery Reserve SOC and every configured
-  reserve-export target capability, including incompatible-capability failure.
+  reserve-export and full-SOC-cycle discharge target capability, including
+  incompatible-capability failure and no adapter re-round mismatch.
 
 ### Solis adapter and controller
 
@@ -235,9 +255,11 @@ also the restart reconstruction for memory-only expiry state.
   only the handover.
 - Unknown Peak Shaving state blocks ordinary starts.
 - Direct direction changes follow the four-phase order and never overlap slots.
-- Restart at every handover phase reconstructs the next action from live state.
-- Restart or input loss stops an enabled direction outside its authoritative
-  half-open native schedule without relying on remembered ownership/expiry.
+- The pure full-sequence adapter test is restart-at-each-phase evidence: each
+  next action is reconstructed from live state without transition memory.
+- Restart and input loss do not infer occurrence expiry from a date-less
+  recurring native schedule; explicit UTC ownership/lease, target, minimum-SOC
+  and valid-plan conflict evidence remain authoritative.
 - CAS conflicts, write timeouts and provisional readback preserve single-writer
   behavior.
 - Existing planner, overlap, retry, fail-safe, shutdown, bonus-lease and

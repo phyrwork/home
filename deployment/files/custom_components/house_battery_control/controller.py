@@ -28,7 +28,7 @@ from .model import (
     StorageMode,
     StrategyAction,
 )
-from .planner import Plan, build_plan
+from .planner import RESERVE_SOC_UNCERTAINTY_PERCENT, Plan, build_plan
 from .solis import (
     SlotKey,
     SolisAdapter,
@@ -72,6 +72,9 @@ class Snapshot:
     battery_energy_kwh: Decimal | None = None
     reserve_target_energy_kwh: Decimal | None = None
     reserve_balance_kwh: Decimal | None = None
+    control_reserve_soc_percent: Decimal | None = None
+    control_reserve_energy_kwh: Decimal | None = None
+    control_reserve_balance_kwh: Decimal | None = None
     state_of_charge_percent: Decimal | None = None
     battery_power_kw: Decimal | None = None
     current_cheap_window: str | None = None
@@ -95,6 +98,7 @@ class StopDebt:
     ambiguous: bool = False
     first_seen: float = 0.0
     fail_safe_deadline: float = 0.0
+    peak_shaving_handover_attempted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +341,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             observation,
             plan.intent,
             reserve_soc_percent=plan.reserve_soc_percent,
+            peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
         )
         if change is not None:
             generation = self._start_generation(plan, change)
@@ -346,6 +351,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             observation,
             plan.intent,
             reserve_soc_percent=plan.reserve_soc_percent,
+            peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
         ):
             self._start_retry = None
             self._degrade(
@@ -393,14 +399,18 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                     and direction.key.direction is SlotDirection.DISCHARGE
                     and soc <= Decimal(MINIMUM_SOC_PERCENT)
                 ):
-                    self._add_stop(direction.key, now, monotonic)
+                    self._add_stop(direction.key, now, monotonic, bypass_peak_handover=True)
                 target = None if direction.target_soc is None else direction.target_soc.current_value
                 if soc is None or target is None:
                     continue
                 if direction.key.direction is SlotDirection.CHARGE and soc >= target:
                     self._add_stop(direction.key, now, monotonic)
-                if direction.key.direction is SlotDirection.DISCHARGE and soc <= target:
-                    self._add_stop(direction.key, now, monotonic)
+                if direction.key.direction is SlotDirection.DISCHARGE:
+                    boundary = target
+                    if direction.owner is SlotOwner.RESERVE_EXPORT:
+                        boundary += RESERVE_SOC_UNCERTAINTY_PERCENT
+                    if soc <= boundary:
+                        self._add_stop(direction.key, now, monotonic)
 
     def _bonus_dispatch_is_off(self) -> bool:
         """Return true only for an explicitly reported dispatch ``off``."""
@@ -429,7 +439,14 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             self._charge_lease_deadline = None
             self._bonus_lease_fingerprint = None
 
-    def _add_stop(self, key: SlotKey, now: datetime, monotonic: float) -> None:
+    def _add_stop(
+        self,
+        key: SlotKey,
+        now: datetime,
+        monotonic: float,
+        *,
+        bypass_peak_handover: bool = False,
+    ) -> None:
         self.config.solis.direction(key)
         if key not in self._stop_debts:
             self._stop_debts[key] = StopDebt(
@@ -441,6 +458,12 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 fail_safe_deadline=(
                     monotonic + IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds()
                 ),
+                peak_shaving_handover_attempted=bypass_peak_handover,
+            )
+        elif bypass_peak_handover and not self._stop_debts[key].peak_shaving_handover_attempted:
+            self._stop_debts[key] = replace(
+                self._stop_debts[key],
+                peak_shaving_handover_attempted=True,
             )
 
     def _due_stop(self, monotonic: float) -> StopDebt | None:
@@ -476,6 +499,43 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         if direction.enabled is False and not debt.ambiguous:
             self._stop_debts.pop(debt.key, None)
             self._dirty = True
+            return
+        # Forced-slot exits perform at most one ephemeral Peak Shaving-on
+        # attempt during this controller lifetime for the active debt. A
+        # restart may repeat it; no restart marker or persistence is needed.
+        # A failed/unknown attempt is not a prerequisite for the next due
+        # pass, so the stop cannot be held hostage by this optional handover.
+        if (
+            not debt.peak_shaving_handover_attempted
+            and not self._fail_safe_latched
+            and direction.owner is not None
+            and not (
+                observation.telemetry is not None
+                and observation.telemetry.state_of_charge_percent <= Decimal(MINIMUM_SOC_PERCENT)
+            )
+            and observation.grid_peak_shaving in (None, False)
+        ):
+            debt = replace(debt, peak_shaving_handover_attempted=True)
+            self._stop_debts[debt.key] = debt
+            if (
+                observation.grid_peak_shaving is False
+                and observation.revision(self.config.solis.persistent.grid_peak_shaving_entity_id) is not None
+            ):
+                try:
+                    await self.solis.set_peak_shaving(
+                        True,
+                        deadline=self._monotonic() + WRITE_DEADLINE.total_seconds(),
+                    )
+                except asyncio.CancelledError:
+                    self._dirty = True
+                    raise
+            self._dirty = True
+            self._degrade(
+                now,
+                self._last_plan,
+                "Peak Shaving handover attempted before important slot stop",
+                observation,
+            )
             return
         self._degrade(
             now,
@@ -822,6 +882,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             plan.action,
             plan.intent,
             plan.reserve_soc_percent,
+            plan.control_reserve_soc_percent,
             plan.cycle_deadline,
             plan.charge_lease_deadline,
             tuple(source_tokens),
@@ -880,6 +941,9 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             battery_energy_kwh=actual,
             reserve_target_energy_kwh=None if plan is None else plan.reserve_energy_kwh,
             reserve_balance_kwh=None if plan is None else plan.reserve_balance_kwh,
+            control_reserve_soc_percent=None if plan is None else plan.control_reserve_soc_percent,
+            control_reserve_energy_kwh=None if plan is None else plan.control_reserve_energy_kwh,
+            control_reserve_balance_kwh=None if plan is None else plan.control_reserve_balance_kwh,
             state_of_charge_percent=None if telemetry is None else telemetry.state_of_charge_percent,
             battery_power_kw=None if telemetry is None else telemetry.battery_power_kw,
             current_cheap_window=_window_text(None if plan is None else plan.current_cheap_window),
@@ -956,6 +1020,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             solis.persistent.inverter_time_entity_id,
             solis.protection.battery_reserve_entity_id,
             solis.protection.battery_reserve_soc_entity_id,
+            solis.persistent.grid_peak_shaving_entity_id,
             solis.capability.battery_max_charge_current_entity_id,
             solis.capability.battery_max_discharge_current_entity_id,
         ]
@@ -1200,6 +1265,7 @@ def _instant(value: datetime) -> datetime:
 def _plan_reason(plan: Plan) -> str:
     return {
         StrategyAction.IDLE: "no eligible strategy action",
+        StrategyAction.RESERVE_FOLLOW: "follow house load at the quantized reserve",
         StrategyAction.CHEAP_CHARGE: "charge during trusted cheap window",
         StrategyAction.RESERVE_DISCHARGE: "export toward dynamic reserve",
         StrategyAction.CYCLE_DISCHARGE: "create profitable full-SOC headroom",
