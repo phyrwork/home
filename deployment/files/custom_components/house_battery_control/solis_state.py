@@ -61,6 +61,7 @@ class SolisPersistentState:
 
     storage_mode: str
     inverter_time: datetime
+    grid_peak_shaving: bool
     battery_reserve: bool
     battery_reserve_soc: ObservedCapability
 

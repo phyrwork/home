@@ -170,6 +170,28 @@ class HomeAssistantWriter:
             raise ValueError(f"entity state is unavailable or invalid: {entity_id}")
         return StatePrecondition(entity_id, raw, updated, _context_id(state))
 
+    def capture_number_precondition(
+        self, entity_id: str
+    ) -> tuple[StatePrecondition, ObservedCapability]:
+        """Capture one revision and its number capability from the same state."""
+
+        state = self._get(entity_id)
+        raw = _state_value(state)
+        updated = _updated(state)
+        capability = self._metadata(state)
+        if (
+            state is None
+            or raw is None
+            or raw in _UNKNOWN
+            or updated is None
+            or capability is None
+        ):
+            raise ValueError(f"number entity state is unavailable or invalid: {entity_id}")
+        return (
+            StatePrecondition(entity_id, raw, updated, _context_id(state)),
+            capability,
+        )
+
     def _get(self, entity_id: str) -> object:
         getter = getattr(self.hass, "get_state", None)
         if callable(getter):

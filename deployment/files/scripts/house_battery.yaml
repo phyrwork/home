@@ -10,6 +10,7 @@ house_battery_fail_safe:
     - variables:
         guard_entity_id: input_boolean.house_battery_control_disable
         storage_mode_entity_id: select.garage_inverter_control_storage_mode
+        grid_peak_shaving_entity_id: switch.garage_inverter_control_grid_peak_shaving
         battery_reserve_entity_id: switch.garage_inverter_control_battery_reserve
         slot_entity_ids:
           - switch.garage_inverter_control_slot1_charge
@@ -24,6 +25,32 @@ house_battery_fail_safe:
           - switch.garage_inverter_control_slot5_discharge
           - switch.garage_inverter_control_slot6_charge
           - switch.garage_inverter_control_slot6_discharge
+        slot_time_entity_ids:
+          - text.garage_inverter_control_slot1_charge_time
+          - text.garage_inverter_control_slot1_discharge_time
+          - text.garage_inverter_control_slot2_charge_time
+          - text.garage_inverter_control_slot2_discharge_time
+          - text.garage_inverter_control_slot3_charge_time
+          - text.garage_inverter_control_slot3_discharge_time
+          - text.garage_inverter_control_slot4_charge_time
+          - text.garage_inverter_control_slot4_discharge_time
+          - text.garage_inverter_control_slot5_charge_time
+          - text.garage_inverter_control_slot5_discharge_time
+          - text.garage_inverter_control_slot6_charge_time
+          - text.garage_inverter_control_slot6_discharge_time
+        slot_current_entity_ids:
+          - number.garage_inverter_control_slot1_charge_current
+          - number.garage_inverter_control_slot1_discharge_current
+          - number.garage_inverter_control_slot2_charge_current
+          - number.garage_inverter_control_slot2_discharge_current
+          - number.garage_inverter_control_slot3_charge_current
+          - number.garage_inverter_control_slot3_discharge_current
+          - number.garage_inverter_control_slot4_charge_current
+          - number.garage_inverter_control_slot4_discharge_current
+          - number.garage_inverter_control_slot5_charge_current
+          - number.garage_inverter_control_slot5_discharge_current
+          - number.garage_inverter_control_slot6_charge_current
+          - number.garage_inverter_control_slot6_discharge_current
         notification_id: house_battery_watchdog
 
     # Never issue Solis writes unless the local guard has been freshly proved.
@@ -62,6 +89,43 @@ house_battery_fail_safe:
                   target:
                     entity_id: "{{ repeat.item }}"
                   continue_on_error: true
+          - repeat:
+              for_each: "{{ slot_time_entity_ids }}"
+              sequence:
+                - choose:
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ states(repeat.item) != '00:00-00:00' }}"
+                      sequence:
+                        - service: text.set_value
+                          target:
+                            entity_id: "{{ repeat.item }}"
+                          data:
+                            value: "00:00-00:00"
+                          continue_on_error: true
+          - repeat:
+              for_each: "{{ slot_current_entity_ids }}"
+              sequence:
+                - choose:
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ states(repeat.item) | float(default=-1) != 0 }}"
+                      sequence:
+                        - service: number.set_value
+                          target:
+                            entity_id: "{{ repeat.item }}"
+                          data:
+                            value: 0
+                          continue_on_error: true
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ states(grid_peak_shaving_entity_id) != 'on' }}"
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: "{{ grid_peak_shaving_entity_id }}"
+                    continue_on_error: true
           - choose:
               - conditions:
                   - condition: template
@@ -85,10 +149,19 @@ house_battery_fail_safe:
           - wait_template: >-
               {{ states(guard_entity_id) == 'on'
                  and states(storage_mode_entity_id) == 'Self-Use'
+                 and states(grid_peak_shaving_entity_id) == 'on'
                  and states(battery_reserve_entity_id) == 'off'
                  and (expand(slot_entity_ids) | selectattr('state', 'eq', 'off')
                       | list | length)
-                    == (slot_entity_ids | length) }}
+                    == (slot_entity_ids | length)
+                 and (expand(slot_time_entity_ids)
+                      | selectattr('state', 'eq', '00:00-00:00')
+                      | list | length)
+                    == (slot_time_entity_ids | length)
+                 and (expand(slot_current_entity_ids)
+                      | map(attribute='state') | map('float', default=-1)
+                      | select('eq', 0) | list | length)
+                    == (slot_current_entity_ids | length) }}
             timeout:
               seconds: 10
             continue_on_timeout: true
@@ -98,10 +171,19 @@ house_battery_fail_safe:
                     value_template: >-
                       {{ states(guard_entity_id) == 'on'
                          and states(storage_mode_entity_id) == 'Self-Use'
+                         and states(grid_peak_shaving_entity_id) == 'on'
                          and states(battery_reserve_entity_id) == 'off'
                          and (expand(slot_entity_ids) | selectattr('state', 'eq', 'off')
                               | list | length)
-                            == (slot_entity_ids | length) }}
+                            == (slot_entity_ids | length)
+                         and (expand(slot_time_entity_ids)
+                              | selectattr('state', 'eq', '00:00-00:00')
+                              | list | length)
+                            == (slot_time_entity_ids | length)
+                         and (expand(slot_current_entity_ids)
+                              | map(attribute='state') | map('float', default=-1)
+                              | select('eq', 0) | list | length)
+                            == (slot_current_entity_ids | length) }}
                 sequence:
                   - stop: "The inverter safe state is proven"
 
@@ -111,6 +193,7 @@ house_battery_fail_safe:
         title: "House battery fail-safe is not proven"
         message: >-
           The watchdog asserted the control guard and attempted two bounded
-          reconciliation passes, but could not prove Self-Use with all slots
-          off. Inspect the Solis controls before enabling dynamic control.
+          reconciliation passes, but could not prove Self-Use with Peak
+          Shaving on and all slots off and normalized. Inspect the Solis
+          controls before enabling dynamic control.
       continue_on_error: true

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, tzinfo
 from decimal import Decimal, ROUND_CEILING
 
-from .contracts import ControllerHealth, SlotIntent, StorageMode
+from .contracts import ControllerHealth, SlotDirection, SlotIntent, StorageMode
 from .domain_constants import MINIMUM_SOC_PERCENT
 from .ha_writer import HomeAssistantWriter
 from .solis_actuator import (
@@ -94,6 +94,7 @@ class SolisPolicyActuator:
             async with self.writer.transaction(deadline=deadline) as transaction:
                 for request in (
                     SelectWriteRequest(self.writer.capture_precondition(persistent.storage_mode_entity_id), StorageMode.SELF_USE.value),
+                    SwitchWriteRequest(self.writer.capture_precondition(persistent.grid_peak_shaving_entity_id), True),
                     SwitchWriteRequest(self.writer.capture_precondition(protection.battery_reserve_entity_id), False),
                 ):
                     # Continue through every persistent control after a normal
@@ -282,6 +283,18 @@ class SolisPolicyActuator:
                     return await self._apply_safe_baseline_attempts_locked(
                         deadline=deadline
                     )
+                if intent is not None:
+                    preflight = self.slots._preflight(intent, observation, now)
+                    if isinstance(preflight, str):
+                        fallback = await self._apply_safe_baseline_attempts_locked(
+                            deadline=deadline
+                        )
+                        return PolicyActuationResult(
+                            False,
+                            fallback.safe,
+                            f"healthy actuation rejected before mutation: {preflight}",
+                            fallback.results,
+                        )
                 snapshot = observation.snapshot
                 reserve_capability = snapshot.persistent.battery_reserve_soc
                 reserve, reserve_error = self._reserve_target(reserve_soc_percent, reserve_capability)
@@ -297,10 +310,14 @@ class SolisPolicyActuator:
                     )
                 persistent = self.config.persistent
                 protection = self.config.protection
+                peak_shaving = (
+                    intent is None or intent.direction is SlotDirection.DISCHARGE
+                )
                 async with self.writer.transaction(deadline=deadline) as transaction:
                     for request in (
                         SelectWriteRequest(self.writer.capture_precondition(persistent.storage_mode_entity_id), StorageMode.FEED_IN_PRIORITY.value),
                         SwitchWriteRequest(self.writer.capture_precondition(persistent.allow_grid_charging_entity_id), True),
+                        SwitchWriteRequest(self.writer.capture_precondition(persistent.grid_peak_shaving_entity_id), peak_shaving),
                         NumberWriteRequest(
                             self.writer.capture_precondition(protection.battery_reserve_soc_entity_id),
                             reserve,

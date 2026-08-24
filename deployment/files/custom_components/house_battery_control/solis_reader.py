@@ -218,6 +218,7 @@ class SolisStateReader:
         # unavailable permission observation must fail closed; its value is
         # consumed by the policy through the configured entity directly.
         allow_grid_charging = self._switch(persistent.allow_grid_charging_entity_id)
+        grid_peak_shaving = self._switch(persistent.grid_peak_shaving_entity_id)
 
         inverter_time_id = persistent.inverter_time_entity_id
         inverter_time_state = self._state(inverter_time_id)
@@ -249,6 +250,7 @@ class SolisStateReader:
             or any(
                 value is None
                 for value in (
+                    grid_peak_shaving,
                     battery_reserve,
                     reserve_soc,
                 )
@@ -259,6 +261,7 @@ class SolisStateReader:
         return SolisPersistentState(
             storage_mode=storage_mode,
             inverter_time=inverter_time,
+            grid_peak_shaving=grid_peak_shaving,  # type: ignore[arg-type]
             battery_reserve=battery_reserve,  # type: ignore[arg-type]
             battery_reserve_soc=reserve_soc,  # type: ignore[arg-type]
         )

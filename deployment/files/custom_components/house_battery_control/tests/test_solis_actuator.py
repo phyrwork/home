@@ -12,7 +12,7 @@ import yaml
 from custom_components.house_battery_control import config
 from custom_components.house_battery_control.contracts import SlotDirection, SlotIntent, SlotOwner
 from custom_components.house_battery_control.ha_writer import HomeAssistantWriter
-from custom_components.house_battery_control.solis_actuator import DisableAllResult, SlotActuationStatus, SolisSlotActuator, encode_schedule
+from custom_components.house_battery_control.solis_actuator import DisableAllResult, SlotActuationStatus, SolisSlotActuator, _schedules_do_not_overlap, encode_schedule
 from custom_components.house_battery_control.solis_reader import read_solis_state
 
 
@@ -81,6 +81,7 @@ def fixture(*, now=NOW):
     }
     for entity_id in (
         solis.persistent.allow_grid_charging_entity_id,
+        solis.persistent.grid_peak_shaving_entity_id,
     ):
         states[entity_id] = _state("on")
     states[solis.protection.battery_reserve_entity_id] = _state("off")
@@ -167,6 +168,41 @@ async def test_disable_all_turns_off_every_enabled_direction():
     assert result.safe
     assert len([call for call in ha.calls if call[1] == "turn_off"]) == 12
     assert all(ha.states[entity_id]["state"] == "off" for entity_id in enable_ids(controller))
+
+
+@pytest.mark.asyncio
+async def test_disable_all_normalizes_time_and_current_after_switches():
+    controller, ha, _observation = actuator()
+    target_soc_values = {}
+    for slot in controller.config.slots:
+        for direction in (slot.charge, slot.discharge):
+            ha.states[direction.enable_entity_id]["state"] = "on"
+            ha.states[direction.time_entity_id]["state"] = "01:00-02:00"
+            ha.states[direction.current_entity_id]["state"] = "5"
+            target_soc_values[direction.target_soc_entity_id] = ha.states[
+                direction.target_soc_entity_id
+            ]["state"]
+
+    result = await controller.async_disable_all()
+
+    assert result.safe
+    calls = [call[2]["entity_id"] for call in ha.calls]
+    last_switch = max(calls.index(entity_id) for entity_id in enable_ids(controller))
+    first_normalization = min(
+        calls.index(direction.time_entity_id)
+        for slot in controller.config.slots
+        for direction in (slot.charge, slot.discharge)
+    )
+    assert last_switch < first_normalization
+    for slot in controller.config.slots:
+        for direction in (slot.charge, slot.discharge):
+            assert ha.states[direction.enable_entity_id]["state"] == "off"
+            assert ha.states[direction.time_entity_id]["state"] == "00:00-00:00"
+            assert Decimal(ha.states[direction.current_entity_id]["state"]) == 0
+            assert (
+                ha.states[direction.target_soc_entity_id]["state"]
+                == target_soc_values[direction.target_soc_entity_id]
+            )
 
 
 @pytest.mark.asyncio
@@ -414,8 +450,9 @@ async def test_changed_intent_still_replaces_existing_slot_transactionally():
     )
 
     assert result.status is SlotActuationStatus.APPLIED
-    assert not any(call[1] in {"turn_on", "turn_off"} for call in ha.calls)
-    assert [call[0:2] for call in ha.calls] == [("number", "set_value")]
+    services = [call[1] for call in ha.calls]
+    assert services[0] == "turn_off"
+    assert services[-1] == "turn_on"
     target = controller.config.slots[0].charge
     assert Decimal(ha.states[target.current_entity_id]["state"]) == Decimal("2")
     assert ha.states[target.enable_entity_id]["state"] == "on"
@@ -425,12 +462,61 @@ async def test_changed_intent_still_replaces_existing_slot_transactionally():
 async def test_failure_cleans_up_all_slot_switches():
     controller, ha, observation = actuator()
     target = controller.config.slots[0].charge
-    ha.fail_entity = target.current_entity_id
+    ha.fail_entity = target.target_soc_entity_id
     ha.states[controller.config.slots[3].charge.enable_entity_id]["state"] = "on"
-    result = await controller.async_apply_intent(intent(current=Decimal("2")), observation, now=NOW)
+    result = await controller.async_apply_intent(
+        intent(current=Decimal("2"), target_soc=Decimal("60")),
+        observation,
+        now=NOW,
+    )
     assert result.status is SlotActuationStatus.FAILED_SAFE
     assert all(ha.states[entity_id]["state"] == "off" for entity_id in enable_ids(controller))
 
 
 def test_schedule_encoding_supports_cross_midnight_intervals():
     assert encode_schedule(NOW.replace(hour=23), NOW + timedelta(hours=13), timezone.utc) == "23:00-01:00"
+
+
+def test_schedule_overlap_allows_adjacency():
+    assert _schedules_do_not_overlap(
+        ("01:00-02:00", "02:00-03:00") + ("00:00-00:00",) * 10
+    )
+
+
+def test_schedule_overlap_rejects_simple_and_cross_direction_overlap():
+    assert not _schedules_do_not_overlap(
+        ("01:00-03:00", "02:00-04:00") + ("00:00-00:00",) * 10
+    )
+
+
+def test_schedule_overlap_handles_cross_midnight_intervals():
+    assert not _schedules_do_not_overlap(
+        ("23:00-01:00", "00:30-02:00") + ("00:00-00:00",) * 10
+    )
+    assert _schedules_do_not_overlap(
+        ("23:00-01:00", "01:00-02:00") + ("00:00-00:00",) * 10
+    )
+
+
+@pytest.mark.asyncio
+async def test_overlap_validation_precedes_any_service_write(monkeypatch):
+    controller, ha, _observation = actuator()
+    for slot in controller.config.slots:
+        for direction in (slot.charge, slot.discharge):
+            ha.states[direction.current_entity_id]["state"] = "0"
+    observation = read_solis_state(controller.config, ha.states, NOW)
+    seen = []
+
+    def reject(schedules):
+        seen.append(schedules)
+        return False
+
+    monkeypatch.setattr(
+        "custom_components.house_battery_control.solis_actuator._schedules_do_not_overlap",
+        reject,
+    )
+    result = await controller.async_apply_intent(intent(), observation, now=NOW)
+
+    assert result.status is SlotActuationStatus.FAILED_SAFE
+    assert len(seen[0]) == 12
+    assert ha.calls == []

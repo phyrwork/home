@@ -1,8 +1,9 @@
 # One-time SolisCloud commissioning is complete: EMS is disabled for this plant
 # so cloud dispatch cannot overwrite Home Assistant inverter controls. Native
-# Grid Peak Shaving remains enabled at 100 W; it is compatible with scheduled
-# forced discharge/export. Native Grid Feed in Power Limit is commissioned to
-# 9900 W / 52 A (the inverter maxima), otherwise a 0 W / 0 A limit blocks export.
+# Grid Peak Shaving's limit is commissioned at 100 W; runtime disables its
+# switch for forced charging and enables it otherwise. Native Grid Feed in
+# Power Limit is commissioned to 9900 W / 52 A (the inverter maxima), otherwise
+# a 0 W / 0 A limit blocks export.
 dynamic_control_enabled: true
 
 battery:
@@ -35,6 +36,7 @@ solis:
   persistent:
     storage_mode_entity_id: select.garage_inverter_control_storage_mode
     allow_grid_charging_entity_id: switch.garage_inverter_control_allow_grid_charging
+    grid_peak_shaving_entity_id: switch.garage_inverter_control_grid_peak_shaving
     inverter_time_entity_id: datetime.garage_inverter_control_inverter_time
 
   protection:
@@ -45,12 +47,11 @@ solis:
     battery_max_charge_current_entity_id: number.garage_inverter_control_battery_max_charge_current
     battery_max_discharge_current_entity_id: number.garage_inverter_control_battery_max_discharge_current
 
-  # One-time native SolisCloud commissioning: Grid Peak Shaving is enabled and
-  # its maximum grid power is 100 W (0.1 kW). Grid Feed in Power Limit is
-  # enabled at the native maxima (9900 W / 52 A). The HA switches for these
-  # shared settings are non-authoritative/unavailable and are intentionally not
-  # runtime-managed. Runtime intent times are UTC instants; the configured
-  # inverter IANA timezone is authoritative at the Solis schedule boundary.
+  # Grid Peak Shaving's numeric maximum grid power is commissioned at 100 W;
+  # runtime owns only its enable switch. Grid Feed in Power Limit is enabled at
+  # the native maxima (9900 W / 52 A). Runtime intent times are UTC instants;
+  # the configured inverter IANA timezone is authoritative at the schedule
+  # boundary.
 
   # Every physical slot is mapped for reconciliation and cleanup.  Reserved
   # directions are intentionally not enabled by the MVP controller.

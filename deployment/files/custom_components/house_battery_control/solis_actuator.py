@@ -37,6 +37,8 @@ def _remaining_deadline(deadline: float) -> float:
 
 MAXIMUM_INVERTER_CLOCK_SKEW = timedelta(minutes=1)
 CANCELLATION_CLEANUP_TIMEOUT = timedelta(seconds=60)
+_DISABLED_TIME = "00:00-00:00"
+_DISABLED_CURRENT = Decimal("0")
 
 _TIME_TEXT = re.compile(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
 
@@ -175,6 +177,36 @@ def encode_schedule(start: datetime, end: datetime, inverter_timezone: tzinfo) -
     return text
 
 
+def _schedules_do_not_overlap(schedules: tuple[str, ...]) -> bool:
+    """Validate half-open wall-clock intervals on one repeating day."""
+
+    if len(schedules) != 12:
+        return False
+    occupied: set[int] = set()
+    for schedule in schedules:
+        if _TIME_TEXT.fullmatch(schedule) is None:
+            return False
+        start_text, end_text = schedule.split("-")
+        start_hour, start_minute = (int(value) for value in start_text.split(":"))
+        end_hour, end_minute = (int(value) for value in end_text.split(":"))
+        start = start_hour * 60 + start_minute
+        end = end_hour * 60 + end_minute
+        if start == end:
+            if schedule == _DISABLED_TIME:
+                continue
+            return False
+        minutes = (
+            range(start, end)
+            if start < end
+            else (*range(start, 24 * 60), *range(0, end))
+        )
+        interval = set(minutes)
+        if occupied & interval:
+            return False
+        occupied.update(interval)
+    return True
+
+
 class SolisSlotActuator:
     """Apply exactly one active Solis slot intent under a fail-closed gate."""
 
@@ -255,6 +287,14 @@ class SolisSlotActuator:
             schedule = encode_schedule(intent.start, intent.end, self.inverter_timezone)
         except ValueError as exc:
             return str(exc)
+        prospective = tuple(
+            schedule
+            if physical_slot == intent.physical_slot and direction is intent.direction
+            else _DISABLED_TIME
+            for _config, physical_slot, direction in self._directions()
+        )
+        if not _schedules_do_not_overlap(prospective):
+            return "prospective Solis schedule intervals overlap or are invalid"
         effective_end = min(intent.end, intent.expiry)
         if not intent.start <= now < effective_end:
             return "slot intent is not active"
@@ -353,24 +393,31 @@ class SolisSlotActuator:
             observed_schedule_is_active
             and target.current.current_value == intent.current
             and target.target_soc.current_value == intent.target_soc
+            and self._disabled_directions_are_normalized(
+                snapshot, intent.physical_slot, intent.direction
+            )
             and self._guard_off()
         )
 
     @staticmethod
-    def _only_target_is_enabled(
+    def _disabled_directions_are_normalized(
         snapshot: SolisStateSnapshot,
-        physical_slot: int,
-        direction: SlotDirection,
+        target_slot: int,
+        target_direction: SlotDirection,
     ) -> bool:
-        """Return whether the target is already the sole active direction."""
-
-        enabled = [
-            (slot.physical_slot, state.direction)
+        return all(
+            (
+                slot.physical_slot == target_slot
+                and state.direction is target_direction
+            )
+            or (
+                not state.enabled
+                and state.time_text == _DISABLED_TIME
+                and state.current.current_value == _DISABLED_CURRENT
+            )
             for slot in snapshot.slots
             for state in (slot.charge, slot.discharge)
-            if state.enabled
-        ]
-        return enabled == [(physical_slot, direction)]
+        )
 
     async def _write_recorded(
         self,
@@ -430,7 +477,70 @@ class SolisSlotActuator:
                     continue
             elif observed.state != "off":
                 results.append(_result_failure(direction.enable_entity_id, "enable state is invalid"))
-        return self._prove_all_off()
+        if not self._prove_all_off():
+            return False
+        for direction, _physical_slot, _kind in self._directions():
+            if deadline is not None and _remaining_deadline(deadline) <= 0:
+                results.append(_result_failure(direction.time_entity_id, "fail-safe deadline exhausted"))
+                return False
+            try:
+                time_precondition = self._require_verified_precondition(
+                    direction.time_entity_id
+                )
+                if time_precondition.state != _DISABLED_TIME:
+                    await self._write_recorded(
+                        transaction,
+                        TextWriteRequest(
+                            time_precondition,
+                            _DISABLED_TIME,
+                            text_validator=lambda value: value == _DISABLED_TIME,
+                        ),
+                        results,
+                        deadline=deadline,
+                    )
+                current_precondition, capability = (
+                    self.writer.capture_number_precondition(
+                        direction.current_entity_id
+                    )
+                )
+                if Decimal(current_precondition.state) != _DISABLED_CURRENT:
+                    await self._write_recorded(
+                        transaction,
+                        NumberWriteRequest(
+                            current_precondition,
+                            _DISABLED_CURRENT,
+                            capability=capability,
+                        ),
+                        results,
+                        deadline=deadline,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                results.append(
+                    _result_failure(
+                        direction.current_entity_id,
+                        f"disabled slot normalization failed: {exc}",
+                    )
+                )
+        return self._prove_all_off() and self._prove_all_normalized()
+
+    def _prove_all_normalized(self) -> bool:
+        for direction, _physical_slot, _kind in self._directions():
+            time_state = self._verified_precondition(direction.time_entity_id)
+            current_state = self._verified_precondition(direction.current_entity_id)
+            if (
+                time_state is None
+                or time_state.state != _DISABLED_TIME
+                or current_state is None
+            ):
+                return False
+            try:
+                if Decimal(current_state.state) != _DISABLED_CURRENT:
+                    return False
+            except (ArithmeticError, ValueError):
+                return False
+        return True
 
     async def _disable_all_once(
         self,
@@ -550,17 +660,10 @@ class SolisSlotActuator:
                     message="slot already enabled and Home Assistant readback verified",
                 )
             async with self.writer.transaction(deadline=deadline) as transaction:
-                preserve_target = (
-                    observation.snapshot is not None
-                    and target_state.enabled
-                    and self._only_target_is_enabled(
-                        observation.snapshot, intent.physical_slot, intent.direction
-                    )
-                )
                 # All twelve switch preconditions are captured immediately
                 # before their individual CAS writes.
                 result_count = len(results)
-                proven = preserve_target or await self._disable_all_locked(
+                proven = await self._disable_all_locked(
                     transaction, results, deadline=deadline
                 )
                 disable_results = results[result_count:]
@@ -571,29 +674,28 @@ class SolisSlotActuator:
                     schedule,
                     text_validator=lambda value: _TIME_TEXT.fullmatch(value) is not None and value.split("-")[0] != value.split("-")[1],
                 )
+                current_precondition, current_capability = (
+                    self.writer.capture_number_precondition(
+                        target_config.current_entity_id
+                    )
+                )
                 current_request = NumberWriteRequest(
-                    self._require_verified_precondition(target_config.current_entity_id),
+                    current_precondition,
                     intent.current,
-                    capability=target_state.current,
+                    capability=current_capability,
                 )
                 soc_request = NumberWriteRequest(
                     self._require_verified_precondition(target_config.target_soc_entity_id),
                     intent.target_soc,
                     capability=target_state.target_soc,
                 )
-                for request, current in (
-                    (time_request, target_state.time_text),
-                    (current_request, target_state.current.current_value),
-                    (soc_request, target_state.target_soc.current_value),
-                ):
-                    if current == request.target:
-                        continue
+                for request in (time_request, current_request, soc_request):
                     write_result = await self._write_recorded(
                         transaction, request, results, deadline=deadline
                     )
                     if not write_result.success:
                         raise RuntimeError(f"configuration write failed: {write_result.message}")
-                if not preserve_target and not self._prove_all_off():
+                if not self._prove_all_off():
                     raise RuntimeError("slot direction changed while target configuration was written")
                 if not self._guard_off():
                     raise RuntimeError("control-disable guard asserted before slot enable")

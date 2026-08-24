@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -9,7 +10,12 @@ import pytest
 import yaml
 
 from custom_components.house_battery_control import config
-from custom_components.house_battery_control.contracts import StorageMode
+from custom_components.house_battery_control.contracts import (
+    SlotDirection,
+    SlotIntent,
+    SlotOwner,
+    StorageMode,
+)
 from custom_components.house_battery_control.ha_writer import HomeAssistantWriter
 from custom_components.house_battery_control.solis_policy import (
     PolicyActuationResult,
@@ -82,7 +88,10 @@ def fixture():
         solis.persistent.storage_mode_entity_id: _state("Self-Use", attributes={"options": ["Self-Use", "Feed-In Priority", "Off-Grid"]}),
         solis.persistent.inverter_time_entity_id: _state(NOW.isoformat()),
     }
-    for entity_id in (solis.persistent.allow_grid_charging_entity_id,):
+    for entity_id in (
+        solis.persistent.allow_grid_charging_entity_id,
+        solis.persistent.grid_peak_shaving_entity_id,
+    ):
         states[entity_id] = _state("off")
     states[solis.protection.battery_reserve_entity_id] = _state("on")
     for entity_id in (
@@ -111,6 +120,25 @@ def policy(*, guard_state="off"):
     return SolisPolicyActuator(solis, HomeAssistantWriter(ha), control_disable_guard_entity_id=guard, inverter_timezone=timezone.utc), ha, observation
 
 
+def intent(direction: SlotDirection) -> SlotIntent:
+    if direction is SlotDirection.CHARGE:
+        owner = SlotOwner.CHEAP_CHARGING
+        physical_slot = 1
+    else:
+        owner = SlotOwner.RESERVE_EXPORT
+        physical_slot = 2
+    return SlotIntent(
+        owner=owner,
+        physical_slot=physical_slot,
+        direction=direction,
+        start=NOW - timedelta(minutes=5),
+        end=NOW + timedelta(minutes=55),
+        current=Decimal("1"),
+        target_soc=Decimal("50"),
+        expiry=NOW + timedelta(hours=1),
+    )
+
+
 @pytest.mark.asyncio
 async def test_safe_baseline_selects_self_use_and_disables_reserve_with_guard_off():
     actuator, ha, _observation = policy(guard_state="off")
@@ -118,7 +146,24 @@ async def test_safe_baseline_selects_self_use_and_disables_reserve_with_guard_of
 
     assert result.success and result.safe
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.SELF_USE.value
+    assert ha.states[actuator.config.persistent.grid_peak_shaving_entity_id]["state"] == "on"
     assert ha.states[actuator.config.protection.battery_reserve_entity_id]["state"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_safe_baseline_enables_peak_shaving_after_disabling_slots():
+    actuator, ha, _observation = policy(guard_state="on")
+    peak_shaving_id = actuator.config.persistent.grid_peak_shaving_entity_id
+    slot_id = actuator.config.slots[0].charge.enable_entity_id
+    ha.states[peak_shaving_id]["state"] = "off"
+    ha.states[slot_id]["state"] = "on"
+
+    result = await actuator.async_apply_safe_baseline()
+
+    assert result.success and result.safe
+    writes = [call[2]["entity_id"] for call in ha.calls]
+    assert writes.index(slot_id) < writes.index(peak_shaving_id)
+    assert ha.states[peak_shaving_id]["state"] == "on"
 
 
 @pytest.mark.asyncio
@@ -130,8 +175,9 @@ async def test_safe_baseline_writes_mode_before_reserve():
 
     assert result.success
     written_entities = [call[2]["entity_id"] for call in ha.calls]
-    assert written_entities[-2:] == [
+    assert written_entities[-3:] == [
         actuator.config.persistent.storage_mode_entity_id,
+        actuator.config.persistent.grid_peak_shaving_entity_id,
         actuator.config.protection.battery_reserve_entity_id,
     ]
 
@@ -150,10 +196,21 @@ async def test_healthy_writes_mode_before_reserve():
     )
 
     assert result.success
-    written_entities = [call[2]["entity_id"] for call in ha.calls]
-    assert written_entities[-3:] == [
+    policy_entities = {
         actuator.config.persistent.storage_mode_entity_id,
         actuator.config.persistent.allow_grid_charging_entity_id,
+        actuator.config.persistent.grid_peak_shaving_entity_id,
+        actuator.config.protection.battery_reserve_entity_id,
+    }
+    written_entities = [
+        call[2]["entity_id"]
+        for call in ha.calls
+        if call[2]["entity_id"] in policy_entities
+    ]
+    assert written_entities == [
+        actuator.config.persistent.storage_mode_entity_id,
+        actuator.config.persistent.allow_grid_charging_entity_id,
+        actuator.config.persistent.grid_peak_shaving_entity_id,
         actuator.config.protection.battery_reserve_entity_id,
     ]
 
@@ -171,7 +228,68 @@ async def test_healthy_baseline_selects_feed_in_priority_and_proves_no_slots():
     assert result.success
     assert ha.states[actuator.config.persistent.storage_mode_entity_id]["state"] == StorageMode.FEED_IN_PRIORITY.value
     assert ha.states[actuator.config.persistent.allow_grid_charging_entity_id]["state"] == "on"
+    assert ha.states[actuator.config.persistent.grid_peak_shaving_entity_id]["state"] == "on"
     assert result.slot_result is None
+
+
+@pytest.mark.asyncio
+async def test_charge_disables_peak_shaving_before_enabling_slot():
+    actuator, ha, observation = policy()
+    peak_shaving_id = actuator.config.persistent.grid_peak_shaving_entity_id
+    target_id = actuator.config.slots[0].charge.enable_entity_id
+    ha.states[peak_shaving_id]["state"] = "on"
+
+    result = await actuator.async_apply_healthy(
+        observation=observation,
+        reserve_soc_percent=10,
+        intent=intent(SlotDirection.CHARGE),
+        now=NOW,
+    )
+
+    assert result.success
+    writes = [call[2]["entity_id"] for call in ha.calls]
+    assert writes.index(peak_shaving_id) < writes.index(target_id)
+    assert ha.states[peak_shaving_id]["state"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_discharge_enables_peak_shaving_before_enabling_slot():
+    actuator, ha, observation = policy()
+    peak_shaving_id = actuator.config.persistent.grid_peak_shaving_entity_id
+    target_id = actuator.config.slots[1].discharge.enable_entity_id
+    ha.states[peak_shaving_id]["state"] = "off"
+
+    result = await actuator.async_apply_healthy(
+        observation=observation,
+        reserve_soc_percent=10,
+        intent=intent(SlotDirection.DISCHARGE),
+        now=NOW,
+    )
+
+    assert result.success
+    writes = [call[2]["entity_id"] for call in ha.calls]
+    assert writes.index(peak_shaving_id) < writes.index(target_id)
+    assert ha.states[peak_shaving_id]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_healthy_restores_feed_in_priority_after_safe_baseline():
+    actuator, ha, _observation = policy()
+    safe = await actuator.async_apply_safe_baseline()
+    observation = read_solis_state(actuator.config, ha.states, NOW)
+
+    healthy = await actuator.async_apply_healthy(
+        observation=observation,
+        reserve_soc_percent=10,
+        intent=None,
+        now=NOW,
+    )
+
+    assert safe.safe and healthy.success
+    assert (
+        ha.states[actuator.config.persistent.storage_mode_entity_id]["state"]
+        == StorageMode.FEED_IN_PRIORITY.value
+    )
 
 
 @pytest.mark.asyncio

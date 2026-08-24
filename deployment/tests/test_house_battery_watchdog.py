@@ -14,6 +14,7 @@ AUTOMATION_PATH = FILES / "automations" / "house_battery.yaml"
 
 GUARD = "input_boolean.house_battery_control_disable"
 MODE = "select.garage_inverter_control_storage_mode"
+PEAK_SHAVING = "switch.garage_inverter_control_grid_peak_shaving"
 RESERVE = "switch.garage_inverter_control_battery_reserve"
 
 
@@ -24,6 +25,14 @@ def _load(path: Path) -> Any:
 def _configured_slots(config: dict[str, Any]) -> list[str]:
     return [
         direction["enable_entity_id"]
+        for slot in config["solis"]["slots"]
+        for direction in (slot["charge"], slot["discharge"])
+    ]
+
+
+def _configured_slot_fields(config: dict[str, Any], field: str) -> list[str]:
+    return [
+        direction[field]
         for slot in config["solis"]["slots"]
         for direction in (slot["charge"], slot["discharge"])
     ]
@@ -54,7 +63,7 @@ def _actions(value: Any) -> list[dict[str, Any]]:
 def test_watchdog_is_small_and_has_no_legacy_or_commissioning_vocabulary() -> None:
     script_text = SCRIPT_PATH.read_text()
     automation_text = AUTOMATION_PATH.read_text()
-    assert len(script_text.splitlines()) < 150
+    assert len(script_text.splitlines()) < 230
     assert len(automation_text.splitlines()) < 80
     for text in (script_text, automation_text):
         assert "commission" not in text.lower()
@@ -80,16 +89,32 @@ def test_fail_safe_covers_all_native_slots_and_safe_policy() -> None:
     variables = script["sequence"][0]["variables"]
     assert variables["guard_entity_id"] == GUARD
     assert variables["storage_mode_entity_id"] == MODE
+    assert variables["grid_peak_shaving_entity_id"] == PEAK_SHAVING
     assert variables["battery_reserve_entity_id"] == RESERVE
     assert variables["slot_entity_ids"] == _configured_slots(config)
+    assert variables["slot_time_entity_ids"] == _configured_slot_fields(
+        config, "time_entity_id"
+    )
+    assert variables["slot_current_entity_ids"] == _configured_slot_fields(
+        config, "current_entity_id"
+    )
 
     text = SCRIPT_PATH.read_text()
-    for entity_id in [GUARD, MODE, RESERVE, *_configured_slots(config)]:
+    for entity_id in [
+        GUARD,
+        MODE,
+        PEAK_SHAVING,
+        RESERVE,
+        *_configured_slots(config),
+        *_configured_slot_fields(config, "time_entity_id"),
+        *_configured_slot_fields(config, "current_entity_id"),
+    ]:
         assert entity_id in text
 
     services = [action.get("service") for action in _actions(script["sequence"])]
     assert services.count("switch.turn_off") >= 1
     assert "select.select_option" in services
+    assert "switch.turn_on" in services
     assert "persistent_notification.create" in services
     assert "Self-Use" in text
 
@@ -125,11 +150,29 @@ def test_fail_safe_skips_safe_controls_and_isolates_slot_failures() -> None:
     assert slot_action["service"] == "switch.turn_off"
     assert slot_action["target"]["entity_id"] == "{{ repeat.item }}"
     assert slot_action["continue_on_error"] is True
+    time_repeat = sequence[2]["repeat"]
+    assert time_repeat["for_each"] == "{{ slot_time_entity_ids }}"
+    assert time_repeat["sequence"][0]["choose"][0]["sequence"][0]["service"] == (
+        "text.set_value"
+    )
+    current_repeat = sequence[3]["repeat"]
+    assert current_repeat["for_each"] == "{{ slot_current_entity_ids }}"
+    assert current_repeat["sequence"][0]["choose"][0]["sequence"][0]["service"] == (
+        "number.set_value"
+    )
+    peak_action = sequence[4]["choose"][0]["sequence"][0]
+    assert peak_action["service"] == "switch.turn_on"
+    assert peak_action["target"]["entity_id"] == (
+        "{{ grid_peak_shaving_entity_id }}"
+    )
 
     # Each fixed Solis control is guarded by its own state comparison. A
     # fully-safe state therefore performs no Solis service writes at all.
     assert "states(storage_mode_entity_id) != 'Self-Use'" in text
+    assert "states(grid_peak_shaving_entity_id) != 'on'" in text
     assert "states(battery_reserve_entity_id) != 'off'" in text
+    assert "states(repeat.item) != '00:00-00:00'" in text
+    assert "float(default=-1) != 0" in text
     assert text.count("continue_on_error: true") >= 5
 
 

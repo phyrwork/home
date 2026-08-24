@@ -50,6 +50,7 @@ def observation(
     health: ControllerHealth = ControllerHealth.HEALTHY,
     *,
     storage_mode: str = "Self-Use",
+    grid_peak_shaving: bool = True,
     battery_reserve: bool = False,
     slot_enabled: bool = False,
 ) -> SimpleNamespace:
@@ -59,6 +60,7 @@ def observation(
     )
     persistent = SimpleNamespace(
         storage_mode=storage_mode,
+        grid_peak_shaving=grid_peak_shaving,
         battery_reserve=battery_reserve,
     )
     slots = tuple(
@@ -176,6 +178,7 @@ async def test_disabled_controller_fault_reports_fail_safe_without_write_loop(
     ("field", "value"),
     (
         ("storage_mode", "Feed-In Priority"),
+        ("grid_peak_shaving", False),
         ("battery_reserve", True),
         ("slot_enabled", True),
     ),
@@ -300,6 +303,7 @@ def test_source_listener_covers_all_configured_solis_runtime_entities(
         solis.telemetry.device_timestamp_entity_id,
         solis.persistent.storage_mode_entity_id,
         solis.persistent.allow_grid_charging_entity_id,
+        solis.persistent.grid_peak_shaving_entity_id,
         solis.persistent.inverter_time_entity_id,
         solis.protection.battery_reserve_entity_id,
         solis.protection.battery_reserve_soc_entity_id,
