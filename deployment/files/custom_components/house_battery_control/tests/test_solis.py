@@ -454,6 +454,110 @@ def test_active_reserve_discharge_survives_minute_start_shift_only_while_exact()
     assert adapter.conflicting_enabled_keys(observed, changed_current) == (key,)
 
 
+def test_active_cheap_charge_survives_three_minute_start_shifts_only_while_exact() -> None:
+    parsed, states = fixture()
+    active = intent(
+        SlotOwner.CHEAP_CHARGING,
+        SlotDirection.CHARGE,
+        start=NOW,
+        end=NOW + timedelta(hours=2),
+        current="100",
+        target="100",
+    )
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    advance(adapter, states, active)
+    key = parsed.allocation(SlotOwner.CHEAP_CHARGING)[0]
+
+    for minutes in (1, 2, 3):
+        shifted = intent(
+            SlotOwner.CHEAP_CHARGING,
+            SlotDirection.CHARGE,
+            start=NOW + timedelta(minutes=minutes),
+            end=active.end,
+            current="100",
+            target="100",
+        )
+        observed = read_state(states, parsed, now=NOW + timedelta(minutes=minutes))
+        assert adapter.conflicting_enabled_keys(observed, shifted) == ()
+        assert adapter.intent_matches(
+            observed, shifted, reserve_soc_percent=Decimal("10")
+        )
+
+    continued = intent(
+        SlotOwner.CHEAP_CHARGING,
+        SlotDirection.CHARGE,
+        start=NOW + timedelta(minutes=1),
+        end=active.end,
+        current="100",
+        target="100",
+    )
+    before_desired_start = read_state(states, parsed, now=NOW)
+    assert adapter.conflicting_enabled_keys(before_desired_start, continued) == (key,)
+    for outside in (active.end, active.end + timedelta(minutes=1)):
+        outside_observation = read_state(states, parsed, now=outside)
+        assert adapter.conflicting_enabled_keys(outside_observation, continued) == (key,)
+
+    for changed in (
+        intent(SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE,
+               start=NOW + timedelta(minutes=1), end=active.end + timedelta(minutes=1),
+               current="100", target="100"),
+        intent(SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE,
+               start=NOW + timedelta(minutes=1), end=active.end,
+               current="99", target="100"),
+        intent(SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE,
+               start=NOW + timedelta(minutes=1), end=active.end,
+               current="100", target="99"),
+        intent(SlotOwner.CHEAP_CHARGING, SlotDirection.DISCHARGE,
+               start=NOW + timedelta(minutes=1), end=active.end,
+               current="100", target="100"),
+        intent(SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE,
+               start=NOW + timedelta(minutes=1), end=active.end,
+               current="100", target="20"),
+    ):
+        observed = read_state(states, parsed, now=NOW + timedelta(minutes=1))
+        assert adapter.conflicting_enabled_keys(observed, changed) == (key,)
+
+    remapped = deepcopy(deployed())
+    assert isinstance(remapped["solis"], dict)
+    assert isinstance(remapped["solis"]["slot_allocations"], dict)
+    remapped["solis"]["slot_allocations"]["cheap_charging"] = [2, 3]
+    remapped_config = integration_config.from_mapping(remapped).solis
+    remapped_adapter = SolisAdapter(states, remapped_config, timezone=LONDON)
+    observed = read_state(states, parsed, now=NOW + timedelta(minutes=1))
+    assert remapped_adapter.conflicting_enabled_keys(observed, continued) == (key,)
+
+
+@pytest.mark.parametrize("midnight_end", ("24:00", "23:59"))
+def test_active_cheap_charge_never_preserves_past_native_midnight_end(midnight_end: str) -> None:
+    parsed, states = fixture()
+    parsed = replace(parsed, midnight_end=midnight_end)
+    active = intent(
+        SlotOwner.CHEAP_CHARGING,
+        SlotDirection.CHARGE,
+        start=datetime(2026, 8, 22, 21, tzinfo=UTC),
+        end=datetime(2026, 8, 22, 23, tzinfo=UTC),
+        current="100",
+        target="100",
+    )
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    advance(adapter, states, active)
+    key = parsed.allocation(SlotOwner.CHEAP_CHARGING)[0]
+    shifted = intent(
+        SlotOwner.CHEAP_CHARGING,
+        SlotDirection.CHARGE,
+        start=datetime(2026, 8, 22, 21, 1, tzinfo=UTC),
+        end=active.end,
+        current="100",
+        target="100",
+    )
+    before_native_end = read_state(states, parsed, now=datetime(2026, 8, 22, 22, 58, tzinfo=UTC))
+    assert adapter.conflicting_enabled_keys(before_native_end, shifted) == ()
+    at_native_end = read_state(states, parsed, now=active.end)
+    assert adapter.conflicting_enabled_keys(at_native_end, shifted) == (key,)
+    assert adapter.conflicting_enabled_keys(at_native_end, None) == (key,)
+    assert not adapter.intent_matches(at_native_end, None, reserve_soc_percent=Decimal("10"))
+
+
 class FakeHA:
     def __init__(self, states: dict[str, object], behavior: str = "success") -> None:
         self.states = SimpleNamespace(get=states.get)

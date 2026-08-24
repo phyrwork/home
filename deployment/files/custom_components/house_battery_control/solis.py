@@ -1176,6 +1176,12 @@ def _direction_matches(
     *,
     now_minute: int,
 ) -> bool:
+    if not (
+        state.owner is desired.segment.owner
+        and state.key == desired.key
+        and desired.segment.direction is desired.key.direction
+    ):
+        return False
     values_match = (
         state.enabled is True
         and state.current is not None
@@ -1189,10 +1195,12 @@ def _direction_matches(
         return True
     schedule = state.schedule
     return (
-        state.owner is SlotOwner.RESERVE_EXPORT
-        and desired.segment.owner is SlotOwner.RESERVE_EXPORT
-        and state.key == desired.key
-        and state.key.direction is SlotDirection.DISCHARGE
+        state.owner in (SlotOwner.RESERVE_EXPORT, SlotOwner.CHEAP_CHARGING)
+        and state.key.direction is (
+            SlotDirection.DISCHARGE
+            if state.owner is SlotOwner.RESERVE_EXPORT
+            else SlotDirection.CHARGE
+        )
         and schedule is not None
         and (schedule.end_minute, schedule.midnight_end)
         == (desired.schedule.end_minute, desired.schedule.midnight_end)

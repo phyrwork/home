@@ -1,6 +1,6 @@
 # T0038 — Preserve active cheap-charge schedules
 
-Status: Approved — implementation pending
+Status: Implemented — local verification complete
 
 Depends on: T0035
 
@@ -76,3 +76,19 @@ During an active Intelligent bonus dispatch:
 
 Revert this focused adapter change and perform one clean Home Assistant Core
 restart. Do not manually reload the Solis telemetry integration.
+
+## Implementation evidence
+
+- Extended the existing `_direction_matches` predicate to preserve an active
+  cheap-charge segment only for the same configured native key, owner and
+  direction, with exact current/target values and matching native end
+  representation while both half-open schedules contain inverter-local now.
+- Added focused tests for three successive minute shifts, all identity/value
+  mismatches, both `24:00` and `23:59` native midnight boundaries, and normal
+  stop selection after the cheap interval ends.
+- `PYTHONPATH=deployment/files /Users/connor/src/home/deployment/.venv/bin/pytest
+  -q deployment/files/custom_components/house_battery_control/tests/test_solis.py`
+  — 26 passed.
+- `PYTHONPATH=deployment/files /Users/connor/src/home/deployment/.venv/bin/pytest
+  -q deployment/files/custom_components/house_battery_control/tests`
+  — 100 passed.
