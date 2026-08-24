@@ -89,3 +89,8 @@ Delete assertions that exist only for old result/status class identities.
   `compileall` and `git diff --check` pass.
 - Deferred to T0033 as designed: `build_plan`, HA input collection, strategy
   selection, compatibility-file deletion and remaining planner model cleanup.
+
+## Review
+
+Two independent small-model reviewers approved the staged implementation with
+no blockers.

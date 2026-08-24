@@ -20,11 +20,7 @@ class ControllerHealth(_TextEnum):
 
 
 class StrategyAction(_TextEnum):
-    # FAIL_SAFE/STOP remain transitional until T0030 moves lifecycle actions
-    # out of the economic planner.
-    FAIL_SAFE = "FAIL_SAFE"
     IDLE = "IDLE"
-    STOP = "STOP"
     CHEAP_CHARGE = "CHEAP_CHARGE"
     RESERVE_DISCHARGE = "RESERVE_DISCHARGE"
     CYCLE_DISCHARGE = "CYCLE_DISCHARGE"
@@ -33,7 +29,7 @@ class StrategyAction(_TextEnum):
 class CycleState(_TextEnum):
     IDLE = "IDLE"
     RESERVE_DISCHARGING = "RESERVE_DISCHARGING"
-    DISCHARGING = "DISCHARGING"
+    CYCLE_DISCHARGING = "CYCLE_DISCHARGING"
     CHARGING = "CHARGING"
     STOPPING = "STOPPING"
 

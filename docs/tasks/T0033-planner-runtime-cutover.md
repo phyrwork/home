@@ -1,6 +1,6 @@
 # T0033 — Cut over the planning runtime
 
-Status: Accepted
+Status: Implemented
 
 Depends on: T0032
 Completes: T0028
@@ -73,3 +73,33 @@ Consolidate into `test_planner.py` and prove all T0028 behavior plus:
 - Planner is materially smaller than the seven replaced modules.
 - Component/deployment tests, compile and diff checks pass.
 - Commit from an isolated worktree; do not deploy or access credentials.
+
+## Implementation evidence
+
+- `planner.py` now owns HA tariff/dispatch/forecast reads, runtime power and
+  reserve derivation, the strategy selector, and the public async `build_plan`
+  boundary. `Plan` distinguishes valid idle from a recoverable planning issue.
+- All economic actions are expressed only as model `LogicalIntent` segments with
+  aware UTC boundaries. Planner/model tests prove that neither `Plan` nor its
+  segments expose a physical slot.
+- The transitional coordinator reads Solis once and consumes `Plan`. A plan
+  issue publishes `DEGRADED`, preserves cycle state/deadline, and performs no
+  policy, slot or mode write.
+- The old actuator still requires a primary physical slot. The only temporary
+  logical-to-physical adapter therefore lives in `coordinator.py`; it maps the
+  three current single-segment actions to their commissioned primary slots.
+  It does not leak into `planner.py` or `Plan` and T0029 explicitly deletes it.
+- Deleted `runtime_inputs.py`, `strategy.py`, `octopus_windows.py`, `load.py`,
+  `reserve_planner.py`, `energy.py`, `interval.py`, all compatibility exports,
+  and their abstraction-only tests. No absorbed import remains.
+- Removed planner actions `FAIL_SAFE` and `STOP`; renamed the cycle state to
+  `CYCLE_DISCHARGING`. Existing hard Solis/invariant and lifecycle fail-safe
+  handling remains deliberately transitional for T0030.
+- Consolidated behavior coverage in `test_planner.py`, including tariff/DST,
+  load, reserve, all three actions through `build_plan`, cycle timing,
+  diagnostics, issue semantics, UTC boundaries and physical-slot isolation.
+- Planning implementation reduced from 1,757 lines (`planner.py` plus the seven
+  superseded modules) to 1,558 lines, a reduction of 199 lines (11.3%).
+- Local verification: 160 component tests and 45 deployment tests pass;
+  `compileall` and `git diff --check` pass. No credentials, network, live HA or
+  deployment access was used.

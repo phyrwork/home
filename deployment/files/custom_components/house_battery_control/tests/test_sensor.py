@@ -24,7 +24,7 @@ from custom_components.house_battery_control.sensor import (
     ReserveTargetSensor,
     async_setup_platform,
 )
-from custom_components.house_battery_control.strategy import CycleState, StrategyAction
+from custom_components.house_battery_control.model import CycleState, StrategyAction
 
 
 NOW = datetime(2026, 8, 22, 10, tzinfo=UTC)
@@ -42,7 +42,7 @@ def snapshot() -> Snapshot:
     return Snapshot(
         heartbeat_at=NOW,
         health=ControllerHealth.HEALTHY,
-        action=StrategyAction.STOP,
+        action=StrategyAction.IDLE,
         reason="dynamic control is disabled",
         cycle_state=CycleState.IDLE,
         reserve_soc_percent=Decimal("10"),
@@ -79,7 +79,7 @@ def test_sensors_report_disabled_snapshot(hass: HomeAssistant) -> None:
     assert HeartbeatSensor(instance).native_value == NOW
     assert HealthSensor(instance).native_value == "healthy"
     action = ActionSensor(instance)
-    assert action.native_value == "STOP"
+    assert action.native_value == "IDLE"
     assert action.extra_state_attributes["reason"] == "dynamic control is disabled"
     assert action.extra_state_attributes["battery_power_kw"] == -0.2
     assert ReserveSensor(instance).native_value == 10.0
