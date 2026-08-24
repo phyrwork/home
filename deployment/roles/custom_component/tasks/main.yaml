@@ -124,6 +124,14 @@
         path: "{{ component_archive_path }}"
         state: absent
 
+- name: Install custom component overlay
+  ansible.builtin.copy:
+    src: "{{ component_overlay_dir }}/"
+    dest: "{{ component_install_path }}/"
+    mode: preserve
+  when: component_overlay_dir is defined
+  notify: restart ha
+
 - name: Install latest release sensor
   template:
     src: "{{ playbook_dir }}/templates/rest/hacs_latest_release.yaml.j2"
