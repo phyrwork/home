@@ -43,7 +43,8 @@ Never authorize recharge from:
 - diagnostic-only or partial intervals;
 - a legacy `< maximum` off-peak Boolean; or
 - a bonus interval whose dispatch observation is missing, future or older than
-  `OCTOPUS_DISPATCH_SOURCE_MAX_AGE`.
+  direct dispatch authority and provenance (the former `last_reported` age
+  gate is superseded by T0039's native bonus-charge lease).
 
 The import classification view must cover the complete requested planning
 horizon exactly once.

@@ -23,9 +23,9 @@ from .model import (
 BATTERY_CYCLE_COST_PER_KWH = Decimal("0.0165")
 MAXIMUM_GRID_IMPORT_POWER_KW = Decimal("0.1")
 MAXIMUM_SOURCE_FUTURE_SKEW = timedelta(minutes=2)
-OCTOPUS_DISPATCH_SOURCE_MAX_AGE = timedelta(minutes=10)
 OCTOPUS_EXPORT_SOURCE_MAX_AGE = timedelta(hours=26)
 OCTOPUS_RATE_SOURCE_MAX_AGE = timedelta(hours=26)
+BONUS_CHARGE_LEASE_DURATION = timedelta(minutes=15)
 OCTOPUS_RATE_UNIT = "GBP/kWh"
 
 
@@ -564,6 +564,23 @@ def _fresh(observation: RateSourceObservation | DispatchSourceObservation | None
     return None
 
 
+def _dispatch_observation_issue(
+    observation: DispatchSourceObservation | None, now: datetime
+) -> str | None:
+    """Validate change-driven dispatch metadata without imposing an age."""
+
+    if observation is None:
+        return "dispatch source observation unavailable"
+    try:
+        retrieved = _aware(observation.retrieved_at, "dispatch source.retrieved_at")
+        _text(observation.source, "dispatch source.source")
+    except ValueError as exc:
+        return str(exc)
+    if retrieved > now + MAXIMUM_SOURCE_FUTURE_SKEW:
+        return "dispatch source observation is in the future"
+    return None
+
+
 def _coverage(intervals: Sequence[AdjustedRateInterval | ExportRateInterval], start: datetime, end: datetime) -> tuple[bool, str | None]:
     clipped: list[tuple[datetime, datetime, Any]] = []
     for item in intervals:
@@ -700,19 +717,15 @@ def evaluate_trusted_import_rates(
     )
     if not bonus:
         return result
-    dispatch_freshness = _fresh(
-        dispatch_source,
-        now,
-        OCTOPUS_DISPATCH_SOURCE_MAX_AGE,
-        "dispatch source",
-    )
-    if dispatch_freshness:
+    # Dispatch is change-driven. Its identity and structure remain checked
+    # below; last_reported is not a heartbeat freshness gate.
+    dispatch_issue = _dispatch_observation_issue(dispatch_source, now)
+    if dispatch_issue:
         return TrustedImportResult(
             CoverageStatus.UNAVAILABLE,
             diagnostic_intervals=result.diagnostic_intervals,
-            issues=(dispatch_freshness,),
+            issues=(dispatch_issue,),
         )
-    assert dispatch_source is not None
     if any(item.dispatch_source_entity_id != dispatch_source.source for item in bonus):
         return TrustedImportResult(
             CoverageStatus.INVALID,
@@ -834,10 +847,13 @@ def evaluate_cheap_windows(
         item.rate_interval.classification is CheapClassification.BONUS_DISPATCH for item in candidates
     )
     if bonus_actionable:
-        dispatch_freshness = _fresh(dispatch_source, now, OCTOPUS_DISPATCH_SOURCE_MAX_AGE, "dispatch source")
-        if dispatch_freshness:
-            return CheapWindowResult(CoverageStatus.UNAVAILABLE, diagnostic_components=tuple(diagnostics), issues=(dispatch_freshness,))
-        assert dispatch_source is not None
+        dispatch_issue = _dispatch_observation_issue(dispatch_source, now)
+        if dispatch_issue:
+            return CheapWindowResult(
+                CoverageStatus.UNAVAILABLE,
+                diagnostic_components=tuple(diagnostics),
+                issues=(dispatch_issue,),
+            )
         if any(
             item.rate_interval.classification is CheapClassification.BONUS_DISPATCH
             and item.rate_interval.dispatch_source_entity_id != dispatch_source.source
@@ -1043,6 +1059,7 @@ class Plan:
     intent: LogicalIntent | None
     next_cycle_state: CycleState
     cycle_deadline: datetime | None
+    charge_lease_deadline: datetime | None = None
     current_cheap_window: CheapWindow | None = None
     next_cheap_window: CheapWindow | None = None
     reserve_soc_percent: Decimal | None = None
@@ -1085,6 +1102,7 @@ async def build_plan(
     now: datetime,
     cycle_state: CycleState,
     cycle_deadline: datetime | None,
+    charge_lease_deadline: datetime | None = None,
 ) -> Plan:
     """Read planning inputs and return one model-only UTC plan."""
 
@@ -1095,6 +1113,8 @@ async def build_plan(
             raise ValueError("cycle state is invalid")
         if cycle_deadline is not None:
             _aware(cycle_deadline, "cycle deadline")
+        if charge_lease_deadline is not None:
+            _aware(charge_lease_deadline, "charge lease deadline")
 
         import_state = _state(hass, config.tariff.import_rates_entity_id)
         export_state = _state(hass, config.tariff.export_rates_entity_id)
@@ -1126,10 +1146,26 @@ async def build_plan(
         if windows_result.coverage_status not in (CoverageStatus.COMPLETE, CoverageStatus.TRUSTED_EMPTY):
             raise ValueError("tariff window input is not trusted: " + "; ".join(windows_result.issues))
         current_window = next(
-            (window for window in windows_result.windows if window.start <= now < window.end),
+            (
+                window
+                for window in windows_result.windows
+                if _instant(window.start) <= _instant(now) < _instant(window.end)
+            ),
             None,
         )
-        next_window = next((window for window in windows_result.windows if window.start > now), None)
+        next_window = next(
+            (window for window in windows_result.windows if _instant(window.start) > _instant(now)),
+            None,
+        )
+
+        # A bonus interval is authoritative only while the configured
+        # dispatch source is directly on.  The fused entity remains the
+        # dependency that wakes this controller when the source changes;
+        # last_reported is deliberately not used as a heartbeat deadline.
+        if _window_has_bonus_at(current_window, now):
+            dispatch_state = _state(hass, dispatch_source.source)
+            if dispatch_state.state != "on":
+                raise ValueError("dispatch source is not on")
 
         reserve_end = next_window.start if next_window is not None else horizon_end
         reserve_end = _minute_floor(min(reserve_end, now + timedelta(hours=23, minutes=59)))
@@ -1179,18 +1215,35 @@ async def build_plan(
         reserve_slot_state = solis_state.slots[1].discharge
 
         charge_intent: SlotIntent | None = None
+        effective_charge_lease_deadline = charge_lease_deadline
         cycle_intent: SlotIntent | None = None
         if current_window is not None:
             start = _slot_start(now, current_window.start)
-            charge_intent = _intent(
-                SlotOwner.CHEAP_CHARGING,
-                SlotDirection.CHARGE,
-                start,
-                current_window.end,
-                charge_state.current.maximum,
-                min(Decimal(FULL_SOC_PERCENT), charge_state.target_soc.maximum),
-                current_window.end,
-            )
+            component_end, is_bonus = _charge_phase_end(current_window, now)
+            charge_end = component_end
+            if is_bonus:
+                effective_charge_lease_deadline = _min_instant(
+                    _min_instant(
+                        effective_charge_lease_deadline or start + BONUS_CHARGE_LEASE_DURATION,
+                        start + BONUS_CHARGE_LEASE_DURATION,
+                    ),
+                    component_end,
+                )
+                charge_end = _min_instant(charge_end, effective_charge_lease_deadline)
+            elif charge_lease_deadline is not None:
+                # A previously observed bonus lease is never extended by a
+                # re-plan, even if the source reclassifies the interval.
+                charge_end = _min_instant(charge_end, charge_lease_deadline)
+            if _instant(charge_end) > _instant(start):
+                charge_intent = _intent(
+                    SlotOwner.CHEAP_CHARGING,
+                    SlotDirection.CHARGE,
+                    start,
+                    charge_end,
+                    charge_state.current.maximum,
+                    min(Decimal(FULL_SOC_PERCENT), charge_state.target_soc.maximum),
+                    charge_end,
+                )
             cycle_start = start
             cycle_end = min(start + cycle_duration, current_window.end)
             if cycle_deadline is not None:
@@ -1257,6 +1310,7 @@ async def build_plan(
             intent=logical,
             next_cycle_state=choice.cycle_state,
             cycle_deadline=choice.cycle_deadline,
+            charge_lease_deadline=effective_charge_lease_deadline,
             current_cheap_window=current_window,
             next_cheap_window=next_window,
             reserve_soc_percent=reserve_soc,
@@ -1274,6 +1328,7 @@ async def build_plan(
             intent=None,
             next_cycle_state=cycle_state,
             cycle_deadline=cycle_deadline,
+            charge_lease_deadline=charge_lease_deadline,
             battery_energy_kwh=actual_energy,
             issue=f"{type(exc).__name__}: {exc}",
         )
@@ -1343,7 +1398,51 @@ def _select(facts: _StrategyFacts) -> _Choice:
 
 
 def _window_active(window: CheapWindow | None, now: datetime) -> bool:
-    return window is not None and window.start <= now < window.end
+    return (
+        window is not None
+        and _instant(window.start) <= _instant(now) < _instant(window.end)
+    )
+
+
+def _window_has_bonus_at(window: CheapWindow | None, now: datetime) -> bool:
+    if window is None:
+        return False
+    return any(
+        item.rate_interval.classification is CheapClassification.BONUS_DISPATCH
+        and _instant(item.interval.start) <= _instant(now) < _instant(item.interval.end)
+        for item in window.components
+    )
+
+
+def _charge_phase_end(window: CheapWindow, now: datetime) -> tuple[datetime, bool]:
+    """Return the end of the contiguous same-class phase containing now."""
+
+    components = sorted(window.components, key=lambda item: _instant(item.interval.start))
+    current_index = next(
+        (
+            index
+            for index, item in enumerate(components)
+            if _instant(item.interval.start) <= _instant(now) < _instant(item.interval.end)
+        ),
+        None,
+    )
+    if current_index is None:
+        return window.end, False
+    classification = components[current_index].rate_interval.classification
+    end = components[current_index].interval.end
+    if classification is CheapClassification.BONUS_DISPATCH:
+        # A lease is tied to exactly one observed bonus component. Adjacent
+        # bonus components may have different source/repricing semantics and
+        # must never inherit one another's native boundary.
+        return end, True
+    for item in components[current_index + 1 :]:
+        if (
+            item.rate_interval.classification is not classification
+            or _instant(item.interval.start) != _instant(end)
+        ):
+            break
+        end = item.interval.end
+    return end, classification is CheapClassification.BONUS_DISPATCH
 
 
 def _effective_reserve(reserve_soc: Decimal, intent: SlotIntent | None) -> Decimal:
@@ -1547,7 +1646,7 @@ def _slot_start(now: datetime, window_start: datetime) -> datetime:
 
 
 __all__ = [
-    "AdjustedRateInterval", "CheapClassification", "CheapWindow",
+    "AdjustedRateInterval", "BONUS_CHARGE_LEASE_DURATION", "CheapClassification", "CheapWindow",
     "CheapWindowComponent", "CheapWindowResult", "CoverageStatus",
     "DispatchSourceObservation", "EnergyInterval", "ExportRateInterval",
     "LogicalIntent", "Plan", "RateSourceObservation", "ReserveInputInterval", "ReservePlanResult",

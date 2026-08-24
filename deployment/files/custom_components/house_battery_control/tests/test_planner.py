@@ -21,7 +21,10 @@ from custom_components.house_battery_control.model import (
 )
 from custom_components.house_battery_control.planner import (
     AdjustedRateInterval,
+    BONUS_CHARGE_LEASE_DURATION,
     CheapClassification,
+    CheapWindow,
+    CheapWindowComponent,
     CoverageStatus,
     DispatchSourceObservation,
     EnergyInterval,
@@ -38,6 +41,7 @@ from custom_components.house_battery_control.planner import (
     parse_fused_import_rates,
     plan_reserve,
     prorated_energy,
+    _charge_phase_end,
 )
 from custom_components.house_battery_control.solis import read_state
 from custom_components.house_battery_control.tests.test_solis import fixture as solis_fixture
@@ -260,7 +264,7 @@ def test_stale_and_future_sources_fail_closed() -> None:
     assert future.coverage_status is CoverageStatus.UNAVAILABLE
 
 
-def test_dispatch_freshness_required_only_for_actionable_bonus() -> None:
+def test_dispatch_last_reported_age_does_not_withdraw_actionable_bonus() -> None:
     rates = _import_rates(
         ("0.07", CheapClassification.BONUS_DISPATCH, True),
         ("0.30", CheapClassification.NOT_CHEAP, False),
@@ -268,7 +272,7 @@ def test_dispatch_freshness_required_only_for_actionable_bonus() -> None:
     )
     stale_dispatch = DispatchSourceObservation(NOW - timedelta(minutes=11), DISPATCH_SOURCE)
     result = _result(rates, dispatch_source=stale_dispatch)
-    assert result.coverage_status is CoverageStatus.UNAVAILABLE
+    assert result.coverage_status is CoverageStatus.COMPLETE
     ordinary = _import_rates(
         ("0.07", CheapClassification.STANDARD_CHEAP, False),
         ("0.30", CheapClassification.NOT_CHEAP, False),
@@ -586,6 +590,8 @@ async def _build(
     window_minutes: int = 60,
     coverage: CoverageStatus = CoverageStatus.COMPLETE,
     reserve_energy: Decimal = Decimal("5"),
+    bonus: bool = False,
+    charge_lease_deadline: datetime | None = None,
 ):
     config = _config()
     for entity_id, value in (
@@ -595,11 +601,21 @@ async def _build(
     ):
         hass.states.async_set(entity_id, value, {"rates": ("placeholder",)})
     imports = _import_rates(
-        ("0.07", CheapClassification.STANDARD_CHEAP, False),
+        ("0.07", CheapClassification.BONUS_DISPATCH if bonus else CheapClassification.STANDARD_CHEAP, bonus),
         ("0.30", CheapClassification.NOT_CHEAP, False),
     )
+    if bonus:
+        hass.states.async_set(DISPATCH_SOURCE, "on")
     exports = _export()
-    windows = _result(imports, exports).windows if cheap else ()
+    windows = (
+        _result(
+            imports,
+            exports,
+            dispatch_source=DispatchSourceObservation(NOW, DISPATCH_SOURCE),
+        ).windows
+        if cheap
+        else ()
+    )
     if windows and window_minutes != 60:
         windows = (replace(windows[0], end=NOW + timedelta(minutes=window_minutes)),)
     window_result = SimpleNamespace(
@@ -626,7 +642,7 @@ async def _build(
     ):
         return await build_plan(
             hass, config, _solis(soc=soc), now=NOW, cycle_state=state,
-            cycle_deadline=deadline,
+            cycle_deadline=deadline, charge_lease_deadline=charge_lease_deadline,
         )
 
 
@@ -649,6 +665,75 @@ async def test_build_plan_selects_all_three_actions_and_reports_reserve(hass) ->
     assert reserve.reserve_balance_kwh == Decimal("12.68448")
     assert reserve.maximum_charge_power_kw == Decimal("5.12")
     assert reserve.maximum_discharge_power_kw == Decimal("5.12")
+
+
+@pytest.mark.asyncio
+async def test_bonus_charge_lease_is_clipped_to_fifteen_minutes_and_does_not_extend(
+    hass,
+) -> None:
+    started = await _build(hass, cheap=True, bonus=True)
+    assert started.action is StrategyAction.CHEAP_CHARGE
+    assert started.charge_lease_deadline == NOW + BONUS_CHARGE_LEASE_DURATION
+    assert started.intent is not None
+    assert started.intent.end == NOW + BONUS_CHARGE_LEASE_DURATION
+
+    for _ in range(3):
+        heartbeat = await _build(
+            hass,
+            cheap=True,
+            bonus=True,
+            state=CycleState.CHARGING,
+            charge_lease_deadline=started.charge_lease_deadline,
+        )
+        assert heartbeat.intent is not None
+        assert heartbeat.intent.end == started.intent.end
+        assert heartbeat.charge_lease_deadline == started.charge_lease_deadline
+
+
+def test_adjacent_bonus_components_keep_the_first_native_lease_boundary() -> None:
+    first = _import_rates(
+        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+    )[0]
+    first = replace(first, end=NOW + timedelta(minutes=5))
+    second = replace(first, start=first.end, end=NOW + timedelta(minutes=10), source_event="next")
+    export = _export()[0]
+    window = CheapWindow(
+        NOW,
+        second.end,
+        (
+            CheapWindowComponent(
+                TimeInterval(first.start, first.end), first, export, Decimal("1")
+            ),
+            CheapWindowComponent(
+                TimeInterval(second.start, second.end), second, export, Decimal("1")
+            ),
+        ),
+    )
+    end, is_bonus = _charge_phase_end(window, NOW)
+    assert is_bonus
+    assert end == first.end
+
+
+def test_bonus_lease_component_boundary_uses_utc_instants_across_dst_fold() -> None:
+    london = ZoneInfo("Europe/London")
+    start = datetime(2026, 10, 25, 1, 0, tzinfo=london, fold=0)
+    end = datetime(2026, 10, 25, 1, 0, tzinfo=london, fold=1)
+    rate = _import_rates(
+        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+    )[0]
+    rate = replace(rate, start=start, end=end)
+    export = replace(_export()[0], start=start, end=end)
+    window = CheapWindow(
+        start,
+        end,
+        (CheapWindowComponent(TimeInterval(start, end), rate, export, Decimal("1")),),
+    )
+    fold_now = datetime(2026, 10, 25, 1, 30, tzinfo=london, fold=0)
+    boundary, is_bonus = _charge_phase_end(window, fold_now)
+    assert is_bonus
+    assert boundary.astimezone(UTC) == end.astimezone(UTC)
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ from .model import (
     LogicalIntent,
     MINIMUM_SOC_PERCENT,
     SlotDirection,
+    SlotOwner,
     StorageMode,
     StrategyAction,
 )
@@ -66,6 +67,7 @@ class Snapshot:
     reason: str
     cycle_state: CycleState
     cycle_deadline: datetime | None = None
+    charge_lease_deadline: datetime | None = None
     reserve_soc_percent: Decimal | None = None
     battery_energy_kwh: Decimal | None = None
     reserve_target_energy_kwh: Decimal | None = None
@@ -116,6 +118,10 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         self._zone = zone
         self._cycle_state = CycleState.IDLE
         self._cycle_deadline: datetime | None = None
+        self._charge_lease_deadline: datetime | None = None
+        self._bonus_charge_keys: set[SlotKey] = set()
+        self._awaiting_off_proof: set[SlotKey] = set()
+        self._bonus_lease_fingerprint: Hashable | None = None
         self._last_plan: Plan | None = None
         self._last_healthy_at: datetime | None = None
         self._degraded_since: datetime | None = None
@@ -246,6 +252,26 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             )
             return
 
+        if self._awaiting_off_proof and any(
+            observation.direction(key).enabled is not False
+            for key in self._awaiting_off_proof
+        ):
+            self._degrade(
+                now,
+                None,
+                "bonus charge stop is awaiting authoritative off proof",
+                observation,
+                pending_operation="await bonus charge off proof",
+            )
+            return
+
+        if self._bonus_dispatch_is_off():
+            for key in self._bonus_charge_keys:
+                self._add_stop(key, now, monotonic)
+            if debt := self._due_stop(monotonic):
+                await self._attempt_stop(debt, observation, now, monotonic)
+            return
+
         if observation.health is not ControllerHealth.HEALTHY:
             self._degrade(
                 now,
@@ -263,6 +289,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             now=now,
             cycle_state=self._cycle_state,
             cycle_deadline=self._cycle_deadline,
+            charge_lease_deadline=self._charge_lease_deadline,
         )
         if plan.issue is not None:
             self._degrade(
@@ -276,6 +303,14 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         if plan.reserve_soc_percent is None:
             raise ValueError("valid plan has no reserve SOC")
         self._last_plan = plan
+
+        fingerprint = _bonus_fingerprint(plan, now)
+        if self._bonus_charge_keys and self._bonus_lease_fingerprint != fingerprint:
+            for key in self._bonus_charge_keys:
+                self._add_stop(key, now, monotonic)
+            if debt := self._due_stop(monotonic):
+                await self._attempt_stop(debt, observation, now, monotonic)
+            return
 
         for key in self.solis.conflicting_enabled_keys(observation, plan.intent):
             self._add_stop(key, now, monotonic)
@@ -318,9 +353,12 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             )
             return
 
+        self._reconstruct_bonus_lease(plan, observation, fingerprint)
         self._start_retry = None
         self._cycle_state = plan.next_cycle_state
         self._cycle_deadline = plan.cycle_deadline
+        if plan.action is StrategyAction.CHEAP_CHARGE and plan.charge_lease_deadline is not None:
+            self._charge_lease_deadline = plan.charge_lease_deadline
         if await self._housekeep_one(observation, plan, now, monotonic):
             return
         self._last_healthy_at = now
@@ -345,7 +383,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 if direction.enabled is not True:
                     continue
                 expiry = self._owned_expiry.get(direction.key)
-                if expiry is not None and now >= expiry:
+                if expiry is not None and _instant(now) >= _instant(expiry):
                     self._add_stop(direction.key, now, monotonic)
                 if (
                     soc is not None
@@ -358,16 +396,35 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                     continue
                 if direction.key.direction is SlotDirection.CHARGE and soc >= target:
                     self._add_stop(direction.key, now, monotonic)
-                if direction.key.direction is SlotDirection.DISCHARGE and (
-                    soc <= target
-                ):
+                if direction.key.direction is SlotDirection.DISCHARGE and soc <= target:
                     self._add_stop(direction.key, now, monotonic)
+
+    def _bonus_dispatch_is_off(self) -> bool:
+        """Return true only for an explicitly reported dispatch ``off``."""
+
+        if not self._bonus_charge_keys:
+            return False
+        state = self.hass.states.get(self.config.tariff.import_rates_entity_id)
+        attributes = getattr(state, "attributes", {})
+        source_id = attributes.get("dispatch_source_entity_id")
+        source = self.hass.states.get(source_id) if isinstance(source_id, str) else None
+        return getattr(source, "state", None) == "off"
 
     def _retire_proven_stops(self, observation: SolisState) -> None:
         for key, debt in tuple(self._stop_debts.items()):
             if observation.direction(key).enabled is False and not debt.ambiguous:
                 self._stop_debts.pop(key, None)
                 self._owned_expiry.pop(key, None)
+                self._awaiting_off_proof.discard(key)
+                self._bonus_charge_keys.discard(key)
+        for key in tuple(self._awaiting_off_proof):
+            if observation.direction(key).enabled is False:
+                self._awaiting_off_proof.discard(key)
+                self._bonus_charge_keys.discard(key)
+                self._owned_expiry.pop(key, None)
+        if not self._bonus_charge_keys:
+            self._charge_lease_deadline = None
+            self._bonus_lease_fingerprint = None
 
     def _add_stop(self, key: SlotKey, now: datetime, monotonic: float) -> None:
         self.config.solis.direction(key)
@@ -385,6 +442,17 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         now: datetime,
         monotonic: float,
     ) -> None:
+        if debt.next_attempt > monotonic:
+            self._degrade(
+                now,
+                self._last_plan,
+                "important slot stop is awaiting retry deadline",
+                observation,
+                pending_operation=_stop_text(debt.key),
+                attempt=debt.attempt,
+                next_retry_at=debt.next_retry_at,
+            )
+            return
         direction = observation.direction(debt.key)
         if direction.enabled is False and not debt.ambiguous:
             self._stop_debts.pop(debt.key, None)
@@ -415,8 +483,32 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             self._dirty = True
             raise
         if result.success:
-            self._stop_debts.pop(debt.key, None)
-            self._owned_expiry.pop(debt.key, None)
+            bonus_still_enabled = (
+                debt.key in self._bonus_charge_keys
+                and observation.direction(debt.key).enabled is True
+            )
+            if bonus_still_enabled:
+                delay = _stop_retry_delay(debt.attempt)
+                retry_at = now + delay
+                self._stop_debts[debt.key] = replace(
+                    debt,
+                    attempt=debt.attempt + 1,
+                    next_attempt=monotonic + delay.total_seconds(),
+                    next_retry_at=retry_at,
+                )
+                self._awaiting_off_proof.add(debt.key)
+            else:
+                self._stop_debts.pop(debt.key, None)
+                self._owned_expiry.pop(debt.key, None)
+            if debt.key in self._bonus_charge_keys:
+                if observation.direction(debt.key).enabled is False:
+                    self._bonus_charge_keys.discard(debt.key)
+                    self._awaiting_off_proof.discard(debt.key)
+                else:
+                    self._awaiting_off_proof.add(debt.key)
+            if not self._bonus_charge_keys:
+                self._charge_lease_deadline = None
+                self._bonus_lease_fingerprint = None
             self._dirty = True
             self._degrade(
                 now,
@@ -489,7 +581,12 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             deadline=self._monotonic() + WRITE_DEADLINE.total_seconds(),
         )
         if result.success:
-            self._remember_enabled_slot(change, plan.intent)
+            self._remember_enabled_slot(
+                change,
+                plan.intent,
+                charge_lease_deadline=plan.charge_lease_deadline,
+                bonus_fingerprint=_bonus_fingerprint(plan, now),
+            )
             self._start_retry = None
             self._dirty = True
             self._degrade(
@@ -529,6 +626,9 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         self,
         change: SolisChange,
         intent: LogicalIntent | None,
+        *,
+        charge_lease_deadline: datetime | None = None,
+        bonus_fingerprint: Hashable | None = None,
     ) -> None:
         if change.target is not True or intent is None:
             return
@@ -542,7 +642,44 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             if self.config.solis.direction(key).enable_entity_id == change.entity_id:
                 self._used_slots.add(key)
                 self._owned_expiry[key] = segment.expiry
+                if (
+                    charge_lease_deadline is not None
+                    and segment.owner.value == "cheap_charging"
+                ):
+                    self._bonus_charge_keys.add(key)
+                    self._charge_lease_deadline = charge_lease_deadline
+                    self._bonus_lease_fingerprint = bonus_fingerprint
                 return
+
+    def _reconstruct_bonus_lease(
+        self,
+        plan: Plan,
+        observation: SolisState,
+        fingerprint: Hashable | None,
+    ) -> None:
+        """Rebuild ephemeral ownership from a matching external slot state."""
+
+        if (
+            fingerprint is None
+            or plan.action is not StrategyAction.CHEAP_CHARGE
+            or plan.intent is None
+            or plan.charge_lease_deadline is None
+        ):
+            return
+        split = split_intent(
+            plan.intent,
+            timezone=self._zone,
+            midnight_end=self.config.solis.midnight_end,
+        )
+        allocation = self.config.solis.allocation(SlotOwner.CHEAP_CHARGING)
+        for key, segment in zip(allocation, split.segments):
+            direction = observation.direction(key)
+            if direction.enabled is True and direction.owner is SlotOwner.CHEAP_CHARGING:
+                self._bonus_charge_keys.add(key)
+                self._owned_expiry[key] = segment.expiry
+        if self._bonus_charge_keys:
+            self._charge_lease_deadline = plan.charge_lease_deadline
+            self._bonus_lease_fingerprint = fingerprint
 
     async def _housekeep_one(
         self,
@@ -666,6 +803,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             plan.intent,
             plan.reserve_soc_percent,
             plan.cycle_deadline,
+            plan.charge_lease_deadline,
             tuple(source_tokens),
             change.entity_id,
             change.target,
@@ -725,6 +863,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             reason=reason,
             cycle_state=self._cycle_state,
             cycle_deadline=self._cycle_deadline,
+            charge_lease_deadline=self._charge_lease_deadline,
             reserve_soc_percent=None if plan is None else plan.reserve_soc_percent,
             battery_energy_kwh=actual,
             reserve_target_energy_kwh=None if plan is None else plan.reserve_energy_kwh,
@@ -753,6 +892,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         now = self._now()
         monotonic = self._monotonic()
         candidates = [_next_minute(now)]
+        candidates.extend(self._owned_expiry.values())
         plan = self._last_plan
         if plan is not None:
             for window in (plan.current_cheap_window, plan.next_cheap_window):
@@ -771,7 +911,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             candidates.append(self._mode_next_retry_at)
         if self._degraded_since is not None and not self._fail_safe_latched:
             candidates.append(self._degraded_since + DEGRADED_FAILSAFE_TIMEOUT)
-        future = [candidate.astimezone(timezone.utc) for candidate in candidates if candidate > now]
+        future = [_instant(candidate) for candidate in candidates if _instant(candidate) > _instant(now)]
         wake_at = min(future) if future else now + timedelta(milliseconds=100)
         self._unsub_wakeup = async_track_point_in_utc_time(
             self.hass,
@@ -1000,6 +1140,43 @@ def _actual_energy(config: Config, telemetry: object | None) -> Decimal | None:
 def _window_text(window: object | None) -> str | None:
     start, end = getattr(window, "start", None), getattr(window, "end", None)
     return f"{start.isoformat()}/{end.isoformat()}" if isinstance(start, datetime) and isinstance(end, datetime) else None
+
+
+def _bonus_fingerprint(plan: Plan, now: datetime) -> Hashable | None:
+    """Capture semantic bonus authority, excluding change-driven heartbeat time."""
+
+    window = plan.current_cheap_window
+    components = getattr(window, "components", ()) if window is not None else ()
+    for component in components:
+        interval = component.interval
+        now_utc = now.astimezone(timezone.utc)
+        if not (
+            interval.start.astimezone(timezone.utc)
+            <= now_utc
+            < interval.end.astimezone(timezone.utc)
+        ):
+            continue
+        rate = component.rate_interval
+        if getattr(rate.classification, "value", rate.classification) != "BONUS_DISPATCH":
+            return None
+        export = component.export_interval
+        return (
+            interval.start.astimezone(timezone.utc),
+            interval.end.astimezone(timezone.utc),
+            rate.import_price,
+            rate.source,
+            rate.source_event,
+            rate.dispatch_source_entity_id,
+            rate.source_revision_at.astimezone(timezone.utc),
+            export.start.astimezone(timezone.utc),
+            export.end.astimezone(timezone.utc),
+            export.export_price,
+        )
+    return None
+
+
+def _instant(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc)
 
 
 def _plan_reason(plan: Plan) -> str:

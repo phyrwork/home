@@ -48,7 +48,6 @@ Define these finite constants:
 ```python
 OCTOPUS_RATE_SOURCE_MAX_AGE = timedelta(hours=26)
 OCTOPUS_EXPORT_SOURCE_MAX_AGE = timedelta(hours=26)
-OCTOPUS_DISPATCH_SOURCE_MAX_AGE = timedelta(minutes=10)
 MAXIMUM_SOURCE_FUTURE_SKEW = timedelta(minutes=2)
 OCTOPUS_RATE_UNIT = "GBP/kWh"
 ```
@@ -57,7 +56,10 @@ The 26-hour rate limits match v18.3.3's deliberate day-plus-two cache: the
 coordinator may retain a valid `last_retrieved` while cached rates still cover
 the requested horizon. Freshness never substitutes for complete coverage.
 
-The dispatch limit covers more than three nominal three-minute dispatch polls.
+Dispatch authority is change-driven: the configured dispatch entity's identity,
+direct state, provenance and future-skew checks remain authoritative, but its
+`last_reported` age is not a heartbeat freshness gate. T0039 bounds an active
+bonus charge with a native 15-minute lease instead.
 
 ## Fused import and export producers
 
@@ -185,8 +187,8 @@ Require:
 - finite prices and efficiencies;
 - exact canonical `GBP/kWh` units;
 - rate-source freshness for every actionable horizon;
-- dispatch-source freshness only when an actionable bonus-dispatch component
-  exists;
+- direct dispatch-source identity and state for an actionable bonus-dispatch
+  component (without a `last_reported` age gate);
 - export-source freshness and export-price coverage for every actionable
   horizon; and
 - no source timestamp more than `MAXIMUM_SOURCE_FUTURE_SKEW` in the future.
@@ -257,7 +259,7 @@ Use deterministic pure tests and template-producer tests to cover at least:
 - flat tariffs not being cheap;
 - adjusted true at the event minimum;
 - adjusted true away from the minimum invalidating the result;
-- import, export and conditional dispatch freshness and future skew;
+- import/export freshness, direct dispatch authority and future skew;
 - complete export forecast coverage rather than a current value;
 - exact 7p import/15p export cycle margin with configured efficiencies;
 - zero and negative margins rejected;

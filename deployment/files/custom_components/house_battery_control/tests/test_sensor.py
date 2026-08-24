@@ -45,6 +45,7 @@ def snapshot() -> Snapshot:
         action=StrategyAction.IDLE,
         reason="dynamic control is disabled",
         cycle_state=CycleState.IDLE,
+        charge_lease_deadline=NOW + timedelta(minutes=15),
         reserve_soc_percent=Decimal("10"),
         battery_energy_kwh=Decimal("17.68448"),
         reserve_target_energy_kwh=Decimal("12.345678"),
@@ -88,6 +89,9 @@ def test_sensors_report_disabled_snapshot(hass: HomeAssistant) -> None:
     assert action.extra_state_attributes["reason"] == "dynamic control is disabled"
     assert action.extra_state_attributes["battery_power_kw"] == -0.2
     assert action.extra_state_attributes["pending_operation"] == "stop slot 2 discharge"
+    assert action.extra_state_attributes["charge_lease_deadline"] == (
+        NOW + timedelta(minutes=15)
+    ).isoformat()
     assert action.extra_state_attributes["attempt"] == 3
     assert action.extra_state_attributes["next_retry_at"] == (NOW + timedelta(seconds=60)).isoformat()
     heartbeat = HeartbeatSensor(instance)

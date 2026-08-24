@@ -21,6 +21,7 @@ from custom_components.house_battery_control.controller import (
     WRITE_DEADLINE,
     StartRetry,
     _stop_retry_delay,
+    _bonus_fingerprint,
 )
 from custom_components.house_battery_control.model import (
     ControllerHealth,
@@ -31,7 +32,7 @@ from custom_components.house_battery_control.model import (
     SlotOwner,
     StrategyAction,
 )
-from custom_components.house_battery_control.planner import Plan
+from custom_components.house_battery_control.planner import CheapClassification, Plan
 from custom_components.house_battery_control.solis import (
     SlotKey,
     SolisState,
@@ -49,6 +50,32 @@ def test_write_deadline_covers_pinned_service_retry_and_readback() -> None:
     assert WRITE_DEADLINE < timedelta(minutes=3)
 
 
+def test_bonus_fingerprint_binds_dispatch_source_identity() -> None:
+    component = SimpleNamespace(
+        interval=SimpleNamespace(start=NOW, end=NOW + timedelta(minutes=15)),
+        rate_interval=SimpleNamespace(
+            classification=CheapClassification.BONUS_DISPATCH,
+            import_price=Decimal("0.07"), source="import", source_event="event",
+            dispatch_source_entity_id="binary_sensor.a", source_revision_at=NOW,
+        ),
+        export_interval=SimpleNamespace(
+            start=NOW, end=NOW + timedelta(minutes=15), export_price=Decimal("0.15")
+        ),
+    )
+    first = replace(plan(), current_cheap_window=SimpleNamespace(components=(component,)))
+    second_rate = SimpleNamespace(**vars(component.rate_interval))
+    second_rate.dispatch_source_entity_id = "binary_sensor.b"
+    second_component = SimpleNamespace(
+        interval=component.interval,
+        rate_interval=second_rate,
+        export_interval=component.export_interval,
+    )
+    second = replace(
+        first, current_cheap_window=SimpleNamespace(components=(second_component,))
+    )
+    assert _bonus_fingerprint(first, NOW) != _bonus_fingerprint(second, NOW)
+
+
 def config() -> integration_config.Config:
     source = yaml.safe_load(
         (Path(__file__).parents[3] / "house_battery_control.yaml").read_text()
@@ -63,6 +90,7 @@ def observation(
     enabled_state: str = "on",
     mode: str = "Feed-In Priority",
     target_state: str | None = None,
+    time_state: str | None = None,
 ) -> SolisState:
     parsed, states = solis_fixture()
     states[parsed.telemetry.state_of_charge_entity_id]["state"] = soc
@@ -71,6 +99,8 @@ def observation(
         states[parsed.direction(enabled).enable_entity_id]["state"] = enabled_state
         if target_state is not None:
             states[parsed.direction(enabled).target_soc_entity_id]["state"] = target_state
+        if time_state is not None:
+            states[parsed.direction(enabled).time_entity_id]["state"] = time_state
     return read_state(states, parsed, now=NOW)
 
 
@@ -324,6 +354,7 @@ async def test_stop_retries_remain_unbounded_and_capped_and_cancellation_is_ambi
         assert key in controller._stop_debts
 
         solis.stop.side_effect = asyncio.CancelledError
+        clock[0] = controller._stop_debts[key].next_attempt
         with pytest.raises(asyncio.CancelledError):
             await controller._attempt_stop(
                 controller._stop_debts[key], observation(enabled=key), NOW, clock[0]
@@ -407,6 +438,185 @@ async def test_target_complete_or_owned_expiry_creates_stop_before_planning(
         await controller._reconcile()
     solis.stop.assert_awaited_once()
     build.assert_not_awaited()
+
+
+async def test_bonus_lease_stop_waits_for_authoritative_off_before_releasing_lease(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(1, SlotDirection.CHARGE)
+    controller._bonus_charge_keys.add(key)
+    controller._charge_lease_deadline = NOW + timedelta(minutes=15)
+    controller._add_stop(key, NOW, 0)
+
+    await controller._attempt_stop(
+        controller._stop_debts[key], observation(enabled=key), NOW, 0
+    )
+    assert key in controller._awaiting_off_proof
+    assert key in controller._bonus_charge_keys
+    assert key in controller._stop_debts
+    await controller._attempt_stop(
+        controller._stop_debts[key], observation(enabled=key), NOW, 0
+    )
+    assert solis.stop.await_count == 1
+    debt = controller._stop_debts[key]
+    await controller._attempt_stop(debt, observation(enabled=key), NOW, debt.next_attempt)
+    assert solis.stop.await_count == 2
+
+    controller._retire_proven_stops(observation(enabled=key, enabled_state="off"))
+    assert key not in controller._awaiting_off_proof
+    assert key not in controller._bonus_charge_keys
+    assert controller._charge_lease_deadline is None
+
+
+async def test_expired_bonus_lease_stops_then_renews_only_after_off_proof(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(1, SlotDirection.CHARGE)
+    active = observation(enabled=key)
+    off = observation(enabled=key, enabled_state="off")
+    component = SimpleNamespace(
+        interval=SimpleNamespace(start=NOW, end=NOW + timedelta(minutes=30)),
+        rate_interval=SimpleNamespace(
+            classification=CheapClassification.BONUS_DISPATCH,
+            import_price=Decimal("0.07"), source="import", source_event="event",
+            dispatch_source_entity_id="binary_sensor.dispatch", source_revision_at=NOW,
+        ),
+        export_interval=SimpleNamespace(
+            start=NOW, end=NOW + timedelta(minutes=30), export_price=Decimal("0.15")
+        ),
+    )
+    segment = SlotIntent(
+        SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE, NOW,
+        NOW + timedelta(minutes=15), Decimal("50"), Decimal("100"),
+        NOW + timedelta(minutes=15),
+    )
+    bonus_plan = replace(
+        plan(), action=StrategyAction.CHEAP_CHARGE,
+        intent=LogicalIntent((segment,)),
+        current_cheap_window=SimpleNamespace(components=(component,)),
+        charge_lease_deadline=NOW + timedelta(minutes=15),
+    )
+    assert _bonus_fingerprint(bonus_plan, NOW) is not None
+    controller._bonus_charge_keys.add(key)
+    controller._charge_lease_deadline = NOW + timedelta(minutes=15)
+    controller._owned_expiry[key] = NOW - timedelta(seconds=1)
+    change = SimpleNamespace(
+        entity_id=controller.config.solis.direction(key).enable_entity_id,
+        target=True,
+    )
+    solis.next_start_change.side_effect = (change, None)
+    with (
+        patch(
+            "custom_components.house_battery_control.controller.read_state",
+            side_effect=(active, off, off),
+        ),
+        patch(
+            "custom_components.house_battery_control.controller.build_plan",
+            AsyncMock(return_value=bonus_plan),
+        ),
+        patch.object(Controller, "_now", return_value=NOW),
+    ):
+        await controller._reconcile()
+        assert solis.stop.await_count == 1
+        assert solis.apply.await_count == 0
+        await controller._reconcile()
+        assert solis.apply.await_count == 1
+        assert key in controller._bonus_charge_keys
+        await controller._reconcile()
+
+    assert controller._charge_lease_deadline == NOW + timedelta(minutes=15)
+
+
+async def test_fresh_controller_reconstructs_ephemeral_bonus_lease_and_expires_it(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(1, SlotDirection.CHARGE)
+    component = SimpleNamespace(
+        interval=SimpleNamespace(start=NOW, end=NOW + timedelta(minutes=30)),
+        rate_interval=SimpleNamespace(
+            classification=CheapClassification.BONUS_DISPATCH,
+            import_price=Decimal("0.07"), source="import", source_event="event",
+            dispatch_source_entity_id="binary_sensor.dispatch", source_revision_at=NOW,
+        ),
+        export_interval=SimpleNamespace(
+            start=NOW, end=NOW + timedelta(minutes=30), export_price=Decimal("0.15")
+        ),
+    )
+    segment = SlotIntent(
+        SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE, NOW,
+        NOW + timedelta(minutes=15), Decimal("50"), Decimal("100"),
+        NOW + timedelta(minutes=15),
+    )
+    bonus_plan = replace(
+        plan(), action=StrategyAction.CHEAP_CHARGE,
+        intent=LogicalIntent((segment,)),
+        current_cheap_window=SimpleNamespace(components=(component,)),
+        charge_lease_deadline=NOW + timedelta(minutes=15),
+    )
+    current = observation(
+        enabled=key, target_state="100", time_state="12:00-12:15"
+    )
+    assert _bonus_fingerprint(bonus_plan, NOW) is not None
+    hass.states.async_set(
+        controller.config.tariff.import_rates_entity_id,
+        "available",
+        {"dispatch_source_entity_id": "binary_sensor.dispatch"},
+    )
+    hass.states.async_set("binary_sensor.dispatch", "on")
+    with (
+        patch(
+            "custom_components.house_battery_control.controller.read_state",
+            return_value=current,
+        ),
+        patch(
+            "custom_components.house_battery_control.controller.build_plan",
+            AsyncMock(return_value=bonus_plan),
+        ),
+        patch.object(Controller, "_now", return_value=NOW),
+        ):
+            await controller._reconcile()
+    solis.intent_matches.assert_called_once()
+    assert key in controller._bonus_charge_keys
+    assert controller._owned_expiry[key] == NOW + timedelta(minutes=15)
+    assert controller._charge_lease_deadline == NOW + timedelta(minutes=15)
+
+    controller._owned_expiry[key] = NOW - timedelta(seconds=1)
+    with patch(
+        "custom_components.house_battery_control.controller.read_state",
+        return_value=current,
+    ):
+        await controller._reconcile()
+    assert key in controller._stop_debts
+    solis.stop.assert_awaited_once()
+
+
+async def test_explicit_dispatch_off_is_withdrawal_but_zero_ev_power_is_not(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(1, SlotDirection.CHARGE)
+    controller._bonus_charge_keys.add(key)
+    hass.states.async_set(
+        controller.config.tariff.import_rates_entity_id,
+        "available",
+        {"dispatch_source_entity_id": "binary_sensor.dispatch"},
+    )
+    hass.states.async_set("binary_sensor.dispatch", "off")
+    assert controller._bonus_dispatch_is_off()
+    with patch(
+        "custom_components.house_battery_control.controller.read_state",
+        return_value=observation(enabled=key),
+    ):
+        await controller._reconcile()
+    solis.stop.assert_awaited_once()
+    assert key in controller._stop_debts
 
 
 async def test_plan_issue_preserves_cycle_and_makes_no_start_call(
@@ -549,6 +759,16 @@ def test_source_subscription_covers_every_solis_and_planning_entity(
                 direction.current_entity_id,
                 direction.target_soc_entity_id,
             }.issubset(ids)
+
+
+def test_dispatch_change_wakes_through_fused_import_entity_without_extra_poller(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    with patch.object(controller, "trigger") as trigger:
+        controller._source_changed(SimpleNamespace())
+    trigger.assert_called_once()
+    assert controller.config.tariff.import_rates_entity_id in controller.source_entity_ids()
 
 
 async def test_exact_boundary_precedes_one_minute_backstop(hass: HomeAssistant) -> None:

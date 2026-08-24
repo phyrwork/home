@@ -1,6 +1,6 @@
 # T0039 — Bound Intelligent bonus charging with native leases
 
-Status: Approved — implementation pending
+Status: Implemented — local acceptance complete; live acceptance pending
 
 Depends on: T0012, T0028, T0035, T0038
 
@@ -52,6 +52,9 @@ start or renewal while the existing native lease remains bounded.
 ## Lease lifecycle
 
 - Clip each new bonus lease to the explicit deadline above.
+- Lease ownership is intentionally not persisted across controller restarts. A
+  fresh setup may derive a new bounded lease from the current external fused
+  authority and eligibility; no restart-only ownership registry is required.
 - Once active, preserve its exact observed physical key, owner, direction,
   current, target SOC and native end. Heartbeats must not move or extend it.
 - Schedule an aware-UTC wakeup at its half-open expiry. Expiry must defeat the
@@ -99,3 +102,36 @@ Update the T0012 freshness contract and tests superseded by this card.
 T0039 must be deployed before T0040, or both must be deployed atomically.
 Deploying T0040 alone would remove the existing blanket backstop while long
 unleased bonus schedules remain possible.
+
+## Implementation evidence
+
+- Added `BONUS_CHARGE_LEASE_DURATION = timedelta(minutes=15)` and clipped each
+  new actionable bonus component to the earlier component end or lease end.
+- Preserved the lease deadline across planner heartbeats and native continuity;
+  expiry is included in the controller's aware-UTC wakeup candidates and creates
+  the existing important stop debt.
+- Removed dispatch `last_reported` age as a hard gate while retaining direct
+  source identity/state, future-skew, fused provenance, event structure, and
+  26-hour import/export freshness checks. Semantic dispatch/rate changes stop
+  the active bonus lease; EV power is not used as withdrawal evidence.
+- Added focused bonus lease planner coverage and updated the superseded T0012
+  freshness contract/test.
+- Adjacent bonus components retain separate native boundaries; all lease and
+  authority comparisons use UTC instants, including a DST-fold regression.
+- A successful stop with an enabled readback retains immediate stop debt and
+  retries on the existing bounded backoff until off proof. The bonus
+  fingerprint includes the exact dispatch-source entity identity. Lease
+  ownership is intentionally in-memory only; after restart, a fresh bounded
+  lease may be issued from valid current external authority and eligibility.
+  When a valid bonus plan already matches an enabled physical slot, the
+  controller reconstructs that ephemeral ownership from the observed slot and
+  plan so later expiry or withdrawal still creates stop debt; no persistence or
+  restart-only force-stop path is added.
+- `PYTHONPATH=deployment/files /Users/connor/src/home/deployment/.venv/bin/pytest
+  -q deployment/files/custom_components/house_battery_control/tests` — 109
+  passed.
+- `PYTHONPATH=deployment/files:deployment /Users/connor/src/home/deployment/.venv/bin/pytest
+  -q deployment/tests` — 53 passed.
+
+Live acceptance was not run in this implementation worktree, per the task
+scope; deployment and on-device proof remain required before closing rollout.
