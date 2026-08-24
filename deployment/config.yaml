@@ -444,6 +444,12 @@
           - "--exclude=.rsync-filter"
       notify: restart ha
 
+    - name: remove house battery control bytecode cache
+      ansible.builtin.file:
+        path: "{{ ha_config_dir }}/custom_components/house_battery_control/__pycache__"
+        state: absent
+      notify: restart ha
+
     - name: install house battery control custom component
       ansible.builtin.synchronize:
         src: custom_components/house_battery_control/
@@ -579,3 +585,7 @@
       notify: reload core config
       loop:
         - battery_low
+
+    - name: validate Home Assistant configuration before handlers
+      ansible.builtin.command: ha core check
+      changed_when: false
