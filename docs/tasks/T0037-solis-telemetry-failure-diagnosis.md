@@ -35,14 +35,28 @@ configuration.
 The control integration is not an independent telemetry fallback: it uses the
 same SolisCloud service and exhibited the same incident concurrently.
 
+Pristine v4.0.1 also leaks failed-discovery retry callbacks across manual
+integration reloads. `schedule_discovery()` discards the unsubscribe handle,
+and shutdown neither cancels the callback nor prevents the old service from
+rescheduling itself. Repeated reloads therefore create overlapping login loops;
+the observed staggered failures only seconds apart were consistent with several
+retained retry chains. The removed overlay managed the normal update timer but
+did not fix the separate discovery-timer lifecycle.
+
 ## Decision
 
 - Keep the telemetry integration pinned to pristine upstream v4.0.1 for the
   current commissioning baseline.
+- Accept that successful samples may be more than ten minutes apart while the
+  SolisCloud API is slow. Do not impose the removed 60-second whole-update
+  timeout: live evidence showed a slow request eventually return valid data.
 - Do not add another local reliability patch while SolisCloud itself is failing
   and before a distinct post-discovery polling failure is reproduced.
 - Treat entity freshness and availability, not the integration's loaded state,
   as the telemetry readiness signal.
+- Do not manually reload the telemetry integration while it is failing. A clean
+  Home Assistant Core restart clears leaked in-memory discovery callbacks and
+  leaves one retry chain.
 - Allow the battery controller to remain `DEGRADED` without writes and recover
   passively when fresh telemetry returns.
 
@@ -52,5 +66,6 @@ If reliability work resumes, first improve safe diagnostics: record endpoint,
 elapsed time, HTTP status, Solis response code/message and failure category
 without credentials. Only then consider bounded retry/backoff for transient
 discovery requests and removal of duplicate discovery fetches. Do not replace
-the telemetry source with Solis Cloud Control as a reliability fix.
-
+the telemetry source with Solis Cloud Control as a reliability fix. Any
+lifecycle patch must retain and cancel both discovery and update callback
+handles and prevent rescheduling after unload.

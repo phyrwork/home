@@ -1,6 +1,6 @@
 # T0036 — Revert Solis poll-recovery overlay for A/B commissioning
 
-Status: Deployed — A/B result recorded; telemetry recovery pending
+Status: Complete — pristine v4.0.1 retained
 
 Depends on: T0035
 
@@ -62,6 +62,14 @@ live verification are separate, explicit steps.
   repeated HTTP 502 responses from the same SolisCloud service.
 - Telemetry timestamp, battery SOC and battery power remained restored and
   unavailable after the first pristine discovery attempts.
+- After a clean Core restart removed leaked manual-reload retry callbacks,
+  pristine v4.0.1 discovered successfully and populated telemetry at
+  `12:30:39 BST`.
+- Its next sample completed at `12:40:52 BST`. This slow but successful update
+  is material: the removed overlay's 60-second whole-update timeout would have
+  cancelled a request that eventually returned valid data.
+- The controller recovered passively, remained healthy in
+  `RESERVE_DISCHARGE`, and exported continuously without slot churn.
 
 Conclusion: the removed poll-recovery overlay did not cause the login/discovery
 failure. Its changes run after discovery, whereas both the overlay and pristine

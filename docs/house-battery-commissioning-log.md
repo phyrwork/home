@@ -290,3 +290,35 @@ must cover the integration's approximately 60-second worst case plus readback.
 The evidence collector captured eleven duplicate stop calls by `09:17 BST`, no
 mode writes, no overlap, and a fresh controller heartbeat. This capture is kept
 as commissioning evidence and is not eligible as the clean 24-hour soak.
+
+## 2026-08-24 telemetry recovery and reserve-discharge continuity
+
+The Solis Inverter telemetry integration was returned to pristine pinned
+v4.0.1. Live checksum and deployment-marker verification proved that the local
+poll-recovery overlay was no longer installed. Pristine v4.0.1 reproduced the
+same login/discovery failures while SolisCloud returned HTTP 502 responses to
+the independent control integration, exonerating the removed normal-polling
+changes as the cause of that outage.
+
+Repeated manual telemetry reloads exposed a separate upstream lifecycle defect:
+failed-discovery callbacks are not retained or cancelled on unload, so each
+reload can leave another staggered login retry chain. A clean Home Assistant
+Core stop/start removed all leaked callbacks. Manual telemetry reloads are
+therefore prohibited during commissioning; use one clean Core restart only when
+an operator reset is genuinely required.
+
+After the clean restart, the controller began fresh in `DEGRADED` rather than
+the previous latched `FAIL_SAFE`. Pristine telemetry discovered successfully,
+populated at `12:30:39 BST`, and refreshed again at `12:40:52 BST`. The greater
+than ten-minute sample interval proves the integration is slow under SolisCloud
+degradation but still completes; a 60-second whole-update timeout would have
+cancelled this valid late result.
+
+The controller recovered passively and selected `RESERVE_DISCHARGE`. Live state
+proved Feed-In Priority, discharge slot 2 enabled with `12:31-23:30`, `100 A`,
+target `17%`, and every other direction off. The slot and schedule remained
+unchanged across more than three minute boundaries. From `12:31:52` through
+`12:40:52 BST`, controller health remained healthy with no stop/start churn.
+Whole-site export remained approximately `4.8-6.8 kW`; the fresh `12:40:52`
+telemetry sample reported SOC `89%` and battery power `-4.920 kW`. This accepts
+the live reserve-continuity and physical-discharge gates from T0035.
