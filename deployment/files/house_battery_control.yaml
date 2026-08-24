@@ -18,6 +18,9 @@ solar:
 cycle_discharge_duration_entity_id: input_number.house_battery_cycle_discharge_duration_minutes
 
 solis:
+  # Candidate continuous midnight boundary; confirm 24:00 live before release.
+  # Use 23:59 only if commissioned, accepting its explicit one-minute gap.
+  midnight_end: "24:00"
   telemetry:
     state_of_charge_entity_id: sensor.garage_inverter_telemetry_garage_inverter_remaining_battery_capacity
     battery_power_entity_id: sensor.garage_inverter_telemetry_garage_inverter_battery_power

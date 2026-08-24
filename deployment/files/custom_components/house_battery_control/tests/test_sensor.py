@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.house_battery_control import config as integration_config
 from custom_components.house_battery_control.const import DOMAIN
-from custom_components.house_battery_control.contracts import ControllerHealth
+from custom_components.house_battery_control.model import ControllerHealth
 from custom_components.house_battery_control.coordinator import Coordinator, Snapshot
 from custom_components.house_battery_control.sensor import (
     ActionSensor,

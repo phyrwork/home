@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
-from .solis_config import SolisConfig, from_mapping as solis_from_mapping
+from .solis import SolisConfig, config_from_mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +110,7 @@ def from_mapping(value: Mapping[str, Any]) -> Config:
         battery=battery_config,
         tariff=tariff_config,
         solar=SolarConfig(entry_id),
-        solis=solis_from_mapping(_mapping(source["solis"], "solis")),
+        solis=config_from_mapping(_mapping(source["solis"], "solis")),
         cycle_discharge_duration_entity_id=cycle_duration,
     )
 

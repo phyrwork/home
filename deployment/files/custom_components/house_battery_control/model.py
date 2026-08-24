@@ -46,10 +46,8 @@ class SlotOwner(_TextEnum):
 
 
 class StorageMode(_TextEnum):
-    # OFF_GRID remains transitional until T0029 narrows the Solis adapter.
     SELF_USE = "Self-Use"
     FEED_IN_PRIORITY = "Feed-In Priority"
-    OFF_GRID = "Off-Grid"
 
 
 @dataclass(frozen=True, slots=True)

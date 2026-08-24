@@ -13,6 +13,7 @@ import yaml
 
 from custom_components.house_battery_control import config as integration_config
 from custom_components.house_battery_control.model import (
+    ControllerHealth,
     CycleState,
     SlotDirection,
     SlotOwner,
@@ -38,8 +39,8 @@ from custom_components.house_battery_control.planner import (
     plan_reserve,
     prorated_energy,
 )
-from custom_components.house_battery_control.solis_reader import read_solis_state
-from custom_components.house_battery_control.tests.test_solis_reader import fixture as solis_fixture
+from custom_components.house_battery_control.solis import read_state
+from custom_components.house_battery_control.tests.test_solis import fixture as solis_fixture
 
 
 UTC = timezone.utc
@@ -570,9 +571,9 @@ def _config():
 def _solis(*, soc: str = "55"):
     parsed, states = solis_fixture()
     states[parsed.telemetry.state_of_charge_entity_id]["state"] = soc
-    result = read_solis_state(parsed, states, datetime(2026, 8, 22, 12, tzinfo=UTC))
-    assert result.snapshot is not None
-    return result.snapshot
+    result = read_state(states, parsed, now=datetime(2026, 8, 22, 12, tzinfo=UTC))
+    assert result.health is ControllerHealth.HEALTHY
+    return result
 
 
 async def _build(

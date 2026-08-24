@@ -1,4 +1,4 @@
-"""Transitional single-path house-battery coordinator."""
+"""Transitional coordinator consuming the narrow Solis adapter."""
 
 from __future__ import annotations
 
@@ -16,22 +16,13 @@ from homeassistant.util import dt as dt_util
 
 from .config import Config
 from .const import DOMAIN
-from .contracts import SlotIntent as LegacySlotIntent
-from .ha_writer import HomeAssistantWriter
-from .model import (
-    ControllerHealth,
-    CycleState,
-    LogicalIntent,
-    SlotDirection,
-    SlotOwner,
-    StrategyAction,
-)
+from .model import ControllerHealth, CycleState, StorageMode, StrategyAction
 from .planner import Plan, build_plan
-from .solis_policy import PolicyActuationResult, SolisPolicyActuator
-from .solis_reader import read_solis_state
+from .solis import SolisAdapter, SolisState, WriteResult, read_state
 
 _LOGGER = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL = timedelta(minutes=1)
+WRITE_DEADLINE = timedelta(seconds=30)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,16 +47,10 @@ class Snapshot:
 
 
 class Coordinator(DataUpdateCoordinator[Snapshot]):
-    """Read Solis once, build one plan and apply one transitional action."""
+    """Read once, plan once and advance at most one Solis change."""
 
     def __init__(self, hass: HomeAssistant, config: Config) -> None:
-        super().__init__(
-            hass,
-            _LOGGER,
-            config_entry=None,
-            name=DOMAIN,
-            update_interval=HEARTBEAT_INTERVAL,
-        )
+        super().__init__(hass, _LOGGER, config_entry=None, name=DOMAIN, update_interval=HEARTBEAT_INTERVAL)
         self.config = config
         self._cycle_state = CycleState.IDLE
         self._cycle_deadline: datetime | None = None
@@ -75,15 +60,10 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         self._stopping = False
         self._stop_task: asyncio.Task[None] | None = None
         self._safe_state_applied = False
-        writer = HomeAssistantWriter.for_home_assistant(hass)
         zone = dt_util.get_time_zone(hass.config.time_zone)
         if zone is None:
             raise ValueError(f"Unknown Home Assistant timezone: {hass.config.time_zone}")
-        self.policy_actuator = SolisPolicyActuator(
-            config.solis,
-            writer,
-            inverter_timezone=zone,
-        )
+        self.solis_adapter = SolisAdapter(hass, config.solis, timezone=zone)
 
     @staticmethod
     def _now() -> datetime:
@@ -98,9 +78,7 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         self._started = True
         if self._unsub_sources is None:
             self._unsub_sources = async_track_state_change_event(
-                self.hass,
-                self._source_entity_ids(),
-                self._async_source_changed,
+                self.hass, self._source_entity_ids(), self._async_source_changed
             )
         await self.async_refresh()
 
@@ -114,163 +92,117 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         if self._unsub_sources is not None:
             self._unsub_sources()
             self._unsub_sources = None
-        await self.policy_actuator.async_apply_safe_baseline()
+        # T0030 owns the final Self-Use/observed-on shutdown ordering. This
+        # staged adapter slice deliberately does not invent a partial sequence.
         await self.async_shutdown()
 
     async def _async_update_data(self) -> Snapshot:
         now = self._now()
         if self._stopping:
             return self.data or Snapshot(
-                heartbeat_at=now,
-                health=ControllerHealth.FAIL_SAFE,
-                action=StrategyAction.IDLE,
-                reason="controller is stopping",
-                cycle_state=self._cycle_state,
-                cycle_deadline=self._cycle_deadline,
+                now, ControllerHealth.FAIL_SAFE, StrategyAction.IDLE,
+                "controller is stopping", self._cycle_state, self._cycle_deadline,
             )
-        observation: object | None = None
+        observation: SolisState | None = None
         try:
-            observation = read_solis_state(self.config.solis, self.hass.states, now)
-            if (
-                observation.health is not ControllerHealth.HEALTHY
-                or observation.snapshot is None
-            ):
+            observation = read_state(self.hass, self.config.solis, now=now)
+            if observation.health is not ControllerHealth.HEALTHY:
                 if _solis_failure_is_transient(self.hass, observation):
-                    return await self._degraded_solis_snapshot(
-                        now,
+                    return self._snapshot(
+                        now, ControllerHealth.DEGRADED, None,
                         "Solis telemetry or control readback is temporarily unavailable",
-                        observation=observation,
-                        error=_issues_text(observation),
+                        observation=observation, last_error=_issues_text(observation),
                     )
-                self._safe_state_applied = False
                 return await self._fail_safe_snapshot(
-                    now,
-                    "Solis state violates a controller safety invariant",
-                    observation=observation,
-                    error=_issues_text(observation),
+                    now, "Solis state violates a controller safety invariant",
+                    observation=observation, error=_issues_text(observation),
                 )
 
             plan = await build_plan(
-                self.hass,
-                self.config,
-                observation.snapshot,
-                now=now,
-                cycle_state=self._cycle_state,
-                cycle_deadline=self._cycle_deadline,
+                self.hass, self.config, observation, now=now,
+                cycle_state=self._cycle_state, cycle_deadline=self._cycle_deadline,
             )
             if plan.issue is not None:
-                # Planning failure is observation-only. Preserve the bounded
-                # native action and cycle state until planning recovers.
                 return self._snapshot(
-                    now,
-                    ControllerHealth.DEGRADED,
-                    plan,
+                    now, ControllerHealth.DEGRADED, plan,
                     "planning inputs are temporarily unavailable",
-                    observation=observation,
-                    last_error=plan.issue,
+                    observation=observation, last_error=plan.issue,
                 )
-
             if plan.reserve_soc_percent is None:
                 raise ValueError("valid plan has no reserve SOC")
-            actuation = await self.policy_actuator.async_apply_healthy(
-                observation=observation,
+
+            change = self.solis_adapter.next_start_change(
+                observation, plan.intent,
                 reserve_soc_percent=plan.reserve_soc_percent,
-                intent=_legacy_intent(plan.intent),
-                now=now,
             )
-            if not actuation.success:
-                self._safe_state_applied = actuation.safe
-                return await self._fail_safe_snapshot(
-                    now,
-                    "Solis actuation failed",
-                    observation=observation,
-                    plan=plan,
-                    error=actuation.message,
+            if change is not None:
+                result = await self.solis_adapter.apply(
+                    change,
+                    deadline=asyncio.get_running_loop().time() + WRITE_DEADLINE.total_seconds(),
                 )
+                if not result.success:
+                    return self._snapshot(
+                        now, ControllerHealth.DEGRADED, plan,
+                        "best-effort Solis reconciliation did not complete",
+                        observation=observation, last_error=result.message,
+                        actuation=result,
+                    )
+                return self._snapshot(
+                    now, ControllerHealth.DEGRADED, plan,
+                    "Solis reconciliation advanced one change",
+                    observation=observation, actuation=result,
+                )
+
+            if not self.solis_adapter.intent_matches(
+                observation, plan.intent,
+                reserve_soc_percent=plan.reserve_soc_percent,
+            ):
+                return self._snapshot(
+                    now, ControllerHealth.DEGRADED, plan,
+                    "Solis start is blocked by conflicting or unknown state",
+                    observation=observation,
+                )
+
             self._safe_state_applied = False
             self._cycle_state = plan.next_cycle_state
             self._cycle_deadline = plan.cycle_deadline
             self._last_healthy_at = now
             return self._snapshot(
-                now,
-                ControllerHealth.HEALTHY,
-                plan,
-                _plan_reason(plan),
+                now, ControllerHealth.HEALTHY, plan, _plan_reason(plan),
                 observation=observation,
-                actuation=actuation,
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             _LOGGER.exception("House battery evaluation failed")
-            self._safe_state_applied = False
             return await self._fail_safe_snapshot(
-                now,
-                "critical input or coordinator failure",
-                observation=observation,
-                error=f"{type(exc).__name__}: {exc}",
+                now, "critical input or coordinator failure",
+                observation=observation, error=f"{type(exc).__name__}: {exc}",
             )
-
-    async def _degraded_solis_snapshot(
-        self,
-        now: datetime,
-        reason: str,
-        *,
-        observation: object | None,
-        error: str | None,
-    ) -> Snapshot:
-        """Retain the pre-T0030 baseline behavior for Solis read faults only."""
-
-        self._cycle_state = CycleState.IDLE
-        self._cycle_deadline = None
-        actuation = await self.policy_actuator.async_apply_safe_baseline()
-        self._safe_state_applied = actuation.safe
-        if not actuation.safe:
-            return self._snapshot(
-                now,
-                ControllerHealth.FAIL_SAFE,
-                None,
-                "safe baseline could not be proven during degraded operation",
-                observation=observation,
-                last_error=actuation.message if error is None else error,
-                actuation=actuation,
-            )
-        return self._snapshot(
-            now,
-            ControllerHealth.DEGRADED,
-            None,
-            reason,
-            observation=observation,
-            last_error=error,
-            actuation=actuation,
-        )
 
     async def _fail_safe_snapshot(
         self,
         now: datetime,
         reason: str,
         *,
-        observation: object | None = None,
+        observation: SolisState | None = None,
         plan: Plan | None = None,
         error: str | None = None,
     ) -> Snapshot:
         self._cycle_state = CycleState.IDLE
         self._cycle_deadline = None
-        if self._safe_state_applied:
-            actuation = PolicyActuationResult(True, True, "fail-safe already applied")
-        else:
-            actuation = await self.policy_actuator.async_apply_safe_baseline()
-            self._safe_state_applied = actuation.safe
-        if not actuation.success and error is None:
-            error = actuation.message
+        result: WriteResult | None = None
+        if not self._safe_state_applied:
+            result = await self.solis_adapter.set_mode(
+                StorageMode.SELF_USE,
+                deadline=asyncio.get_running_loop().time() + WRITE_DEADLINE.total_seconds(),
+            )
+            self._safe_state_applied = result.success
+        if result is not None and not result.success and error is None:
+            error = result.message
         return self._snapshot(
-            now,
-            ControllerHealth.FAIL_SAFE,
-            plan,
-            reason,
-            observation=observation,
-            last_error=error,
-            actuation=actuation,
+            now, ControllerHealth.FAIL_SAFE, plan, reason,
+            observation=observation, last_error=error, actuation=result,
         )
 
     def _snapshot(
@@ -280,12 +212,11 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
         plan: Plan | None,
         reason: str,
         *,
-        observation: object | None,
+        observation: SolisState | None,
         last_error: str | None = None,
-        actuation: PolicyActuationResult | None = None,
+        actuation: WriteResult | None = None,
     ) -> Snapshot:
-        solis = getattr(observation, "snapshot", None)
-        telemetry = getattr(solis, "telemetry", None)
+        telemetry = None if observation is None else observation.telemetry
         actual = None if plan is None else plan.battery_energy_kwh
         if actual is None:
             actual = _actual_energy(self.config, telemetry)
@@ -314,71 +245,36 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             await self.async_request_refresh()
 
     def _source_entity_ids(self) -> tuple[str, ...]:
-        telemetry = self.config.solis.telemetry
-        persistent = self.config.solis.persistent
-        protection = self.config.solis.protection
-        capability = self.config.solis.capability
+        solis = self.config.solis
         entity_ids = [
             self.config.tariff.import_rates_entity_id,
             self.config.tariff.export_rates_entity_id,
             self.config.cycle_discharge_duration_entity_id,
-            telemetry.state_of_charge_entity_id,
-            telemetry.battery_power_entity_id,
-            telemetry.battery_voltage_entity_id,
-            telemetry.device_timestamp_entity_id,
-            persistent.storage_mode_entity_id,
-            persistent.allow_grid_charging_entity_id,
-            persistent.inverter_time_entity_id,
-            protection.battery_reserve_entity_id,
-            protection.battery_reserve_soc_entity_id,
-            capability.battery_max_charge_current_entity_id,
-            capability.battery_max_discharge_current_entity_id,
+            solis.telemetry.state_of_charge_entity_id,
+            solis.telemetry.battery_power_entity_id,
+            solis.telemetry.battery_voltage_entity_id,
+            solis.telemetry.device_timestamp_entity_id,
+            solis.persistent.storage_mode_entity_id,
+            solis.persistent.allow_grid_charging_entity_id,
+            solis.persistent.inverter_time_entity_id,
+            solis.protection.battery_reserve_entity_id,
+            solis.protection.battery_reserve_soc_entity_id,
+            solis.capability.battery_max_charge_current_entity_id,
+            solis.capability.battery_max_discharge_current_entity_id,
         ]
-        for slot in self.config.solis.slots:
+        for slot in solis.slots:
             for direction in (slot.charge, slot.discharge):
-                entity_ids.extend((
-                    direction.enable_entity_id,
-                    direction.time_entity_id,
-                    direction.current_entity_id,
-                    direction.target_soc_entity_id,
-                ))
+                entity_ids.extend((direction.enable_entity_id, direction.time_entity_id,
+                                   direction.current_entity_id, direction.target_soc_entity_id))
         return tuple(dict.fromkeys(entity_ids))
 
 
-def _legacy_intent(intent: LogicalIntent | None) -> LegacySlotIntent | None:
-    """Bridge one logical segment to the old actuator until T0029 deletes it."""
-
-    if intent is None:
-        return None
-    if len(intent.segments) != 1:
-        raise ValueError("transitional actuator cannot accept split logical intent")
-    segment = intent.segments[0]
-    physical_slot = {
-        (SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE): 1,
-        (SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE): 1,
-        (SlotOwner.RESERVE_EXPORT, SlotDirection.DISCHARGE): 2,
-    }.get((segment.owner, segment.direction))
-    if physical_slot is None:
-        raise ValueError("logical intent has no transitional physical allocation")
-    return LegacySlotIntent(
-        owner=segment.owner,
-        physical_slot=physical_slot,
-        direction=segment.direction,
-        start=segment.start,
-        end=segment.end,
-        current=segment.current,
-        target_soc=segment.target_soc,
-        expiry=segment.expiry,
-    )
-
-
-def _solis_failure_is_transient(hass: HomeAssistant, result: object) -> bool:
-    transient_codes = {"device_timestamp_stale", "state_access_failed", "state_access_unavailable"}
-    issues = getattr(result, "issues", ())
-    if not issues:
+def _solis_failure_is_transient(hass: HomeAssistant, result: SolisState) -> bool:
+    transient = {"device_timestamp_stale", "state_access_failed", "state_access_unavailable", "state_revision_invalid"}
+    if not result.issues:
         return False
-    for issue in issues:
-        if issue.code in transient_codes:
+    for issue in result.issues:
+        if issue.code in transient:
             continue
         if issue.entity_id is None:
             return False
@@ -391,17 +287,12 @@ def _solis_failure_is_transient(hass: HomeAssistant, result: object) -> bool:
 
 def _actual_energy(config: Config, telemetry: object | None) -> Decimal | None:
     soc = getattr(telemetry, "state_of_charge_percent", None)
-    if not isinstance(soc, Decimal):
-        return None
-    return config.battery.capacity_kwh * soc / Decimal(100)
+    return None if not isinstance(soc, Decimal) else config.battery.capacity_kwh * soc / Decimal(100)
 
 
 def _window_text(window: object | None) -> str | None:
-    start = getattr(window, "start", None)
-    end = getattr(window, "end", None)
-    if not isinstance(start, datetime) or not isinstance(end, datetime):
-        return None
-    return f"{start.isoformat()}/{end.isoformat()}"
+    start, end = getattr(window, "start", None), getattr(window, "end", None)
+    return f"{start.isoformat()}/{end.isoformat()}" if isinstance(start, datetime) and isinstance(end, datetime) else None
 
 
 def _plan_reason(plan: Plan) -> str:
@@ -413,9 +304,8 @@ def _plan_reason(plan: Plan) -> str:
     }[plan.action]
 
 
-def _issues_text(observation: object) -> str | None:
-    messages = [getattr(issue, "message", str(issue)) for issue in getattr(observation, "issues", ())]
-    return "; ".join(messages) or None
+def _issues_text(observation: SolisState) -> str | None:
+    return "; ".join(issue.message for issue in observation.issues) or None
 
 
 __all__ = ["Coordinator", "HEARTBEAT_INTERVAL", "Snapshot"]

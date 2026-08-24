@@ -90,7 +90,7 @@ def test_enums_and_structural_exclusivity() -> None:
         contracts.SlotDirection.DISCHARGE,
     }
     assert [mode.value for mode in contracts.StorageMode] == [
-        "Self-Use", "Feed-In Priority", "Off-Grid"
+        "Self-Use", "Feed-In Priority"
     ]
 
 
