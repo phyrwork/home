@@ -223,3 +223,70 @@ Control-plane readback remains provisional. The authenticated live release gate
 must still prove the exact local-midnight representation and two-slot charge and
 discharge behavior, a full-SOC discharge/recharge cycle, restart/fail-safe/
 shutdown behavior, and 24 hours without overlap or next-day slot recurrence.
+
+## 2026-08-24 lean-controller cutover
+
+Pre-deployment readback at approximately `08:44 BST` proved the legacy guard
+asserted, storage mode `Self-Use`, and all twelve charge/discharge directions
+authoritatively off with `00:00-00:00`, `0 A` housekeeping values. The legacy
+fail-safe had left Grid Peak Shaving enabled. A two-minute read-only WebSocket
+capture recorded two complete 190-entity snapshots before mutation.
+
+Ansible staged the lean component and configuration, removed only the battery
+component's stale `__pycache__`, deleted the managed legacy guard/fail-safe
+files, and passed `ha core check` before restarting Home Assistant. Deployment
+completed with `ok=143`, `changed=9`, `failed=0`, `unreachable=0`.
+
+Post-restart verification proved:
+
+- Home Assistant Core `2026.8.3` and a successful second `ha core check`;
+- exactly `__init__.py`, `config.py`, `controller.py`, `model.py`, `planner.py`,
+  `solis.py`, `sensor.py`, and `manifest.json` in the component source root;
+- the old guard entity absent and the old script/watchdog present only as inert
+  restored `unavailable` states;
+- the new stale-heartbeat sentinel enabled;
+- controller health `healthy` with an advancing heartbeat;
+- commissioned Grid Peak Shaving `off`, Feed-In Priority restored, Allow Grid
+  Charging `on`, Battery Reserve `on`, and reserve target `17%`; and
+- one and only one native direction enabled: discharge slot 2,
+  `09:08-23:30`, `100 A`, target `17%`.
+
+Fresh telemetry at approximately `09:08 BST` reported battery power
+`-4.914 kW`, current `-93.6 A`, voltage `52.5 V`, and SOC `78%`. The Octopus
+current-demand meter simultaneously reported `-5.802 kW`, proving whole-site
+export rather than ordinary house-load peak shaving. This is accepted physical
+proof that the deployed `RESERVE_DISCHARGE` intent and native discharge slot are
+effective with Grid Peak Shaving disabled.
+
+The requested observability surface is live under the clean entity IDs
+`sensor.house_battery_energy`, `sensor.house_battery_reserve_target`, and
+`sensor.house_battery_reserve_balance`. Initial values were respectively
+`25.079808 kWh`, `5.21536 kWh`, and `19.864448 kWh`; the arithmetic agrees with
+`32.1536 kWh × 78%`, the 17% reserve target, and actual minus target.
+
+### Cutover defects found before soak
+
+The clean 24-hour soak is blocked pending two narrow fixes found by the first
+live minute boundary:
+
+1. Active reserve-discharge intent used the current minute as its start. The
+   desired native interval therefore changed from `09:08-23:30` to
+   `09:09-23:30` at the next backstop and strict reconciliation stopped an
+   otherwise-correct owned slot. Continuity must retain the original start only
+   while the same owned direction/current/target/end remains active and `now`
+   remains inside its half-open interval.
+2. The first `turn_off` timed out after the Solis switch optimistically changed
+   to `off`, making the stop ambiguous. Later forced calls completed, but an
+   idempotent off switch emitted no newer HA revision, so proof could never
+   complete. A completed forced `turn_off` whose captured state was already
+   exactly `off` may accept the unchanged exact-off state; this exception must
+   not apply to starts or other targets.
+
+The deployed control integration itself retries for 30 seconds and each HTTP
+request can take 30 seconds. The controller's independent 10-second service cap
+can therefore cancel a legitimate retrying call. One finite whole-write bound
+must cover the integration's approximately 60-second worst case plus readback.
+
+The evidence collector captured eleven duplicate stop calls by `09:17 BST`, no
+mode writes, no overlap, and a fresh controller heartbeat. This capture is kept
+as commissioning evidence and is not eligible as the clean 24-hour soak.
