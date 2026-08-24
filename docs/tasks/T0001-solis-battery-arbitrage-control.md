@@ -66,7 +66,7 @@ that the runtime writes Self-Use when applying fail-safe:
 - Export is unlimited, within the DNO-approved site-inverter export limit.
 
 The runtime boundary is limited to exceptional storage-mode transitions,
-grid-charging permission, Grid Peak Shaving switch, inverter clock, Battery
+grid-charging permission, inverter clock, Battery
 Reserve and reserve SOC, global charge/discharge current capabilities, the
 cycle-duration helper, all six charge/discharge slots, and telemetry. Runtime
 does not discover, write or reconcile the commissioned numeric protection,
@@ -102,9 +102,9 @@ protection, output, export and numeric Peak Shaving limit remain commissioned
 facts:
 
 - Storage mode: `Feed-In Priority`.
-- Grid Peak Shaving maximum grid power: `MAXIMUM_GRID_IMPORT_POWER_KW`.
-- Grid Peak Shaving switch: runtime-owned; disabled while charging, enabled
-  during ordinary load control and discharge.
+- Grid Peak Shaving: disabled as a one-time commissioned setting; it is not a
+  runtime dependency. Charge slots require it disabled, while battery
+  discharge/load following does not require it.
 - Allow grid charging: enabled.
 - Grid Feed-in Power Limit: disabled.
 - Over-discharge SOC: `MINIMUM_SOC_PERCENT`.
@@ -129,9 +129,8 @@ The DNO-approved export limit equals the combined rated output of the site
 inverters, so no lower software feed-in limit is required.
 
 The runtime deployment validates Feed-In Priority, protective thresholds,
-forced discharge and timed slots. It owns the Peak Shaving switch but not its
-commissioned 100 W limit. Grid Feed-in Power Limit remains disabled and
-unmanaged.
+forced discharge and timed slots. Grid Peak Shaving remains disabled and
+unmanaged. Grid Feed-in Power Limit remains disabled and unmanaged.
 
 ## Core operating policy
 
@@ -140,9 +139,8 @@ unmanaged.
 While the controller is healthy:
 
 - Maintain Feed-In Priority.
-- Disable Grid Peak Shaving before enabling a charge slot.
-- Enable Grid Peak Shaving at the commissioned 100 W limit for ordinary load
-  control and every scheduled discharge action.
+- Keep Grid Peak Shaving disabled; charge slots require it disabled and
+  battery discharge/load following does not require it.
 - Limit ordinary grid import to `MAXIMUM_GRID_IMPORT_POWER_KW`.
 - Control charge and discharge slots dynamically.
 - Never enable charge and discharge slots simultaneously.
@@ -517,8 +515,7 @@ treated as immutable.
 | --- | --- | --- |
 | Storage mode | `select.garage_inverter_control_storage_mode` | Select with `Self-Use`, `Feed-In Priority` and `Off-Grid`; use Feed-In Priority while healthy and Self-Use during fail-safe |
 | Grid charging permission | `switch.garage_inverter_control_allow_grid_charging` | Enable while scheduled charging is available |
-| Peak Shaving switch | `switch.garage_inverter_control_grid_peak_shaving` | Runtime-owned; off for charge, on for ordinary load control, discharge and fail-safe |
-| Maximum grid import | Native Grid Peak Shaving power value | One-time commissioned at `MAXIMUM_GRID_IMPORT_POWER_KW`; runtime does not rewrite the numeric limit |
+| Grid Peak Shaving | `switch.garage_inverter_control_grid_peak_shaving` | One-time commissioned disabled; not runtime-managed. Charge requires it disabled; discharge/load following does not require it |
 | Inverter clock | `datetime.garage_inverter_control_inverter_time` | Verify or synchronise before programming slots |
 
 ### Battery protection and reserve

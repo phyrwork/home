@@ -14,7 +14,6 @@ AUTOMATION_PATH = FILES / "automations" / "house_battery.yaml"
 
 GUARD = "input_boolean.house_battery_control_disable"
 MODE = "select.garage_inverter_control_storage_mode"
-PEAK_SHAVING = "switch.garage_inverter_control_grid_peak_shaving"
 RESERVE = "switch.garage_inverter_control_battery_reserve"
 
 
@@ -89,7 +88,6 @@ def test_fail_safe_covers_all_native_slots_and_safe_policy() -> None:
     variables = script["sequence"][0]["variables"]
     assert variables["guard_entity_id"] == GUARD
     assert variables["storage_mode_entity_id"] == MODE
-    assert variables["grid_peak_shaving_entity_id"] == PEAK_SHAVING
     assert variables["battery_reserve_entity_id"] == RESERVE
     assert variables["slot_entity_ids"] == _configured_slots(config)
     assert variables["slot_time_entity_ids"] == _configured_slot_fields(
@@ -103,7 +101,6 @@ def test_fail_safe_covers_all_native_slots_and_safe_policy() -> None:
     for entity_id in [
         GUARD,
         MODE,
-        PEAK_SHAVING,
         RESERVE,
         *_configured_slots(config),
         *_configured_slot_fields(config, "time_entity_id"),
@@ -114,7 +111,6 @@ def test_fail_safe_covers_all_native_slots_and_safe_policy() -> None:
     services = [action.get("service") for action in _actions(script["sequence"])]
     assert services.count("switch.turn_off") >= 1
     assert "select.select_option" in services
-    assert "switch.turn_on" in services
     assert "persistent_notification.create" in services
     assert "Self-Use" in text
 
@@ -160,16 +156,9 @@ def test_fail_safe_skips_safe_controls_and_isolates_slot_failures() -> None:
     assert current_repeat["sequence"][0]["choose"][0]["sequence"][0]["service"] == (
         "number.set_value"
     )
-    peak_action = sequence[4]["choose"][0]["sequence"][0]
-    assert peak_action["service"] == "switch.turn_on"
-    assert peak_action["target"]["entity_id"] == (
-        "{{ grid_peak_shaving_entity_id }}"
-    )
-
     # Each fixed Solis control is guarded by its own state comparison. A
     # fully-safe state therefore performs no Solis service writes at all.
     assert "states(storage_mode_entity_id) != 'Self-Use'" in text
-    assert "states(grid_peak_shaving_entity_id) != 'on'" in text
     assert "states(battery_reserve_entity_id) != 'off'" in text
     assert "states(repeat.item) != '00:00-00:00'" in text
     assert "float(default=-1) != 0" in text

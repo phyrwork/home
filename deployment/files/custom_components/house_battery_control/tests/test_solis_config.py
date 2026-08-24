@@ -18,10 +18,6 @@ def test_live_mapping_has_real_entities_and_six_physical_slots() -> None:
     parsed = config.from_mapping(deployed()).solis
 
     assert parsed.telemetry.battery_power_sign is BatteryPowerSign.POSITIVE_MEANS_CHARGING
-    assert (
-        parsed.persistent.grid_peak_shaving_entity_id
-        == "switch.garage_inverter_control_grid_peak_shaving"
-    )
     assert len(parsed.slots) == 6
     assert parsed.slots[0].charge.owner is SolisSlotOwner.CHEAP_CHARGING
     assert parsed.slots[1].discharge.owner is SolisSlotOwner.RESERVE_EXPORT

@@ -421,7 +421,6 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
                 persistent is None
                 or slots is None
                 or persistent.storage_mode != StorageMode.SELF_USE.value
-                or persistent.grid_peak_shaving is not True
                 or persistent.battery_reserve is not False
                 or len(slots) != len(self.config.solis.slots)
             ):
@@ -450,7 +449,6 @@ class Coordinator(DataUpdateCoordinator[Snapshot]):
             telemetry.device_timestamp_entity_id,
             persistent.storage_mode_entity_id,
             persistent.allow_grid_charging_entity_id,
-            persistent.grid_peak_shaving_entity_id,
             persistent.inverter_time_entity_id,
             protection.battery_reserve_entity_id,
             protection.battery_reserve_soc_entity_id,

@@ -24,7 +24,7 @@ The watchdog proves all of these exact states:
 - `input_boolean.house_battery_control_disable` is `on`;
 - every configured charge and discharge slot switch 1 through 6 is `off`;
 - `select.garage_inverter_control_storage_mode` is `Self-Use`;
-- `switch.garage_inverter_control_grid_peak_shaving` is `on`;
+- Grid Peak Shaving is disabled and is not part of watchdog proof or writes;
 - `switch.garage_inverter_control_battery_reserve` is `off`.
 
 Missing, unknown, unavailable or any other state is unsafe.
@@ -51,7 +51,7 @@ Otherwise perform at most two complete reconciliation passes within a total
 
 1. turns off each of the 12 slot switches as a separate action;
 2. selects `Self-Use`;
-3. turns on Grid Peak Shaving;
+3. leaves Grid Peak Shaving untouched (it is commissioned disabled);
 4. turns off Battery Reserve;
 5. waits a bounded time for the complete exact proof;
 6. re-evaluates fresh state before deciding whether another pass is required.
@@ -132,7 +132,7 @@ custom integration runtime. Offline tests must cross-check its:
 
 - 12 slot switches;
 - storage-mode select;
-- Peak Shaving switch;
+- Grid Peak Shaving is deliberately not a watchdog input or output;
 - Battery Reserve switch;
 - disable guard;
 

@@ -1,8 +1,8 @@
 # One-time SolisCloud commissioning is complete: EMS is disabled for this plant
 # so cloud dispatch cannot overwrite Home Assistant inverter controls. The
-# Grid Peak Shaving limit is commissioned to 100 W; its switch is runtime-owned
-# because scheduled charging requires it off while load control/discharge
-# requires it on. Native Grid Feed in Power Limit is disabled; an enabled
+# Grid Peak Shaving is commissioned disabled and is not a runtime dependency.
+# Charge requires it disabled; battery discharge/load following does not
+# require it. Native Grid Feed in Power Limit is disabled; an enabled
 # 0 W / 0 A limit blocks export and no lower software export cap is required.
 dynamic_control_enabled: true
 
@@ -36,7 +36,6 @@ solis:
   persistent:
     storage_mode_entity_id: select.garage_inverter_control_storage_mode
     allow_grid_charging_entity_id: switch.garage_inverter_control_allow_grid_charging
-    grid_peak_shaving_entity_id: switch.garage_inverter_control_grid_peak_shaving
     inverter_time_entity_id: datetime.garage_inverter_control_inverter_time
 
   protection:
@@ -47,9 +46,8 @@ solis:
     battery_max_charge_current_entity_id: number.garage_inverter_control_battery_max_charge_current
     battery_max_discharge_current_entity_id: number.garage_inverter_control_battery_max_discharge_current
 
-  # The Grid Peak Shaving maximum grid power is commissioned to 100 W (0.1 kW);
-  # runtime owns its switch. Grid Feed in Power Limit is disabled and remains
-  # unmanaged. Runtime intent times are UTC instants; the configured inverter
+  # Grid Peak Shaving remains disabled and unmanaged. Grid Feed in Power Limit
+  # is disabled and remains unmanaged. Runtime intent times are UTC instants; the configured inverter
   # IANA timezone is authoritative at the Solis schedule boundary.
 
   # Every physical slot is mapped for reconciliation and cleanup.  Reserved

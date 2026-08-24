@@ -49,7 +49,6 @@ class SolisPersistentControlConfig:
 
     storage_mode_entity_id: str
     allow_grid_charging_entity_id: str
-    grid_peak_shaving_entity_id: str
     inverter_time_entity_id: str
 
 
@@ -176,7 +175,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         {
             "storage_mode_entity_id",
             "allow_grid_charging_entity_id",
-            "grid_peak_shaving_entity_id",
             "inverter_time_entity_id",
         },
         "solis.persistent",
@@ -190,11 +188,6 @@ def from_mapping(source: Mapping[str, ConfigValue]) -> SolisConfig:
         allow_grid_charging_entity_id=_entity(
             persistent_source["allow_grid_charging_entity_id"],
             "solis.persistent.allow_grid_charging_entity_id",
-            "switch",
-        ),
-        grid_peak_shaving_entity_id=_entity(
-            persistent_source["grid_peak_shaving_entity_id"],
-            "solis.persistent.grid_peak_shaving_entity_id",
             "switch",
         ),
         inverter_time_entity_id=_entity(

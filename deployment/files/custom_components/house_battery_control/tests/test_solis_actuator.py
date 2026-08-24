@@ -81,7 +81,6 @@ def fixture(*, now=NOW):
     }
     for entity_id in (
         solis.persistent.allow_grid_charging_entity_id,
-        solis.persistent.grid_peak_shaving_entity_id,
     ):
         states[entity_id] = _state("on")
     states[solis.protection.battery_reserve_entity_id] = _state("off")

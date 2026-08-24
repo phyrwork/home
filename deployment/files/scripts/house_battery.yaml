@@ -10,7 +10,6 @@ house_battery_fail_safe:
     - variables:
         guard_entity_id: input_boolean.house_battery_control_disable
         storage_mode_entity_id: select.garage_inverter_control_storage_mode
-        grid_peak_shaving_entity_id: switch.garage_inverter_control_grid_peak_shaving
         battery_reserve_entity_id: switch.garage_inverter_control_battery_reserve
         slot_entity_ids:
           - switch.garage_inverter_control_slot1_charge
@@ -120,15 +119,6 @@ house_battery_fail_safe:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ states(grid_peak_shaving_entity_id) != 'on' }}"
-                sequence:
-                  - service: switch.turn_on
-                    target:
-                      entity_id: "{{ grid_peak_shaving_entity_id }}"
-                    continue_on_error: true
-          - choose:
-              - conditions:
-                  - condition: template
                     value_template: "{{ states(storage_mode_entity_id) != 'Self-Use' }}"
                 sequence:
                   - service: select.select_option
@@ -149,7 +139,6 @@ house_battery_fail_safe:
           - wait_template: >-
               {{ states(guard_entity_id) == 'on'
                  and states(storage_mode_entity_id) == 'Self-Use'
-                 and states(grid_peak_shaving_entity_id) == 'on'
                  and states(battery_reserve_entity_id) == 'off'
                  and (expand(slot_entity_ids) | selectattr('state', 'eq', 'off')
                       | list | length)
@@ -171,7 +160,6 @@ house_battery_fail_safe:
                     value_template: >-
                       {{ states(guard_entity_id) == 'on'
                          and states(storage_mode_entity_id) == 'Self-Use'
-                         and states(grid_peak_shaving_entity_id) == 'on'
                          and states(battery_reserve_entity_id) == 'off'
                          and (expand(slot_entity_ids) | selectattr('state', 'eq', 'off')
                               | list | length)
@@ -193,7 +181,7 @@ house_battery_fail_safe:
         title: "House battery fail-safe is not proven"
         message: >-
           The watchdog asserted the control guard and attempted two bounded
-          reconciliation passes, but could not prove Self-Use with Peak
-          Shaving on and all slots off and normalized. Inspect the Solis
+          reconciliation passes, but could not prove Self-Use with all slots
+          off and normalized. Inspect the Solis
           controls before enabling dynamic control.
       continue_on_error: true

@@ -28,7 +28,7 @@ consumer.
 - Remove runtime commissioning services, records, fingerprints, and authority
   checks.
 - Retain the live runtime boundary: telemetry, exceptional storage-mode
-  transitions, grid-charging permission, Grid Peak Shaving switch, inverter
+  transitions, grid-charging permission, inverter
   clock, Battery Reserve/reserve SOC, global charge and discharge current
   capabilities, and all six charge/discharge slots. Keep
   serialized writes, disable-all before direction changes, readback, and bounded
@@ -40,9 +40,9 @@ consumer.
 - Live finding: the Solis datetime sample can lag the five-minute telemetry
   cadence, so raw sampled values must not be treated as the current inverter
   clock.
-- Treat the native 100 W Grid Peak Shaving power limit as one-time
-  commissioning. Runtime owns its switch: off for charging and on for ordinary
-  load control, discharge and fail-safe.
+- Treat Grid Peak Shaving as a one-time commissioned disabled setting. It is not
+  a runtime dependency: charge slots require it disabled, while battery
+  discharge/load following does not require it.
 - Preserve the energy diagnostics `House Battery Energy`, `House Battery Reserve
   Target`, and `House Battery Reserve Balance`; planner diagnostic failures make
   only those sensors unavailable and do not weaken a proven disabled safe state.
@@ -107,8 +107,7 @@ safe baseline during shutdown without changing the manual latch.
   `RESERVE_DISCHARGE` with no last error.
 - Initial fail-safe readback proved Self-Use, battery reserve off, and all 12
   slot directions off before activation. Native SolisCloud commissioning
-  remains EMS disabled; the Peak Shaving limit remains 100 W while its switch
-  is runtime-owned.
+  remains EMS disabled; Grid Peak Shaving remains disabled and unmanaged.
 - Both fused Octopus sensors loaded with 96 current/next-day intervals.
 - The commissioned Solis telemetry cadence is five minutes. SolisCloud has also
   returned successful polls with a device timestamp about 15 minutes old. The
@@ -125,8 +124,8 @@ safe baseline during shutdown without changing the manual latch.
   Solis `HH:MM` fields are converted to and interpreted in the configured
   inverter/site local timezone. The coordinator currently supplies HA's
   configured `Europe/London` timezone for that boundary.
-- Grid Peak Shaving at 100 W is compatible with forced export. A manual native
-  charge slot was physically proven at 5.025 kW with Peak Shaving disabled;
-  therefore the controller must toggle the switch by action.
+- A manual native charge slot was physically proven at 5.025 kW with Grid Peak
+  Shaving disabled. Battery discharge/load following does not require Peak
+  Shaving.
 - Grid Feed in Power Limit is disabled as one-time SolisCloud commissioning. The
-  mapped Solis Cloud Control Peak Shaving switch is a runtime dependency.
+  mapped Solis Cloud Control Peak Shaving switch is not a runtime dependency.

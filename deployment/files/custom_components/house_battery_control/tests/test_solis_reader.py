@@ -48,7 +48,6 @@ def fixture():
     persistent = parsed.persistent
     states[persistent.storage_mode_entity_id] = {"state": "Feed-In Priority", "attributes": {"options": ["Self-Use", "Feed-In Priority", "Off-Grid"]}}
     states[persistent.allow_grid_charging_entity_id] = state("on")
-    states[persistent.grid_peak_shaving_entity_id] = state("on")
     states[persistent.inverter_time_entity_id] = state(NOW.isoformat())
 
     protection = parsed.protection
@@ -77,21 +76,7 @@ def test_reader_accepts_numeric_epoch_and_normalizes_signed_watts() -> None:
     assert result.snapshot.telemetry.device_timestamp == datetime.fromtimestamp(NOW.timestamp(), timezone.utc)
     assert result.snapshot.telemetry.battery_power_kw == Decimal("-0.288")
     assert result.snapshot.telemetry.battery_voltage_v == Decimal("51.2")
-    assert result.snapshot.persistent.grid_peak_shaving is True
     assert result.snapshot.slots[0].charge.direction is SlotDirection.CHARGE
-
-
-def test_unavailable_grid_peak_shaving_is_degraded() -> None:
-    parsed, states = fixture()
-    states[parsed.persistent.grid_peak_shaving_entity_id] = state("unavailable")
-
-    result = read_solis_state(parsed, states, NOW)
-
-    assert result.health is ControllerHealth.DEGRADED
-    assert any(
-        issue.entity_id == parsed.persistent.grid_peak_shaving_entity_id
-        for issue in result.issues
-    )
 
 
 def test_stale_numeric_epoch_is_degraded() -> None:

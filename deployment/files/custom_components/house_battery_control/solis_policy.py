@@ -94,7 +94,6 @@ class SolisPolicyActuator:
             async with self.writer.transaction(deadline=deadline) as transaction:
                 for request in (
                     SelectWriteRequest(self.writer.capture_precondition(persistent.storage_mode_entity_id), StorageMode.SELF_USE.value),
-                    SwitchWriteRequest(self.writer.capture_precondition(persistent.grid_peak_shaving_entity_id), True),
                     SwitchWriteRequest(self.writer.capture_precondition(protection.battery_reserve_entity_id), False),
                 ):
                     # Continue through every persistent control after a normal
@@ -310,14 +309,10 @@ class SolisPolicyActuator:
                     )
                 persistent = self.config.persistent
                 protection = self.config.protection
-                peak_shaving = (
-                    intent is None or intent.direction is SlotDirection.DISCHARGE
-                )
                 async with self.writer.transaction(deadline=deadline) as transaction:
                     for request in (
                         SelectWriteRequest(self.writer.capture_precondition(persistent.storage_mode_entity_id), StorageMode.FEED_IN_PRIORITY.value),
                         SwitchWriteRequest(self.writer.capture_precondition(persistent.allow_grid_charging_entity_id), True),
-                        SwitchWriteRequest(self.writer.capture_precondition(persistent.grid_peak_shaving_entity_id), peak_shaving),
                         NumberWriteRequest(
                             self.writer.capture_precondition(protection.battery_reserve_soc_entity_id),
                             reserve,

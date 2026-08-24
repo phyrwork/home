@@ -8,10 +8,9 @@ Reduce the independent Home Assistant watchdog to the T0022 fail-safe contract:
 assert the disable guard, disable every native charge/discharge slot, and select
 Self-Use when the controller is unavailable or stale.
 
-Grid Peak Shaving is commissioned directly in SolisCloud (enabled at the native
-100 W limit). It is not part of the watchdog's runtime writes or safe-state
-proof because its Home Assistant entity is not authoritative for that native
-setting.
+Grid Peak Shaving is commissioned disabled directly in SolisCloud. It is not
+part of the watchdog's runtime writes or safe-state proof. Charge slots require
+it disabled, while battery discharge/load following does not require it.
 
 ## Scope
 

@@ -21,7 +21,7 @@ proof that the inverter acted.
 | Finding | Evidence | Status |
 | --- | --- | --- |
 | Forced discharge works | A discharge slot produced approximately the inverter's full discharge/export power, rather than only the roughly 740 W house-load peak-shaving response. | Proven |
-| Grid charging works with Feed-In Priority and Peak Shaving disabled | A manually configured native charge slot produced `5.025 kW` battery power and `91.7 A` battery current in fresh SolisCloud telemetry. | Proven |
+| Grid charging works with Feed-In Priority and Grid Peak Shaving disabled | A manually configured native charge slot produced `5.025 kW` battery power and `91.7 A` battery current in fresh SolisCloud telemetry. | Proven |
 | Peak Shaving does not prevent scheduled discharge/export | Forced export was observed with Peak Shaving enabled. | Proven |
 | Grid Feed-in Power Limit can remain disabled | The DNO-approved export limit equals the site's installed inverter capacity, so no lower Solis software limit is required. The earlier export blocker was an enabled limiter set to 0 W / 0 A. | Commissioned |
 | Legacy TOU bit is not the TOU-v2 activation mechanism | Direct CID 636 writes of `114` and `98` were accepted but normalized immediately to `112` and `96`, stripping bit 1. | Proven |
@@ -185,13 +185,9 @@ Conclusion: TOU-v2 native charge slots work on this inverter when Feed-In
 Priority and Allow Grid Charging are enabled and Grid Peak Shaving is disabled.
 This is the working reference configuration for controller implementation.
 
-Grid Peak Shaving interferes with manual timers because it changes the core
-operational rule from a time-driven schedule to a power-driven strategy. Solis
-documents the setting as dynamically limiting grid charging so that total grid
-power does not exceed the configured maximum; peak-shaving control generally
-uses continuous real-time demand to coordinate battery dispatch. In this plant,
-the 100 W maximum was already consumed by ordinary house load, leaving no power
-budget for the scheduled 5 kW charge. See the
+Grid Peak Shaving is commissioned disabled and is not a runtime dependency.
+Charge slots require it disabled; battery discharge/load following does not
+require it. See the
 [SolisCloud remote-control setting reference](https://solis-service.solisinverters.com/en/support/solutions/articles/44002638862-solis-cloud-remote-control-settings-desktop-version)
 and the
 [peak-shaving operating overview](https://www.solinteg.com/seo-blog/what-is-peak-shaving-commercial-energy-costs.html).
@@ -202,10 +198,10 @@ The ownership boundary is:
   runtime operation must verify it and need not rewrite it on every evaluation.
   If fail-safe changes the mode to Self-Use, recovery must restore the
   commissioned Feed-In Priority baseline once.
-- Allow Grid Charging, Battery Reserve and its target, Grid Peak Shaving, and
+- Allow Grid Charging, Battery Reserve and its target, and
   all six charge/discharge slot fields are runtime-owned.
-- Grid Peak Shaving is disabled for charging and enabled at the retained 100 W
-  import limit for ordinary load control and scheduled discharge.
+- Grid Peak Shaving is disabled as a one-time commissioned setting and is not
+  runtime-managed.
 - Disabled directions are normalised to `00:00-00:00` and `0 A`, not merely
   switched off.
 - Every prospective charge/discharge schedule is checked for overlap across all
