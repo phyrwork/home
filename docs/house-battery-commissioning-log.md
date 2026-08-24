@@ -322,3 +322,28 @@ unchanged across more than three minute boundaries. From `12:31:52` through
 Whole-site export remained approximately `4.8-6.8 kW`; the fresh `12:40:52`
 telemetry sample reported SOC `89%` and battery power `-4.920 kW`. This accepts
 the live reserve-continuity and physical-discharge gates from T0035.
+
+## 2026-08-24 Intelligent dispatch and cheap-charge continuity
+
+An Intelligent dispatch beginning at approximately `14:39 BST` correctly
+changed the fused tariff state to `BONUS_DISPATCH`. The controller stopped
+reserve discharge before enabling charge, so no charge/discharge overlap was
+observed. Before T0038, the active charge schedule chased the current minute,
+toggling slot 1 seventeen times during an 81-sample observation. Controller
+health was degraded in 78 samples and Solis control writes recorded eleven
+timeouts. The slot churn interrupted charging even though the dispatch
+continued.
+
+T0038 extends the existing active-slot continuity rule only to an exact
+`CHEAP_CHARGING` charge segment. Independent implementation and safety reviews
+accepted the focused change; all 100 component tests passed. Ansible deployed
+it with `ok=140`, `changed=4`, and no failures.
+
+After the required Core restart, telemetry moved from `unavailable` to
+`unknown`, then produced a fresh measurement and the controller recovered
+passively from `DEGRADED/IDLE` to `HEALTHY/CHEAP_CHARGE`. Charge slot 1 was
+enabled at `15:15–16:00`, `100 A`, target `100%`; all discharge slots remained
+off. The schedule stayed exactly `15:15–16:00` through the `15:16`, `15:17`,
+and `15:18` minute boundaries with healthy controller state. Whole-site demand
+rose from approximately `7.6 kW` to `12.7 kW`, proving about `5 kW` of battery
+charging alongside the EV. Dispatch-end stop proof remains pending.

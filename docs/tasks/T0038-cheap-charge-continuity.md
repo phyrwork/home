@@ -1,6 +1,6 @@
 # T0038 — Preserve active cheap-charge schedules
 
-Status: Implemented — local verification complete
+Status: Deployed — live continuity accepted; dispatch-end stop pending
 
 Depends on: T0035
 
@@ -58,8 +58,7 @@ Tests must prove:
   conflict;
 - removing the intent after the cheap window ends produces the normal stop;
 - native `24:00` and `23:59` split-midnight boundaries do not preserve a
-  segment beyond its own half-open end;
-  and
+  segment beyond its own half-open end; and
 - existing reserve-continuity, split-midnight and full component tests pass.
 
 ## Live acceptance
@@ -92,3 +91,18 @@ restart. Do not manually reload the Solis telemetry integration.
 - `PYTHONPATH=deployment/files /Users/connor/src/home/deployment/.venv/bin/pytest
   -q deployment/files/custom_components/house_battery_control/tests`
   — 100 passed.
+
+## Live evidence
+
+- Ansible deployed the change and restarted Home Assistant with `ok=140`,
+  `changed=4`, `failed=0`, and `unreachable=0`.
+- Pristine Solis telemetry recovered passively after restart. The controller
+  moved from `DEGRADED/IDLE` to `HEALTHY/CHEAP_CHARGE` without a reload.
+- Charge slot 1 was enabled once at `15:15–16:00`, `100 A`, target `100%`.
+  Its start remained exactly `15:15` through the `15:16`, `15:17`, and `15:18`
+  minute boundaries; controller health remained healthy and every discharge
+  slot remained off.
+- Octopus whole-site demand rose from approximately `7.6 kW` to `12.7 kW`,
+  proving approximately `5 kW` battery charging in addition to the EV load.
+- Stopping and observing the slot off at the dispatch half-open end remains to
+  be captured before the task is complete.
