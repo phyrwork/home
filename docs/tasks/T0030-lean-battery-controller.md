@@ -218,4 +218,5 @@ service overlap. Each received a focused regression and the re-review approved
 the implementation. Final review then blocked stale sentinel ownership during a
 prolonged shutdown and retry generations coupled to unrelated observation/CAS
 revision churn. Shutdown heartbeat publication and the lean generation key now
-have focused regressions; both blockers are resolved.
+have focused regressions; both blockers are resolved. Two independent final
+reviewers approved commit `71d02dc` with no remaining blocker.
