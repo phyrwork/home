@@ -1,6 +1,6 @@
 # T0040 — Scope fail-safe escalation and heartbeat handling
 
-Status: Implemented locally — local acceptance complete; live acceptance pending
+Status: Deployed — baseline accepted; fault-path live acceptance pending
 
 Depends on: T0026, T0030, T0039
 
@@ -106,3 +106,21 @@ deployed atomically after both review councils approve.
 Live acceptance remains required before closing rollout: reproduce prolonged
 recoverable planning degradation and passive recovery without Self-Use, then
 separately prove one bounded unresolved important stop escalates as specified.
+
+## Deployment evidence — 2026-08-24
+
+- T0039 and T0040 were deployed atomically after all 113 component tests and 53
+  deployment tests passed on integrated `main`.
+- The full deployment passed Home Assistant configuration validation and
+  restarted Core successfully. On fresh setup the prior fail-safe latch was
+  cleared, telemetry recovered, temporary reconciliation degradation cleared,
+  and the controller reached `HEALTHY` with no `fail_safe_since` value.
+- The one-minute heartbeat advanced normally, Feed-In Priority was restored,
+  all unrelated slot directions remained off, and the selected reserve action
+  produced the expected approximately 4.918 kW physical discharge.
+- No house-battery-controller error or traceback appeared in recent Core logs.
+
+This proves deployment, fresh-setup recovery and ordinary reconciliation. It
+does not deliberately manufacture a prolonged planning outage or failed Solis
+stop; those fault-path live acceptances remain pending natural or separately
+approved bounded evidence.

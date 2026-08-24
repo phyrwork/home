@@ -1,6 +1,6 @@
 # T0039 — Bound Intelligent bonus charging with native leases
 
-Status: Implemented — local acceptance complete; live acceptance pending
+Status: Deployed — baseline accepted; bonus-lease live acceptance pending
 
 Depends on: T0012, T0028, T0035, T0038
 
@@ -133,5 +133,24 @@ unleased bonus schedules remain possible.
 - `PYTHONPATH=deployment/files:deployment /Users/connor/src/home/deployment/.venv/bin/pytest
   -q deployment/tests` — 53 passed.
 
-Live acceptance was not run in this implementation worktree, per the task
-scope; deployment and on-device proof remain required before closing rollout.
+Live acceptance was not run in the implementation worktree. The baseline
+deployment is recorded below; the bonus-specific on-device sequence remains
+required before closing rollout.
+
+## Deployment evidence — 2026-08-24
+
+- T0039 and T0040 were deployed atomically with the full Ansible playbook;
+  Home Assistant configuration validation passed before the restart and the
+  play completed with `ok=140`, `changed=4`, `failed=0`.
+- Fresh setup cleared the previous fail-safe latch. Solis telemetry recovered,
+  the controller moved through field-by-field reconciliation and reached
+  `HEALTHY/RESERVE_DISCHARGE` without manual intervention.
+- The action sensor exposes `charge_lease_deadline`; it was correctly `null`
+  for the observed reserve-discharge action. Storage mode was Feed-In Priority,
+  only slot 2 discharge was enabled, and fresh battery telemetry showed
+  approximately 4.918 kW discharge toward the calculated 18% reserve.
+- Recent Home Assistant logs contained no house-battery-controller error or
+  traceback; only Home Assistant's standard custom-integration warning.
+
+A live `BONUS_DISPATCH` was not active after this restart, so the required
+fixed 15-minute lease, off proof and renewal/withdrawal sequence remains open.

@@ -185,8 +185,10 @@ Pass requires all of the following in one uncontaminated artifact:
   heartbeat;
 - device telemetry remains under the 30-minute freshness budget; samples used
   as physical transition proof are at most five minutes old;
-- telemetry loss reports `DEGRADED` and later recovers, without routine I/O
-  becoming `FAIL_SAFE` unless degradation genuinely persists for 15 minutes;
+- telemetry loss reports recoverable `DEGRADED` and later recovers without a
+  restart; generic prolonged degradation does not become `FAIL_SAFE`, while a
+  hard invariant or important stop unconfirmed for
+  `IMPORTANT_STOP_FAILSAFE_TIMEOUT` may latch it;
 - every start follows a valid trusted window/reserve opportunity and every
   direction change proves the previous direction off first;
 - no charge/discharge overlap, including the two local-midnight segments;
