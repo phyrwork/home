@@ -138,7 +138,10 @@ Consolidate Solis behavior tests into `test_solis.py` covering:
   disabled slot time/current/SOC configuration; enable is final.
 - Allocation uses only the T0027 owner map. Full logical-intent comparison
   covers every enabled segment. Unknown or conflicting enables block starts;
-  disabled stored schedules never participate in overlap decisions.
+  this complete all-12 validation precedes even persistent start-preparation
+  writes. Disabled stored schedules never participate in overlap decisions.
+  Valid idle observes every enable and matches only when all are confirmed off,
+  while deliberately returning no inferred cleanup write.
 - `split_intent` keeps aware UTC segments temporally adjacent. The strict
   `solis.midnight_end` setting is currently `24:00`, the continuous candidate
   requiring live commissioning. `23:59` is also modeled and tested as native
@@ -163,7 +166,16 @@ Consolidate Solis behavior tests into `test_solis.py` covering:
   and their abstraction tests. No production import of an absorbed module
   remains.
 - The Solis implementation reduced from 3,152 lines across seven modules to
-  1,160 lines in `solis.py`, a reduction of 1,992 lines (63.2%).
-- Local verification: 74 component tests and 45 deployment tests pass;
+  1,176 lines in `solis.py`, a reduction of 1,976 lines (62.7%).
+- Local verification: 75 component tests and 45 deployment tests pass;
   `compileall`, absorbed-import search and `git diff --check` pass. No auth,
   network, live Home Assistant or deployment access was used.
+
+## Review amendment
+
+- The all-12 enable precondition was moved ahead of every persistent
+  start-preparation change. A regression proves that a persistent mismatch
+  cannot produce a write while another direction is conflicting or unknown.
+- Valid idle still never infers a stop, but full-intent matching now remains
+  false until every slot enable is explicitly observed off. Active and unknown
+  idle-slot regressions preserve that distinction for T0030 reconciliation.

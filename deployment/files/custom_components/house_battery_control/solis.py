@@ -720,6 +720,31 @@ class SolisAdapter:
 
         if state.health is not ControllerHealth.HEALTHY or state.persistent is None:
             return None
+
+        # A start must not prepare persistent controls until every enable is
+        # known and every already-active direction belongs to the complete
+        # desired intent. Otherwise even the preparatory writes could alter
+        # inverter behaviour while an unowned schedule is active.
+        native: tuple[_NativeIntent, ...] = ()
+        if intent is not None:
+            native = self._native_intent(intent)
+            if _native_overlap(native):
+                raise ValueError("logical Solis segments overlap")
+            directions = tuple(
+                direction
+                for slot in state.slots
+                for direction in (slot.charge, slot.discharge)
+            )
+            if any(direction.enabled is None for direction in directions):
+                return None
+            desired = {item.key: item for item in native}
+            for direction in directions:
+                if not direction.enabled:
+                    continue
+                expected = desired.get(direction.key)
+                if expected is None or not _direction_matches(direction, expected):
+                    return None
+
         reserve = _quantize(
             max(Decimal(MINIMUM_SOC_PERCENT), reserve_soc_percent),
             state.persistent.battery_reserve_soc,
@@ -739,22 +764,6 @@ class SolisAdapter:
         # stop selection remain controller responsibilities.
         if intent is None:
             return None
-        native = self._native_intent(intent)
-        if _native_overlap(native):
-            raise ValueError("logical Solis segments overlap")
-
-        directions = tuple(
-            direction for slot in state.slots for direction in (slot.charge, slot.discharge)
-        )
-        if any(direction.enabled is None for direction in directions):
-            return None
-        desired = {item.key: item for item in native}
-        for direction in directions:
-            if not direction.enabled:
-                continue
-            expected = desired.get(direction.key)
-            if expected is None or not _direction_matches(direction, expected):
-                return None
 
         for item in native:
             direction = state.direction(item.key)
@@ -803,7 +812,14 @@ class SolisAdapter:
             if direction.enabled
         )
         if intent is None:
-            return True
+            # Idle matching observes all enables but never selects a stop.
+            # Unknown or active slots keep reconciliation incomplete so the
+            # controller can resume the appropriate stop obligation.
+            return all(
+                direction.enabled is False
+                for slot in state.slots
+                for direction in (slot.charge, slot.discharge)
+            )
         native = self._native_intent(intent)
         expected = {item.key: item for item in native}
         return len(enabled) == len(native) and all(

@@ -293,7 +293,26 @@ def test_active_half_open_adjacency_is_accepted_but_conflict_or_unknown_blocks_s
     assert adapter.next_start_change(observed, desired, reserve_soc_percent=Decimal("10")) is None
 
 
-def test_disabled_stored_overlap_is_ignored_and_idle_never_infers_slot_cleanup() -> None:
+def test_conflicting_or_unknown_enable_blocks_persistent_start_preparation() -> None:
+    parsed, states = fixture()
+    states[parsed.persistent.storage_mode_entity_id]["state"] = "Self-Use"
+    conflicting = parsed.slots[0].discharge
+    states[conflicting.enable_entity_id]["state"] = "on"
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+
+    observed = read_state(states, parsed, now=NOW)
+    assert adapter.next_start_change(
+        observed, intent(), reserve_soc_percent=Decimal("10")
+    ) is None
+
+    states[conflicting.enable_entity_id]["state"] = "unavailable"
+    observed = read_state(states, parsed, now=NOW)
+    assert adapter.next_start_change(
+        observed, intent(), reserve_soc_percent=Decimal("10")
+    ) is None
+
+
+def test_disabled_stored_overlap_is_ignored_and_idle_observes_without_cleaning_slots() -> None:
     parsed, states = fixture()
     disabled = parsed.slots[0].discharge
     states[disabled.time_entity_id]["state"] = "21:30-22:30"
@@ -303,6 +322,15 @@ def test_disabled_stored_overlap_is_ignored_and_idle_never_infers_slot_cleanup()
     states[disabled.enable_entity_id]["state"] = "on"
     observed = read_state(states, parsed, now=NOW)
     assert adapter.next_start_change(observed, None, reserve_soc_percent=Decimal("10")) is None
+    assert not adapter.intent_matches(observed, None, reserve_soc_percent=Decimal("10"))
+
+    states[disabled.enable_entity_id]["state"] = "unavailable"
+    observed = read_state(states, parsed, now=NOW)
+    assert not adapter.intent_matches(observed, None, reserve_soc_percent=Decimal("10"))
+
+    states[disabled.enable_entity_id]["state"] = "off"
+    observed = read_state(states, parsed, now=NOW)
+    assert adapter.intent_matches(observed, None, reserve_soc_percent=Decimal("10"))
 
 
 class FakeHA:
