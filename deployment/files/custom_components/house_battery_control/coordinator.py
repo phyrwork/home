@@ -18,7 +18,7 @@ from .const import DOMAIN
 from .contracts import ControllerHealth
 from .domain_constants import FULL_SOC_PERCENT
 from .ha_writer import HomeAssistantWriter
-from .reserve_planner import ReservePlanResult
+from .planner import ReservePlanResult
 from .runtime_inputs import RuntimeInputs, RuntimeUnavailable, async_read_runtime_inputs
 from .solis_policy import PolicyActuationResult, SolisPolicyActuator
 from .solis_reader import read_solis_state

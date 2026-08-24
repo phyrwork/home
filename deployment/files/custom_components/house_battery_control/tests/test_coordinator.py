@@ -16,7 +16,7 @@ from custom_components.house_battery_control.coordinator import (
     HEARTBEAT_INTERVAL,
     Coordinator,
 )
-from custom_components.house_battery_control.octopus_windows import CoverageStatus
+from custom_components.house_battery_control.planner import CoverageStatus
 from custom_components.house_battery_control.solis_policy import PolicyActuationResult
 from custom_components.house_battery_control.runtime_inputs import RuntimeUnavailable
 from custom_components.house_battery_control.strategy import CycleState, StrategyAction, StrategyResult

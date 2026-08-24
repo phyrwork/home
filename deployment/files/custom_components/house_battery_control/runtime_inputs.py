@@ -11,25 +11,28 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State
 from homeassistant.util import dt as dt_util
 
-from . import load
 from .config import Config
 from .contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
 from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
-from .energy import EnergyInterval
-from .interval import TimeInterval
-from .octopus_windows import (
+from .planner import (
     AdjustedRateInterval,
     CheapWindow,
     CoverageStatus,
     DispatchSourceObservation,
+    EnergyInterval,
     ExportRateInterval,
     RateSourceObservation,
+    ReserveInputInterval,
+    ReservePlanResult,
+    TimeInterval,
     evaluate_cheap_windows,
     evaluate_trusted_import_rates,
+    forecast_load,
     parse_fused_export_rates,
     parse_fused_import_rates,
+    plan_reserve,
+    prorated_energy,
 )
-from .reserve_planner import ReserveInputInterval, ReservePlanResult, ReservePlanningStatus, plan_reserve
 from .solis_reader import read_solis_state
 from .solis_state import SolisStateReadResult, SolisStateSnapshot
 from .strategy import CycleState, StrategyInputs
@@ -156,8 +159,8 @@ async def async_read_runtime_inputs(
         maximum_charge_power_kw=maximum_charge_power,
         maximum_discharge_power_kw=maximum_discharge_power,
     )
-    if reserve.status is not ReservePlanningStatus.COMPLETE or reserve.reserve_energy_kwh is None:
-        raise ValueError("household reserve is unavailable: " + "; ".join(issue.detail for issue in reserve.issues))
+    if reserve.reserve_energy_kwh is None:
+        raise ValueError("household reserve is unavailable: " + (reserve.issue or "unknown planner failure"))
 
     reserve_soc = _soc_ceiling(reserve.reserve_energy_kwh, config.battery.capacity_kwh)
     reserve_soc = max(Decimal(MINIMUM_SOC_PERCENT), reserve_soc)
@@ -337,7 +340,7 @@ async def _forecast_intervals(
     timezone_value = dt_util.get_time_zone(hass.config.time_zone)
     if timezone_value is None:
         raise ValueError("Home Assistant timezone is invalid")
-    load_items = load.forecast(now=start, horizon_end=end, timezone=timezone_value)
+    load_items = forecast_load(now=start, horizon_end=end, timezone=timezone_value)
     raw = await async_get_solar_forecast(hass, config.solar.config_entry_id)
     solar_items = _solar_intervals(raw)
     boundaries = {start, end}
@@ -358,8 +361,8 @@ async def _forecast_intervals(
         result.append(
             ReserveInputInterval(
                 interval,
-                _energy(interval, load_items, required=True),
-                _energy(interval, solar_items, required=False),
+                prorated_energy(interval, load_items, required=True),
+                prorated_energy(interval, solar_items, required=False),
                 rate.classification,
             )
         )
@@ -377,21 +380,6 @@ def _solar_intervals(raw: Mapping[str, Any] | None) -> tuple[EnergyInterval, ...
         end = periods[index + 1][0] if index + 1 < len(periods) else start + (start - periods[index - 1][0])
         result.append(EnergyInterval(TimeInterval(start, end), wh / Decimal(1000)))
     return tuple(result)
-
-
-def _energy(interval: TimeInterval, items: Sequence[EnergyInterval], *, required: bool) -> Decimal:
-    total = Decimal(0)
-    covered = timedelta(0)
-    for item in items:
-        left, right = max(interval.start, item.interval.start), min(interval.end, item.interval.end)
-        if right <= left:
-            continue
-        overlap = right - left
-        covered += overlap
-        total += item.energy_kwh * Decimal(str(overlap.total_seconds())) / Decimal(str((item.interval.end - item.interval.start).total_seconds()))
-    if required and covered != interval.end - interval.start:
-        raise ValueError("load forecast does not cover the reserve interval")
-    return total
 
 
 def _soc_ceiling(energy: Decimal, capacity: Decimal) -> Decimal:

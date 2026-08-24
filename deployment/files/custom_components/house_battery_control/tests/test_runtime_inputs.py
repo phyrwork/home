@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.house_battery_control.octopus_windows import (
+from custom_components.house_battery_control.planner import (
     AdjustedRateInterval,
     CheapClassification,
     CoverageStatus,

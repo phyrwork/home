@@ -1,15 +1,5 @@
-"""Time interval types."""
+"""Compatibility export; implementation lives in :mod:`.planner`."""
 
-from dataclasses import dataclass
-from datetime import datetime
+from .planner import TimeInterval
 
-
-@dataclass(frozen=True, slots=True)
-class TimeInterval:
-    """Represents a half-open time interval."""
-
-    start: datetime
-    """Inclusive, timezone-aware start."""
-
-    end: datetime
-    """Exclusive, timezone-aware end."""
+__all__ = ["TimeInterval"]

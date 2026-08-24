@@ -10,7 +10,7 @@ from typing import Any
 from .contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
 from .domain_constants import FULL_SOC_PERCENT, MINIMUM_SOC_PERCENT
 from .model import CycleState, StrategyAction
-from .octopus_windows import CheapWindow
+from .planner import CheapWindow
 
 
 @dataclass(frozen=True, slots=True)

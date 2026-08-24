@@ -1,17 +1,5 @@
-"""Energy types."""
+"""Compatibility export; implementation lives in :mod:`.planner`."""
 
-from dataclasses import dataclass
-from decimal import Decimal
+from .planner import EnergyInterval
 
-from .interval import TimeInterval
-
-
-@dataclass(frozen=True, slots=True)
-class EnergyInterval:
-    """Represents energy attributed to a time interval."""
-
-    interval: TimeInterval
-    """Time interval over which the energy applies."""
-
-    energy_kwh: Decimal
-    """Non-negative energy measured or forecast during the interval."""
+__all__ = ["EnergyInterval"]

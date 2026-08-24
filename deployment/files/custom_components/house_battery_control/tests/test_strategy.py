@@ -3,7 +3,7 @@ from decimal import Decimal
 from dataclasses import replace
 
 from custom_components.house_battery_control.contracts import ControllerHealth, SlotDirection, SlotIntent, SlotOwner
-from custom_components.house_battery_control.octopus_windows import CheapWindow
+from custom_components.house_battery_control.planner import CheapWindow
 from custom_components.house_battery_control.strategy import CycleState, StrategyAction, StrategyInputs, select_strategy
 
 

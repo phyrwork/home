@@ -4,8 +4,10 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from custom_components.house_battery_control import load
-from custom_components.house_battery_control.interval import TimeInterval
+import pytest
+
+from custom_components.house_battery_control import planner
+from custom_components.house_battery_control.planner import EnergyInterval, TimeInterval
 
 HOUR = timedelta(hours=1)
 LONDON = ZoneInfo("Europe/London")
@@ -14,7 +16,7 @@ LONDON = ZoneInfo("Europe/London")
 def test_forecast_selects_local_weekday_hours_and_covers_partial_boundary() -> None:
     now = datetime(2026, 7, 6, 8, 30, tzinfo=UTC)
 
-    result = load.forecast(
+    result = planner.forecast_load(
         now=now,
         horizon_end=now + HOUR,
         timezone=LONDON,
@@ -39,7 +41,7 @@ def test_forecast_selects_local_weekday_hours_and_covers_partial_boundary() -> N
 def test_forecast_selects_weekend_profile() -> None:
     now = datetime(2026, 7, 4, 8, tzinfo=UTC)
 
-    result = load.forecast(
+    result = planner.forecast_load(
         now=now,
         horizon_end=now + HOUR,
         timezone=LONDON,
@@ -49,12 +51,12 @@ def test_forecast_selects_weekend_profile() -> None:
 
 
 def test_profiles_retain_analyzed_daily_energy() -> None:
-    weekday = load.forecast(
+    weekday = planner.forecast_load(
         now=datetime(2026, 7, 6, tzinfo=UTC),
         horizon_end=datetime(2026, 7, 7, tzinfo=UTC),
         timezone=UTC,
     )
-    weekend = load.forecast(
+    weekend = planner.forecast_load(
         now=datetime(2026, 7, 4, tzinfo=UTC),
         horizon_end=datetime(2026, 7, 5, tzinfo=UTC),
         timezone=UTC,
@@ -66,3 +68,24 @@ def test_profiles_retain_analyzed_daily_energy() -> None:
     assert sum((item.energy_kwh for item in weekend), Decimal()) == Decimal(
         "6.7570"
     )
+
+
+def test_interval_validation_and_exact_energy_proration() -> None:
+    start = datetime(2026, 7, 6, 8, tzinfo=UTC)
+    source = EnergyInterval(TimeInterval(start, start + HOUR), Decimal("2"))
+    middle_half = TimeInterval(
+        start + timedelta(minutes=15),
+        start + timedelta(minutes=45),
+    )
+
+    assert planner.prorated_energy(middle_half, (source,), required=True) == Decimal("1.0")
+    with pytest.raises(ValueError, match="timezone-aware"):
+        TimeInterval(start.replace(tzinfo=None), start)
+    with pytest.raises(ValueError, match="non-empty and ordered"):
+        TimeInterval(start + HOUR, start)
+    with pytest.raises(ValueError, match="does not cover"):
+        planner.prorated_energy(
+            TimeInterval(start, start + HOUR),
+            (EnergyInterval(TimeInterval(start, start + HOUR / 2), Decimal("1")),),
+            required=True,
+        )
