@@ -1,6 +1,6 @@
 # T0031 — Battery integration cleanup and local release gate
 
-Status: Implemented — approved for local commit
+Status: Implemented — council approved; live acceptance remains in T0026
 
 Depends on: T0030
 
@@ -159,8 +159,9 @@ evidence window remain T0026 live acceptance.
 
 ## Review
 
-The skeptical de-YAGNI/safety review approved without blockers. It confirmed
-the exact source shape, constant/value preservation, single writer and sentinel
-exception, removal of obsolete surfaces, current documentation, and the
-explicitly non-green pre-existing repository-test exception. Its independent
-battery-plus-sentinel verification passed 95 tests.
+Two independent skeptical de-YAGNI/safety reviewers approved commit `126e26f`
+without blockers. They confirmed the exact source shape, constant/value
+preservation, single writer and sentinel exception, removal of obsolete
+surfaces, current documentation, and the explicitly non-green pre-existing
+repository-test exception. Independent battery-plus-sentinel verification
+passed 95 tests.
