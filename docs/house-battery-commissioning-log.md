@@ -1,0 +1,216 @@
+# House battery commissioning log
+
+This is the chronological evidence log for live Solis battery-control
+experiments. Record the exact controls, authoritative readback and physical
+power-flow outcome for every experiment. Home Assistant state alone is not
+proof that the inverter acted.
+
+## Evidence conventions
+
+- The inverter is a Solis S5-EH1P6K-L, model ID `3105`, firmware `4D0051`.
+- Battery power is positive while charging and negative while discharging.
+- A control write is proven only when its value persists in SolisCloud or a
+  subsequent direct Solis API read.
+- Charge/discharge behaviour is proven only by physical power flow: battery
+  power plus whole-site Octopus demand/export, ideally followed by SOC movement.
+- The Home Assistant control-disable guard remains asserted during manual
+  experiments unless an experiment explicitly says otherwise.
+
+## Established findings
+
+| Finding | Evidence | Status |
+| --- | --- | --- |
+| Forced discharge works | A discharge slot produced approximately the inverter's full discharge/export power, rather than only the roughly 740 W house-load peak-shaving response. | Proven |
+| Grid charging works with Feed-In Priority and Peak Shaving disabled | A manually configured native charge slot produced `5.025 kW` battery power and `91.7 A` battery current in fresh SolisCloud telemetry. | Proven |
+| Peak Shaving does not prevent scheduled discharge/export | Forced export was observed with Peak Shaving enabled. | Proven |
+| Grid Feed-in Power Limit can remain disabled | The DNO-approved export limit equals the site's installed inverter capacity, so no lower Solis software limit is required. The earlier export blocker was an enabled limiter set to 0 W / 0 A. | Commissioned |
+| Legacy TOU bit is not the TOU-v2 activation mechanism | Direct CID 636 writes of `114` and `98` were accepted but normalized immediately to `112` and `96`, stripping bit 1. | Proven |
+| A cross-midnight interval was not the only charge failure | `21:56-07:00` did not produce charging, and changing the same slot to the same-day interval `21:56-23:59` also did not produce charging. | Proven |
+| Immediate HA control state is not device proof | HA and direct control reads showed slot 1 enabled with the requested current, target and time, while physical battery power remained slightly negative and whole-site demand reflected the EV only. | Proven |
+| TOU-v2 uses discrete six-slot controls | The deployed Solis Cloud Control integration detects CID 6798 value `43605` and uses slot CIDs 5916-5987; it deliberately hides the legacy global Time Of Use switch. | Proven from deployed integration source |
+
+## Experiment history
+
+### Reserve-discharge commissioning
+
+- Intent: prove that a scheduled discharge slot can export at inverter power.
+- Outcome: full scheduled discharge/export was observed.
+- Conclusion: slot scheduling and forced discharge are available on this
+  inverter. Peak Shaving does not block forced export.
+
+### Legacy TOU-bit tests
+
+- CID 636 `112 -> 114`: API returned success; immediate authoritative read
+  normalized to `112`.
+- CID 636 `96 -> 98`: API returned success; immediate authoritative read
+  normalized to `96`.
+- Conclusion: do not require or attempt to preserve the legacy TOU bit on this
+  TOU-v2 firmware.
+
+### Initial charge-slot tests
+
+- Slot 1 controls read back as enabled, `100 A`, target `100%`.
+- Cross-midnight interval `21:56-07:00`: no physical charging.
+- Same-day interval `21:56-23:59`: no physical charging.
+- Feed-In Priority with grid charging allowed, both with and without battery
+  reserve: no physical charging.
+- Whole-site demand remained approximately the EV demand rather than rising by
+  another inverter-sized load; battery power remained slightly negative.
+- Conclusion: the failure was not explained by the interval crossing midnight,
+  reserve mode, or the legacy TOU bit.
+
+### 2026-08-23 known-good-mechanism comparison
+
+Baseline at approximately 21:49 UTC:
+
+- Controller guard asserted; controller health `fail_safe`.
+- Intelligent Octopus dispatch active; EV demand approximately `7.5 kW`.
+- Battery SOC `73%`; battery power approximately `-0.24 kW`.
+- Direct CID 636 read `33`: Self-Use, grid charging allowed, reserve off, legacy
+  TOU off, Peak Shaving bit off.
+- Direct CID 5916 read `0`: charge slot 1 disabled.
+- No battery alarm; BMS charge-current capability reported available.
+
+Staged while the slot remained disabled:
+
+- CID 5946: `00:00-23:59`.
+- CID 5948: `100 A`.
+- CID 5928: `100%`.
+- All writes returned Solis API code `0` and immediate direct readback matched.
+
+Direct leaf-control result:
+
+- CID 5916 was enabled and its readback persisted.
+- From 21:56:47 to 21:59:06 UTC, whole-site demand remained approximately
+  `7.49-7.54 kW`, battery power remained approximately `-0.24 kW`, and SOC
+  remained `73%`.
+- The slot was disabled again.
+- Conclusion: enabling CID 5916 after writing the time, current and target leaf
+  controls did not cause physical charging.
+
+Grouped SolisCloud editor result:
+
+- The web editor rejected the original `00:00-23:59` charge interval because a
+  stored, disabled discharge interval overlapped it. This demonstrates that the
+  grouped editor validates all stored intervals, including disabled slots.
+- Charge slot 1 was changed to `22:00-23:59`. The grouped editor then accepted
+  the enabled slot and closed normally.
+- Direct readback showed CID 5916 enabled, `22:00-23:59`, `100 A`, target
+  `100%`, and TOU-v2 marker CID 6798 still `43605`.
+- Neither Self-Use (CID 636 value `33`) nor Feed-In Priority (value `96`)
+  produced physical charging. Whole-site demand remained approximately the EV
+  load and battery power remained slightly negative.
+- The advanced Solis telemetry timestamp later stalled, but fresh Octopus demand
+  independently showed that an inverter-sized grid charge had not started.
+- Cleanup restored slot 1 disabled and Self-Use value `33`.
+
+### Quick Control differential probe
+
+The Solis mobile app's known-good **Quick Control > Force Charge** action is a
+diagnostic hint, not the intended runtime control mechanism. The controller must
+continue to use native charge slots. Capture relevant controls immediately before
+and after a Quick Control action to discover the prerequisite or mode change that
+the unsuccessful slot configuration is missing, then reproduce that prerequisite
+with a native charge slot.
+
+### 2026-08-23 experiment invalidation and root causes
+
+The negative charge results above are not valid evidence that TOU-v2 charging is
+unsupported:
+
+- The custom integration was unloaded, but
+  `automation.house_battery_independent_watchdog` remained enabled. With the
+  controller entities unavailable, it triggered every minute and repeatedly
+  applied the fail-safe script. At 22:34:00 UTC it triggered again; CID 5916 was
+  observed changing from enabled back to disabled between samples. This
+  invalidated manual slot experiments by racing their writes.
+- The first future-boundary test wrote `22:32-22:44` as though the register used
+  UTC. Solis schedule values are inverter-local wall-clock times. The inverter
+  was around 23:32 BST, so that boundary had already passed by one hour.
+- After the watchdog was explicitly turned off, slot 1 was armed for the correct
+  local interval `23:37-23:49` and remained enabled across the boundary. However,
+  SolisCloud then reported the inverter offline. Whole-site import did not rise,
+  so the cloud configuration was never proven to have reached the inverter.
+- The Solis API accepted and echoed configuration while the inverter was
+  offline. Therefore control API readback is cloud/control-plane evidence only;
+  it is not proof of device execution.
+- Mobile **Quick Control > Force Charge** was also ineffective during the same
+  offline period and produced no persistent register delta or physical charge.
+
+Cleanup disabled CID 5916 and verified it off. The controller remains unloaded,
+the manual control guard remains asserted, and the watchdog is temporarily off
+to prevent further contention during commissioning.
+
+Next valid charge proof must begin only after SolisCloud reports the inverter
+online. Keep the watchdog paused, use an inverter-local start two minutes in the
+future, verify the slot remains enabled across the boundary, and prove charging
+from fresh battery power plus whole-site import.
+
+### 2026-08-24 proven native grid-charge configuration
+
+At `00:47 BST`, SolisCloud readback showed the following configuration while
+the battery was physically charging:
+
+| Control | Readback |
+| --- | --- |
+| Feed-In Priority | Enabled |
+| Allow Grid Charging | Enabled |
+| Battery Reserve | Enabled |
+| Reserved SOC | 17% |
+| Grid Peak Shaving | Disabled |
+| Retained Grid Peak Shaving limit | 100 W |
+| Charge slot 1 | Enabled, `00:24-00:59` inverter-local time, target 100%, current 100 A |
+| Charge slots 2-6 | Disabled, `00:00-00:00`, current 0 A, target 100% |
+| Discharge slots 1-6 | Disabled, `00:00-00:00`, current 0 A, target 100% |
+
+Fresh SolisCloud telemetry timestamped `2026-08-24 00:46:56 BST` reported:
+
+- battery power `+5.025 kW` (charging);
+- BMS battery power `+4.962 kW`;
+- battery current `91.7 A`;
+- battery voltage `54.8 V`;
+- battery SOC `73%`; and
+- no battery alarm.
+
+A second fresh sample at `00:56:57 BST` reported `+5.028 kW`, `91.6 A`,
+SOC `76%`, and today's charged energy `1.0 kWh`. This proves sustained physical
+charging and SOC movement throughout the scheduled interval.
+
+The first fresh sample after the `00:59` slot end, timestamped `01:01:57 BST`,
+reported battery power `-0.209 kW` and whole-site grid power approximately
+`+0.099 kW`. This proves the forced charge stopped at the configured end time
+and ordinary low-import operation resumed.
+
+Conclusion: TOU-v2 native charge slots work on this inverter when Feed-In
+Priority and Allow Grid Charging are enabled and Grid Peak Shaving is disabled.
+This is the working reference configuration for controller implementation.
+
+Grid Peak Shaving interferes with manual timers because it changes the core
+operational rule from a time-driven schedule to a power-driven strategy. Solis
+documents the setting as dynamically limiting grid charging so that total grid
+power does not exceed the configured maximum; peak-shaving control generally
+uses continuous real-time demand to coordinate battery dispatch. In this plant,
+the 100 W maximum was already consumed by ordinary house load, leaving no power
+budget for the scheduled 5 kW charge. See the
+[SolisCloud remote-control setting reference](https://solis-service.solisinverters.com/en/support/solutions/articles/44002638862-solis-cloud-remote-control-settings-desktop-version)
+and the
+[peak-shaving operating overview](https://www.solinteg.com/seo-blog/what-is-peak-shaving-commercial-energy-costs.html).
+
+The ownership boundary is:
+
+- Feed-In Priority is the manually commissioned healthy-mode baseline. Healthy
+  runtime operation must verify it and need not rewrite it on every evaluation.
+  If fail-safe changes the mode to Self-Use, recovery must restore the
+  commissioned Feed-In Priority baseline once.
+- Allow Grid Charging, Battery Reserve and its target, Grid Peak Shaving, and
+  all six charge/discharge slot fields are runtime-owned.
+- Grid Peak Shaving is disabled for charging and enabled at the retained 100 W
+  import limit for ordinary load control and scheduled discharge.
+- Disabled directions are normalised to `00:00-00:00` and `0 A`, not merely
+  switched off.
+- Every prospective charge/discharge schedule is checked for overlap across all
+  12 directions before mutation. Intervals are half-open `[start, end)`, so
+  adjacent boundaries do not overlap; cross-midnight intervals are compared on
+  both sides of midnight.
+- Grid Feed-in Power Limit is disabled as a one-time commissioned setting; the
+  runtime does not enable it or write maximum power/current values.

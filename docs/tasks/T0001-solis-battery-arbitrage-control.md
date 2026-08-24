@@ -53,10 +53,11 @@ that the runtime writes Self-Use when applying fail-safe:
 - EMS is disabled for this plant.
 - Self-Use is the fail-safe storage mode and is the one commissioned setting
   deliberately written by the runtime during fail-safe.
-- Native Grid Peak Shaving is enabled with a 100 W maximum grid-import setting;
-  live testing confirmed it is compatible with forced discharge/export.
-- Native Grid Feed in Power Limit is enabled at the inverter maxima: 9900 W and
-  52 A. A 0 W / 0 A setting was the export blocker.
+- The native Grid Peak Shaving maximum-grid-import value is commissioned at
+  100 W. The switch itself is runtime-owned because it must be disabled for
+  scheduled grid charging and enabled for ordinary load control and discharge.
+- Native Grid Feed in Power Limit is disabled. The earlier export blocker was
+  an enabled limiter set to 0 W / 0 A; no lower software limit is required.
 - The protective force-charge safety threshold is 7% (`FORCE_CHARGE_SOC_PERCENT`).
 - The absolute minimum SOC is 10%; the already-recorded over-discharge and
   recovery settings use that floor.
@@ -64,11 +65,12 @@ that the runtime writes Self-Use when applying fail-safe:
 - Maximum inverter output is 100%.
 - Export is unlimited, within the DNO-approved site-inverter export limit.
 
-The runtime boundary is limited to the storage mode, grid-charging permission,
-inverter clock, Battery Reserve and reserve SOC, global charge/discharge current
-capabilities, the cycle-duration helper, all six charge/discharge slots, and
-telemetry. Runtime does not discover, write or reconcile the commissioned facts
-above, apart from writing Self-Use for fail-safe.
+The runtime boundary is limited to exceptional storage-mode transitions,
+grid-charging permission, Grid Peak Shaving switch, inverter clock, Battery
+Reserve and reserve SOC, global charge/discharge current capabilities, the
+cycle-duration helper, all six charge/discharge slots, and telemetry. Runtime
+does not discover, write or reconcile the commissioned numeric protection,
+output, export, or 100 W Peak Shaving limit.
 
 Safety values must not be duplicated as numeric literals throughout the
 implementation. Code, tests, diagnostics and documentation should refer to these
@@ -93,16 +95,18 @@ calculations.
 
 ## Persistent candidate configuration (commissioning record)
 
-The following records the one-time commissioned baseline. Only storage mode,
-grid-charging permission, current capabilities and schedule slots remain in the
-runtime boundary; the native protection, output, export and Peak Shaving values
-are not runtime writes:
+The following records the commissioned baseline and runtime-owned controls.
+Feed-In Priority is commissioned once and verified during healthy operation;
+runtime recovery restores it after a fail-safe Self-Use transition. The native
+protection, output, export and numeric Peak Shaving limit remain commissioned
+facts:
 
 - Storage mode: `Feed-In Priority`.
-- Grid Peak Shaving: enabled.
-- Maximum grid power: `MAXIMUM_GRID_IMPORT_POWER_KW`.
+- Grid Peak Shaving maximum grid power: `MAXIMUM_GRID_IMPORT_POWER_KW`.
+- Grid Peak Shaving switch: runtime-owned; disabled while charging, enabled
+  during ordinary load control and discharge.
 - Allow grid charging: enabled.
-- Allow export: enabled.
+- Grid Feed-in Power Limit: disabled.
 - Over-discharge SOC: `MINIMUM_SOC_PERCENT`.
 - Force-charge SOC: `FORCE_CHARGE_SOC_PERCENT`.
 - Recovery from protective force charging: `MINIMUM_SOC_PERCENT`.
@@ -124,12 +128,10 @@ Maximum feed-in power means the maximum power that may be exported.
 The DNO-approved export limit equals the combined rated output of the site
 inverters, so no lower software feed-in limit is required.
 
-The runtime deployment validates interactions among the already-commissioned
-Feed-In Priority, Peak Shaving, protective thresholds, forced discharge and
-timed slots without taking ownership of the one-time native settings. The
-Solis control integration's HA export/peak-shaving switch entities are
-non-authoritative/unavailable; these settings remain one-time SolisCloud
-commissioning facts.
+The runtime deployment validates Feed-In Priority, protective thresholds,
+forced discharge and timed slots. It owns the Peak Shaving switch but not its
+commissioned 100 W limit. Grid Feed-in Power Limit remains disabled and
+unmanaged.
 
 ## Core operating policy
 
@@ -138,11 +140,17 @@ commissioning facts.
 While the controller is healthy:
 
 - Maintain Feed-In Priority.
-- Keep the commissioned native Grid Peak Shaving setting enabled at 100 W; the
-  controller does not write its non-authoritative HA switch.
+- Disable Grid Peak Shaving before enabling a charge slot.
+- Enable Grid Peak Shaving at the commissioned 100 W limit for ordinary load
+  control and every scheduled discharge action.
 - Limit ordinary grid import to `MAXIMUM_GRID_IMPORT_POWER_KW`.
 - Control charge and discharge slots dynamically.
 - Never enable charge and discharge slots simultaneously.
+- Before any slot write, validate the complete prospective 12-slot schedule for
+  overlap using half-open intervals `[start, end)`. Adjacent boundaries are
+  valid; cross-midnight intervals are split at midnight for comparison.
+- Leave every disabled direction at `00:00-00:00` and `0 A` so disabled stored
+  values cannot fail SolisCloud's grouped overlap validation.
 - Never discharge below the dynamic household reserve.
 - Never calculate a household reserve below `MINIMUM_SOC_PERCENT`.
 
@@ -152,8 +160,8 @@ Shaving/forced-export combination are live verified.
 Live verification of forced export showed Solis battery power −4917 W and
 Octopus current demand −4104 W. Disabling Grid Peak Shaving left the same
 load-following behaviour (about −299 W, with no export), proving it was not the
-blocker. After restoring Peak Shaving to 100 W, raising the native feed-in
-limits from 0 W / 0 A to 9900 W / 52 A enabled forced export. EMS remains
+blocker. The actual blocker was the enabled native feed-in limiter at 0 W / 0 A.
+The commissioned steady state leaves that limiter disabled. EMS remains
 disabled and inverter output power is 100%.
 
 ### Fail-safe operation
@@ -164,8 +172,8 @@ On orderly Home Assistant shutdown or controller failure:
 2. Disable every Solis discharge slot.
 3. Set storage mode to `Self-Use`.
 4. Leave physical battery-protection settings intact.
-5. Preserve the commissioned native Grid Peak Shaving setting; the controller
-   does not write or verify a non-authoritative HA switch.
+5. Enable Grid Peak Shaving at the commissioned
+   `MAXIMUM_GRID_IMPORT_POWER_KW` limit.
 6. Verify the runtime-controlled fallback configuration where communication
    remains available.
 
@@ -509,7 +517,8 @@ treated as immutable.
 | --- | --- | --- |
 | Storage mode | `select.garage_inverter_control_storage_mode` | Select with `Self-Use`, `Feed-In Priority` and `Off-Grid`; use Feed-In Priority while healthy and Self-Use during fail-safe |
 | Grid charging permission | `switch.garage_inverter_control_allow_grid_charging` | Enable while scheduled charging is available |
-| Maximum grid import | Native Grid Peak Shaving setting | One-time commissioned at 100 W; no runtime entity mapping |
+| Peak Shaving switch | `switch.garage_inverter_control_grid_peak_shaving` | Runtime-owned; off for charge, on for ordinary load control, discharge and fail-safe |
+| Maximum grid import | Native Grid Peak Shaving power value | One-time commissioned at `MAXIMUM_GRID_IMPORT_POWER_KW`; runtime does not rewrite the numeric limit |
 | Inverter clock | `datetime.garage_inverter_control_inverter_time` | Verify or synchronise before programming slots |
 
 ### Battery protection and reserve

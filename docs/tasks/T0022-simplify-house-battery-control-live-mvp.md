@@ -171,11 +171,16 @@ present.
   current demand −4104 W.
 - Grid Peak Shaving at 100 W is compatible with forced export. The native Grid
   Feed in Power Limit had been enabled at 0 W / 0 A; commissioning it to
-  9900 W / 52 A restored export. EMS is disabled and output power is 100%.
+  a non-blocking value restored export. The final commissioned setting disables
+  the limiter entirely. EMS is disabled and output power is 100%.
+- A later manual native charge slot produced 5.025 kW battery charging with
+  Grid Peak Shaving disabled. Peak Shaving therefore becomes a runtime switch:
+  disabled for charge and enabled for ordinary load control and discharge. Its
+  numeric 100 W limit remains commissioned.
 - Runtime schedule boundaries are aware UTC instants. Solis `HH:MM` fields are
   converted to and interpreted in the configured inverter local timezone. The
   coordinator currently supplies HA's configured timezone and therefore assumes
   HA and the inverter share the site timezone (`Europe/London`). The earlier
   one-hour offset came from serialising UTC wall-clock fields at this boundary.
-- HA export and peak-shaving switch entities are non-authoritative/unavailable;
-  persistent settings remain one-time SolisCloud commissioning.
+- Grid Feed in Power Limit is disabled as one-time SolisCloud commissioning. The
+  Solis Cloud Control Peak Shaving switch is a runtime dependency.
