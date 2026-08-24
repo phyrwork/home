@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
@@ -18,12 +18,16 @@ from custom_components.house_battery_control.controller import (
     Controller,
     DEGRADED_FAILSAFE_TIMEOUT,
     START_RETRY_DELAYS,
+    StartRetry,
     _stop_retry_delay,
 )
 from custom_components.house_battery_control.model import (
     ControllerHealth,
     CycleState,
+    LogicalIntent,
     SlotDirection,
+    SlotIntent,
+    SlotOwner,
     StrategyAction,
 )
 from custom_components.house_battery_control.planner import Plan
@@ -173,6 +177,69 @@ async def test_start_retries_at_exact_generation_offsets_then_suppresses(
     )
     assert controller._start_retry is not None
     assert controller._start_retry.suppressed
+
+
+async def test_start_generation_ignores_unrelated_refresh_but_resets_for_pending_or_intent_change(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    planned = plan()
+    change = SimpleNamespace(entity_id="text.slot", target="10:00-11:00")
+    generation = controller._start_generation(planned, change)
+    controller._start_retry = StartRetry(
+        generation,
+        0,
+        3,
+        60,
+        NOW + timedelta(seconds=60),
+        True,
+    )
+    base = observation()
+    inverter_time_entity_id = controller.config.solis.persistent.inverter_time_entity_id
+    revisions = dict(base.revisions)
+    revisions[inverter_time_entity_id] = replace(
+        revisions[inverter_time_entity_id],
+        last_updated=revisions[inverter_time_entity_id].last_updated
+        + timedelta(minutes=1),
+        context_id="telemetry-poll",
+    )
+    refreshed = replace(
+        base,
+        observed_at=NOW + timedelta(minutes=1),
+        revisions=MappingProxyType(revisions),
+        telemetry=replace(
+            base.telemetry,
+            battery_power_kw=Decimal("0.7"),
+        ),
+    )
+    await controller._attempt_start(
+        change,
+        controller._start_generation(planned, change),
+        planned,
+        refreshed,
+        NOW,
+        120,
+    )
+    solis.apply.assert_not_awaited()
+
+    changed = SimpleNamespace(entity_id="text.slot", target="10:00-11:01")
+    assert controller._start_generation(planned, changed) != generation
+    segment = SlotIntent(
+        SlotOwner.CHEAP_CHARGING,
+        SlotDirection.CHARGE,
+        NOW,
+        NOW + timedelta(minutes=30),
+        Decimal("50"),
+        Decimal("100"),
+        NOW + timedelta(minutes=30),
+    )
+    changed_plan = replace(
+        planned,
+        action=StrategyAction.CHEAP_CHARGE,
+        intent=LogicalIntent((segment,)),
+    )
+    assert controller._start_generation(changed_plan, change) != generation
 
 
 async def test_ambiguous_stop_debt_survives_optimistic_off_and_forces_proof(
@@ -548,6 +615,50 @@ async def test_shutdown_rereads_unknown_without_speculative_write(
     solis.stop.assert_not_awaited()
 
 
+async def test_prolonged_shutdown_refreshes_heartbeat_on_every_retry_and_reread(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    solis.set_mode.return_value = WriteResult(
+        "select.mode", WriteOutcome.SERVICE_ERROR, "cloud unavailable"
+    )
+    feed = observation(mode="Feed-In Priority")
+    self_use = observation(mode="Self-Use")
+    reads = 0
+
+    def read(*args, **kwargs):
+        nonlocal reads
+        del args, kwargs
+        reads += 1
+        return feed if reads <= 4 else self_use
+
+    tick = 0
+
+    def now() -> datetime:
+        nonlocal tick
+        value = NOW + timedelta(seconds=31 * tick)
+        tick += 1
+        return value
+
+    heartbeats: list[datetime] = []
+    controller.async_add_listener(
+        lambda: heartbeats.append(controller.data.heartbeat_at)
+    )
+    with (
+        patch.object(Controller, "_now", side_effect=now),
+        patch("custom_components.house_battery_control.controller.read_state", side_effect=read),
+        patch("custom_components.house_battery_control.controller.asyncio.sleep", AsyncMock()),
+    ):
+        await controller._shutdown_controls()
+
+    assert solis.set_mode.await_count == 4
+    assert heartbeats[-1] - heartbeats[0] > timedelta(minutes=3)
+    assert max(
+        right - left for left, right in zip(heartbeats, heartbeats[1:])
+    ) < timedelta(minutes=3)
+
+
 async def test_teardown_is_idempotent_and_removes_listener_timer_and_worker(
     hass: HomeAssistant,
 ) -> None:
@@ -561,4 +672,4 @@ async def test_teardown_is_idempotent_and_removes_listener_timer_and_worker(
     shutdown.assert_awaited_once()
     source_remove.assert_called_once()
     timer_remove.assert_called_once()
-    assert controller._stopped
+    assert controller._stop_task is not None and controller._stop_task.done()

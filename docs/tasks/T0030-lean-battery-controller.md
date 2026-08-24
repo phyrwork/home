@@ -131,10 +131,13 @@ strict shutdown and sentinel write limits.
   non-eager creation is required because an event received during eager task
   startup could otherwise run before the task handle was assigned and create a
   second worker. Each pass performs at most one adapter write.
-- Start retry state is one exact intent/reserve/planning-and-control generation
-  with attempts at generation offsets 0, 15 and 60 seconds. An unchanged
-  generation is suppressed after its third failure; a changed generation is
-  reevaluated from live state.
+- Start retry state is keyed only by the desired plan, planning-source tokens,
+  and the pending entity ID plus adapter-normalized target. HA/Solis observation
+  revisions, inverter time, telemetry and the recaptured CAS precondition are
+  deliberately excluded so polling churn cannot renew a failed start budget.
+  Attempts occur at generation offsets 0, 15 and 60 seconds. An unchanged
+  generation is suppressed after its third failure; a materially changed plan
+  or pending entity/target is reevaluated from live state.
 - `StopDebt` contains only a configured `SlotKey`, attempt, capped next retry and
   ambiguity. Cancellation makes debt ambiguous and immediately due before it
   propagates. Ambiguous optimistic `off` never retires debt.
@@ -147,7 +150,9 @@ strict shutdown and sentinel write limits.
 - Runtime fail-safe attempts due important stops independently of unreliable
   Storage Mode reads/writes. Orderly shutdown is intentionally stricter:
   confirmed Self-Use first, then observed-on directions, with unknown directions
-  reread and never written speculatively.
+  reread and never written speculatively. Every shutdown retry/reread publishes
+  a fresh heartbeat, preventing the stale-heartbeat sentinel from becoming a
+  second writer during a prolonged orderly shutdown.
 - Used-slot cleanup is memory-only and narrow: only a slot enabled by this
   controller may have its confirmed-off time/current reset, one field per pass.
   It is best effort and never affects health, stop progress or fail-safe.
@@ -166,7 +171,9 @@ Behavior tests prove the T0030 acceptance surface:
 2. one pass advances only one start, stop, mode or housekeeping change;
 3. all planning and configured Solis entities are event sources;
 4. tariff boundaries and retry deadlines pre-empt the one-minute backstop;
-5. starts occur at 0/15/60 seconds and suppress the unchanged generation;
+5. starts occur at 0/15/60 seconds and suppress the unchanged generation across
+   inverter-time, telemetry and observation-revision churn, while a changed
+   plan or pending entity/target creates a new generation;
 6. stops retry without a terminal attempt and cap at 60 seconds;
 7. service timeout and cancellation preserve ambiguous debt and require forced
    blocking proof even after optimistic `off`;
@@ -182,16 +189,17 @@ Behavior tests prove the T0030 acceptance surface:
 16. diagnostic entities retain identities and expose degradation, fail-safe,
     pending operation, attempt and next-retry attributes;
 17. concurrent teardown removes source/timer/task state exactly once;
-18. shutdown confirms Self-Use before stopping only observed-on directions and
-    rereads unknown directions without speculative writes;
+18. shutdown confirms Self-Use before stopping only observed-on directions,
+    rereads unknown directions without speculative writes, and refreshes its
+    heartbeat throughout a simulated shutdown lasting longer than three minutes;
 19. the sentinel provides startup grace, rechecks heartbeat/mode immediately
     before action and contains exactly one Self-Use service write; and
 20. Solis conflict projection covers exact split, mismatch, extra, idle and
     unknown cases without exposing native schedule types.
 
-Local gates: 92 component tests and 41 deployment tests pass. `compileall`,
+Local gates: 94 component tests and 41 deployment tests pass. `compileall`,
 absorbed-coordinator import search, single-writer search and `git diff --check`
-pass. `controller.py` is 971 lines and `solis.py` is 1,275 lines at this staged
+pass. `controller.py` is 1,018 lines and `solis.py` is 1,275 lines at this staged
 boundary. No 1Password, network, SSH, browser, live Home Assistant or deployment
 access was used.
 
@@ -207,4 +215,7 @@ access was used.
 A small-model safety review initially blocked minimum-SOC ordering, fail-safe
 stop progress, cancellation wakeup, startup grace and cancellation-ignoring
 service overlap. Each received a focused regression and the re-review approved
-the implementation with no remaining safety or reliability blocker.
+the implementation. Final review then blocked stale sentinel ownership during a
+prolonged shutdown and retry generations coupled to unrelated observation/CAS
+revision churn. Shutdown heartbeat publication and the lean generation key now
+have focused regressions; both blockers are resolved.

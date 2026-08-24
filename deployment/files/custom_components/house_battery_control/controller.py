@@ -130,7 +130,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         self._dirty = False
         self._started = False
         self._stopping = False
-        self._stopped = False
         self._worker_task: asyncio.Task[None] | None = None
         self._stop_task: asyncio.Task[None] | None = None
         self._unsub_sources: CALLBACK_TYPE | None = None
@@ -299,8 +298,8 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             plan.intent,
             reserve_soc_percent=plan.reserve_soc_percent,
         )
-        generation = self._start_generation(plan, observation)
         if change is not None:
+            generation = self._start_generation(plan, change)
             await self._attempt_start(change, generation, plan, observation, now, monotonic)
             return
         if not self.solis.intent_matches(
@@ -635,7 +634,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             next_retry_at=None if debt is None else debt.next_retry_at,
         )
 
-    def _start_generation(self, plan: Plan, observation: SolisState) -> Hashable:
+    def _start_generation(self, plan: Plan, change: SolisChange) -> Hashable:
         source_tokens: list[Hashable] = []
         for entity_id in (
             self.config.tariff.import_rates_entity_id,
@@ -651,17 +650,14 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                     getattr(getattr(state, "context", None), "id", None),
                 )
             )
-        control_tokens = tuple(
-            (entity_id, revision.state, revision.last_updated, revision.context_id)
-            for entity_id, revision in sorted(observation.revisions.items())
-        )
         return (
             plan.action,
             plan.intent,
             plan.reserve_soc_percent,
             plan.cycle_deadline,
             tuple(source_tokens),
-            control_tokens,
+            change.entity_id,
+            change.target,
         )
 
     def _degrade(
@@ -846,13 +842,19 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             pending_operation="select Self-Use",
         )
         await self._shutdown_controls()
-        self._stopped = True
         await self.async_shutdown()
 
     async def _shutdown_controls(self) -> None:
         attempt = 0
         while True:
-            observation = read_state(self.hass, self.config.solis, now=self._now())
+            now = self._now()
+            observation = read_state(self.hass, self.config.solis, now=now)
+            self._publish_shutdown(
+                now,
+                observation,
+                pending_operation="select Self-Use",
+                attempt=attempt,
+            )
             mode = None if observation.persistent is None else observation.persistent.storage_mode
             if mode == StorageMode.SELF_USE.value:
                 break
@@ -863,13 +865,27 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             if result.success:
                 attempt = 0
                 continue
+            self._publish_shutdown(
+                self._now(),
+                observation,
+                pending_operation="select Self-Use",
+                attempt=attempt + 1,
+                last_error=result.message,
+            )
             await asyncio.sleep(_stop_retry_delay(attempt).total_seconds())
             attempt += 1
 
         shutdown_debt = dict(self._stop_debts)
         attempt = 0
         while True:
-            observation = read_state(self.hass, self.config.solis, now=self._now())
+            now = self._now()
+            observation = read_state(self.hass, self.config.solis, now=now)
+            self._publish_shutdown(
+                now,
+                observation,
+                pending_operation="reread all slot enables",
+                attempt=attempt,
+            )
             directions = tuple(
                 direction
                 for slot in observation.slots
@@ -905,6 +921,12 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 await asyncio.sleep(_stop_retry_delay(attempt).total_seconds())
                 attempt += 1
                 continue
+            self._publish_shutdown(
+                self._now(),
+                observation,
+                pending_operation=_stop_text(debt.key),
+                attempt=debt.attempt,
+            )
             try:
                 result = await self.solis.stop(
                     debt.key,
@@ -924,6 +946,31 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 ambiguous=debt.ambiguous or result.outcome in AMBIGUOUS_OUTCOMES,
             )
             await asyncio.sleep(_stop_retry_delay(debt.attempt).total_seconds())
+
+    def _publish_shutdown(
+        self,
+        now: datetime,
+        observation: SolisState,
+        *,
+        pending_operation: str,
+        attempt: int,
+        last_error: str | None = None,
+    ) -> None:
+        health = (
+            ControllerHealth.FAIL_SAFE
+            if self._fail_safe_latched
+            else ControllerHealth.DEGRADED
+        )
+        self._publish(
+            now,
+            health,
+            None,
+            "controller is shutting down",
+            observation,
+            last_error=last_error,
+            pending_operation=pending_operation,
+            attempt=attempt,
+        )
 
 
 def _stop_retry_delay(attempt: int) -> timedelta:
