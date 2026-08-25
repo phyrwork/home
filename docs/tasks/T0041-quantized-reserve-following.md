@@ -73,7 +73,8 @@ Native target writes, reserve-export eligibility and target-completion checks
 must all use this quantized target. Preserve the existing reserve target and
 balance sensor values as the exact model result requested for observability.
 Expose the quantized control target and balance as attributes on those existing
-sensors; do not add entities. In the model, retain `reserve_energy_kwh` and
+sensors; do not add entities for T0041's quantized-reserve diagnostics. In the
+model, retain `reserve_energy_kwh` and
 `reserve_balance_kwh` as exact values and add explicitly named
 `control_reserve_energy_kwh` and `control_reserve_balance_kwh` values.
 

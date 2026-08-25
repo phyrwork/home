@@ -225,6 +225,7 @@ Preserve these literal unique IDs and friendly names:
 | `sensor.house_battery_control_health` | `house_battery_control_health` | `House Battery Control Health` |
 | `sensor.house_battery_energy` | `house_battery_control_energy` | `House Battery Energy` |
 | `sensor.house_battery_reserve_target` | `house_battery_control_reserve_target` | `House Battery Reserve Target` |
+| `sensor.house_battery_reserve_usable` | `house_battery_control_reserve_usable` | `House Battery Reserve (Usable)` |
 | `sensor.house_battery_reserve_balance` | `house_battery_control_reserve_balance` | `House Battery Reserve Balance` |
 
 Remove the `observation_only:<legacy mode>` state and all sensor dependency on
@@ -237,10 +238,9 @@ Add exactly:
 | `sensor.house_battery_strategy_phase` | `house_battery_control_strategy_phase` | `House Battery Strategy Phase` |
 | `sensor.house_battery_actuation_state` | `house_battery_control_actuation_state` | `House Battery Actuation State` |
 
-Heartbeat retains `SensorDeviceClass.TIMESTAMP`. The three energy entities
-retain `SensorDeviceClass.ENERGY`, kWh, `SensorStateClass.MEASUREMENT` and
-display precision 2. Introduce no platform migration or device-registry
-association.
+Heartbeat retains `SensorDeviceClass.TIMESTAMP`. The four energy entities
+retain `SensorDeviceClass.ENERGY`, kWh, no state class, and display precision
+2. Introduce no platform migration or device-registry association.
 
 Test with a prepopulated entity registry containing every existing unique ID,
 reload the platform, and prove the same rows remain with no `_2` entities.

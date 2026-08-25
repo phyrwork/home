@@ -1,6 +1,7 @@
 """Small diagnostic surface for house-battery control."""
 
 from collections.abc import Mapping
+from decimal import Decimal
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -29,6 +30,7 @@ async def async_setup_platform(
                 ReserveSensor(controller),
                 BatteryEnergySensor(controller),
                 ReserveTargetSensor(controller),
+                ReserveUsableSensor(controller),
                 ReserveBalanceSensor(controller),
             )
         )
@@ -163,6 +165,21 @@ class ReserveTargetSensor(_ReserveEnergySensor):
         }
 
 
+class ReserveUsableSensor(_ReserveEnergySensor):
+    _attr_name = "House Battery Reserve (Usable)"
+    _attr_unique_id = f"{DOMAIN}_reserve_usable"
+
+    def _value(self) -> object:
+        data = self.coordinator.data
+        if data is None or data.reserve_target_energy_kwh is None:
+            return None
+        return max(
+            Decimal(0),
+            data.reserve_target_energy_kwh
+            - self.coordinator.config.battery.minimum_energy_kwh,
+        )
+
+
 class ReserveBalanceSensor(_ReserveEnergySensor):
     _attr_name = "House Battery Reserve Balance"
     _attr_unique_id = f"{DOMAIN}_reserve_balance"
@@ -195,5 +212,6 @@ __all__ = [
     "ReserveBalanceSensor",
     "ReserveSensor",
     "ReserveTargetSensor",
+    "ReserveUsableSensor",
     "async_setup_platform",
 ]
