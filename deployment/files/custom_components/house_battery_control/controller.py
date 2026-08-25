@@ -1274,9 +1274,11 @@ def _bonus_fingerprint(plan: Plan, now: datetime) -> Hashable | None:
         if getattr(rate.classification, "value", rate.classification) != "BONUS_DISPATCH":
             return None
         export = component.export_interval
+        source_start = max((rate.start, export.start), key=_instant)
+        source_end = min((rate.end, export.end), key=_instant)
         return (
-            interval.start.astimezone(timezone.utc),
-            interval.end.astimezone(timezone.utc),
+            source_start.astimezone(timezone.utc),
+            source_end.astimezone(timezone.utc),
             rate.import_price,
             rate.source,
             rate.source_event,

@@ -55,6 +55,8 @@ def test_bonus_fingerprint_binds_dispatch_source_identity() -> None:
     component = SimpleNamespace(
         interval=SimpleNamespace(start=NOW, end=NOW + timedelta(minutes=15)),
         rate_interval=SimpleNamespace(
+            start=NOW,
+            end=NOW + timedelta(minutes=15),
             classification=CheapClassification.BONUS_DISPATCH,
             import_price=Decimal("0.07"), source="import", source_event="event",
             dispatch_source_entity_id="binary_sensor.a", source_revision_at=NOW,
@@ -75,6 +77,119 @@ def test_bonus_fingerprint_binds_dispatch_source_identity() -> None:
         first, current_cheap_window=SimpleNamespace(components=(second_component,))
     )
     assert _bonus_fingerprint(first, NOW) != _bonus_fingerprint(second, NOW)
+
+
+def test_bonus_fingerprint_ignores_now_clipping_but_binds_source_boundary() -> None:
+    rate = SimpleNamespace(
+        start=NOW - timedelta(minutes=5),
+        end=NOW + timedelta(minutes=30),
+        classification=CheapClassification.BONUS_DISPATCH,
+        import_price=Decimal("0.07"),
+        source="import",
+        source_event="event",
+        dispatch_source_entity_id="binary_sensor.dispatch",
+        source_revision_at=NOW,
+    )
+    export = SimpleNamespace(
+        start=NOW - timedelta(minutes=30),
+        end=NOW + timedelta(minutes=30),
+        export_price=Decimal("0.15"),
+    )
+
+    def fingerprint(clipped_start: datetime, *, rate_end: datetime = rate.end):
+        changed_rate = SimpleNamespace(**vars(rate))
+        changed_rate.end = rate_end
+        component = SimpleNamespace(
+            interval=SimpleNamespace(
+                start=clipped_start,
+                end=NOW + timedelta(minutes=30),
+            ),
+            rate_interval=changed_rate,
+            export_interval=export,
+        )
+        current = replace(
+            plan(), current_cheap_window=SimpleNamespace(components=(component,))
+        )
+        return _bonus_fingerprint(current, clipped_start)
+
+    assert fingerprint(NOW) == fingerprint(NOW + timedelta(minutes=1))
+    assert fingerprint(NOW) != fingerprint(
+        NOW, rate_end=NOW + timedelta(minutes=29)
+    )
+
+
+async def test_bonus_heartbeat_does_not_manufacture_stop_debt(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    key = SlotKey(1, SlotDirection.CHARGE)
+    source_start = NOW - timedelta(minutes=5)
+    source_end = NOW + timedelta(minutes=30)
+    export = SimpleNamespace(
+        start=source_start,
+        end=source_end,
+        export_price=Decimal("0.15"),
+    )
+
+    def bonus_plan(at: datetime) -> Plan:
+        component = SimpleNamespace(
+            interval=SimpleNamespace(start=at, end=source_end),
+            rate_interval=SimpleNamespace(
+                start=source_start,
+                end=source_end,
+                classification=CheapClassification.BONUS_DISPATCH,
+                import_price=Decimal("0.07"),
+                source="import",
+                source_event="event",
+                dispatch_source_entity_id="binary_sensor.dispatch",
+                source_revision_at=NOW,
+            ),
+            export_interval=export,
+        )
+        return replace(
+            plan(),
+            action=StrategyAction.CHEAP_CHARGE,
+            intent=LogicalIntent(
+                (
+                    SlotIntent(
+                        SlotOwner.CHEAP_CHARGING,
+                        SlotDirection.CHARGE,
+                        at,
+                        NOW + timedelta(minutes=15),
+                        Decimal("100"),
+                        Decimal("100"),
+                        NOW + timedelta(minutes=15),
+                    ),
+                )
+            ),
+            current_cheap_window=SimpleNamespace(components=(component,)),
+            charge_lease_deadline=NOW + timedelta(minutes=15),
+        )
+
+    first = bonus_plan(NOW)
+    heartbeat_at = NOW + timedelta(minutes=1)
+    heartbeat = bonus_plan(heartbeat_at)
+    controller._bonus_charge_keys.add(key)
+    controller._charge_lease_deadline = first.charge_lease_deadline
+    controller._bonus_lease_fingerprint = _bonus_fingerprint(first, NOW)
+
+    with (
+        patch(
+            "custom_components.house_battery_control.controller.read_state",
+            return_value=observation(),
+        ),
+        patch(
+            "custom_components.house_battery_control.controller.build_plan",
+            AsyncMock(return_value=heartbeat),
+        ),
+        patch.object(Controller, "_now", return_value=heartbeat_at),
+    ):
+        await controller._reconcile()
+
+    assert not controller._stop_debts
+    solis.stop.assert_not_awaited()
+    assert controller.data.health is ControllerHealth.HEALTHY
 
 
 def test_standard_cheap_plan_explicitly_allows_rollover_slot_preservation() -> None:
@@ -688,6 +803,7 @@ async def test_expired_bonus_lease_stops_then_renews_only_after_off_proof(
     component = SimpleNamespace(
         interval=SimpleNamespace(start=NOW, end=NOW + timedelta(minutes=30)),
         rate_interval=SimpleNamespace(
+            start=NOW, end=NOW + timedelta(minutes=30),
             classification=CheapClassification.BONUS_DISPATCH,
             import_price=Decimal("0.07"), source="import", source_event="event",
             dispatch_source_entity_id="binary_sensor.dispatch", source_revision_at=NOW,
@@ -747,6 +863,7 @@ async def test_fresh_controller_reconstructs_ephemeral_bonus_lease_and_expires_i
     component = SimpleNamespace(
         interval=SimpleNamespace(start=NOW, end=NOW + timedelta(minutes=30)),
         rate_interval=SimpleNamespace(
+            start=NOW, end=NOW + timedelta(minutes=30),
             classification=CheapClassification.BONUS_DISPATCH,
             import_price=Decimal("0.07"), source="import", source_event="event",
             dispatch_source_entity_id="binary_sensor.dispatch", source_revision_at=NOW,

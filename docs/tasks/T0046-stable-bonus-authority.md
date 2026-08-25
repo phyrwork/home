@@ -1,6 +1,6 @@
 # T0046 — Stabilize active bonus-dispatch authority
 
-Status: Approved by live evidence — implementation pending
+Status: Implemented locally — deployment and live verification pending
 
 Depends on: T0039
 
@@ -50,3 +50,13 @@ may issue a fresh bounded lease only after authoritative off proof.
 - Live readback shows a fixed charge slot, Peak Shaving disabled after the
   handover, controller `HEALTHY`, and no pending stop operation during the
   unchanged dispatch.
+
+## Local evidence
+
+- The authority fingerprint now uses the original import/export intersection;
+  the clipped interval remains only the active-component selector.
+- Regression coverage proves a moving clipped start retains one fingerprint,
+  a changed source boundary does not, and an unchanged heartbeat creates no
+  stop debt.
+- House-battery component suite: `144 passed`.
+- Deployment suite: `53 passed`.
