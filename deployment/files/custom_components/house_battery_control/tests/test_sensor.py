@@ -21,6 +21,7 @@ from custom_components.house_battery_control.sensor import (
     HeartbeatSensor,
     BatteryEnergySensor,
     ReserveBalanceSensor,
+    ReserveForecastSensor,
     ReserveSensor,
     ReserveTargetSensor,
     ReserveUsableSensor,
@@ -82,6 +83,7 @@ async def test_platform_exposes_only_small_diagnostic_surface(hass: HomeAssistan
         BatteryEnergySensor,
         ReserveTargetSensor,
         ReserveUsableSensor,
+        ReserveForecastSensor,
         ReserveBalanceSensor,
     ]
 
@@ -108,10 +110,12 @@ def test_sensors_report_disabled_snapshot(hass: HomeAssistant) -> None:
     energy = BatteryEnergySensor(instance)
     reserve_target = ReserveTargetSensor(instance)
     reserve_usable = ReserveUsableSensor(instance)
+    reserve_forecast = ReserveForecastSensor(instance)
     reserve_balance = ReserveBalanceSensor(instance)
     assert energy.native_value == 17.68448
     assert reserve_target.native_value == 12.345678
     assert reserve_usable.native_value == 9.130318
+    assert reserve_forecast.native_value == 7.130318
     assert reserve_balance.native_value == 5.338802
     assert reserve_target.extra_state_attributes == {
         "control_reserve_soc_percent": 17.0,
@@ -124,23 +128,43 @@ def test_sensors_report_disabled_snapshot(hass: HomeAssistant) -> None:
     }
     assert [
         sensor.unique_id
-        for sensor in (energy, reserve_target, reserve_usable, reserve_balance)
+        for sensor in (
+            energy,
+            reserve_target,
+            reserve_usable,
+            reserve_forecast,
+            reserve_balance,
+        )
     ] == [
         "house_battery_control_energy",
         "house_battery_control_reserve_target",
         "house_battery_control_reserve_usable",
+        "house_battery_control_reserve_forecast",
         "house_battery_control_reserve_balance",
     ]
     assert [
         sensor.name
-        for sensor in (energy, reserve_target, reserve_usable, reserve_balance)
+        for sensor in (
+            energy,
+            reserve_target,
+            reserve_usable,
+            reserve_forecast,
+            reserve_balance,
+        )
     ] == [
         "House Battery Energy",
         "House Battery Reserve Target",
         "House Battery Reserve (Usable)",
+        "House Battery Reserve (Forecast)",
         "House Battery Reserve Balance",
     ]
-    for sensor in (energy, reserve_target, reserve_usable, reserve_balance):
+    for sensor in (
+        energy,
+        reserve_target,
+        reserve_usable,
+        reserve_forecast,
+        reserve_balance,
+    ):
         assert sensor.device_class is SensorDeviceClass.ENERGY
         assert sensor.native_unit_of_measurement is UnitOfEnergy.KILO_WATT_HOUR
         assert sensor.state_class is None
@@ -157,6 +181,7 @@ def test_sensors_are_unavailable_without_data(hass: HomeAssistant) -> None:
         BatteryEnergySensor(instance),
         ReserveTargetSensor(instance),
         ReserveUsableSensor(instance),
+        ReserveForecastSensor(instance),
         ReserveBalanceSensor(instance),
     )
     assert all(not sensor.available for sensor in sensors)
@@ -179,5 +204,25 @@ def test_reserve_usable_is_unavailable_without_target_and_clamps_at_floor(
 
     instance.async_set_updated_data(
         replace(snapshot(), reserve_target_energy_kwh=Decimal("3.21536"))
+    )
+    assert sensor.native_value == 0.0
+
+
+def test_reserve_forecast_is_unavailable_without_target_and_clamps_at_margin(
+    hass: HomeAssistant,
+) -> None:
+    instance = controller(hass, replace(snapshot(), reserve_target_energy_kwh=None))
+    sensor = ReserveForecastSensor(instance)
+    assert not sensor.available
+    assert sensor.native_value is None
+
+    instance.async_set_updated_data(
+        replace(snapshot(), reserve_target_energy_kwh=Decimal("5.21536"))
+    )
+    assert sensor.available
+    assert sensor.native_value == 0.0
+
+    instance.async_set_updated_data(
+        replace(snapshot(), reserve_target_energy_kwh=Decimal("5.215359"))
     )
     assert sensor.native_value == 0.0

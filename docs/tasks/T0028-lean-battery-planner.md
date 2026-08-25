@@ -51,7 +51,7 @@ Preserve:
 - complete interval coverage checks;
 - aware UTC comparisons, DST gaps and both folds;
 - stored-energy margin after configured charge/discharge efficiency;
-- forecast household load and verified negative-load PV;
+- forecast household load and concurrent PV without surplus carry-forward;
 - reverse reserve planning to the next cheap opportunity;
 - reserve margin and safety/physical-range clamps;
 - live charge/discharge capability limits;

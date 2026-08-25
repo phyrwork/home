@@ -31,6 +31,7 @@ async def async_setup_platform(
                 BatteryEnergySensor(controller),
                 ReserveTargetSensor(controller),
                 ReserveUsableSensor(controller),
+                ReserveForecastSensor(controller),
                 ReserveBalanceSensor(controller),
             )
         )
@@ -180,6 +181,22 @@ class ReserveUsableSensor(_ReserveEnergySensor):
         )
 
 
+class ReserveForecastSensor(_ReserveEnergySensor):
+    _attr_name = "House Battery Reserve (Forecast)"
+    _attr_unique_id = f"{DOMAIN}_reserve_forecast"
+
+    def _value(self) -> object:
+        data = self.coordinator.data
+        if data is None or data.reserve_target_energy_kwh is None:
+            return None
+        return max(
+            Decimal(0),
+            data.reserve_target_energy_kwh
+            - self.coordinator.config.battery.minimum_energy_kwh
+            - self.coordinator.config.battery.reserve_margin_kwh,
+        )
+
+
 class ReserveBalanceSensor(_ReserveEnergySensor):
     _attr_name = "House Battery Reserve Balance"
     _attr_unique_id = f"{DOMAIN}_reserve_balance"
@@ -210,6 +227,7 @@ __all__ = [
     "HealthSensor",
     "HeartbeatSensor",
     "ReserveBalanceSensor",
+    "ReserveForecastSensor",
     "ReserveSensor",
     "ReserveTargetSensor",
     "ReserveUsableSensor",

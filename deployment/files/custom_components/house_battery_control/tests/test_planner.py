@@ -544,7 +544,7 @@ def test_load_forecast_preserves_local_profiles_and_exact_proration() -> None:
     assert prorated_energy(middle, (source,), required=True) == Decimal("1.0")
 
 
-def test_reverse_reserve_handles_grid_limit_cheap_refill_and_external_pv() -> None:
+def test_reverse_reserve_handles_concurrent_pv_without_banking_surplus() -> None:
     interval = TimeInterval(NOW, NOW + timedelta(hours=1))
 
     def reserve(load: str, solar: str = "0", classification=CheapClassification.NOT_CHEAP):
@@ -556,10 +556,40 @@ def test_reverse_reserve_handles_grid_limit_cheap_refill_and_external_pv() -> No
             maximum_discharge_power_kw=Decimal("5"),
         )
 
-    assert reserve("1").reserve_energy_kwh == Decimal("1.947368421052631578947368421")
+    assert reserve("1").reserve_energy_kwh == Decimal("2.052631578947368421052631579")
+    assert reserve("1", solar="0.5").reserve_energy_kwh == Decimal(
+        "1.526315789473684210526315790"
+    )
     assert reserve("0", classification=CheapClassification.STANDARD_CHEAP).reserve_energy_kwh == Decimal("1")
     assert reserve("0", solar="2").reserve_energy_kwh == Decimal("1")
-    assert reserve("6").issue == "forecast demand exceeds battery and grid power"
+    assert reserve("6").issue == "forecast demand exceeds battery power"
+
+    surplus_then_demand = plan_reserve(
+        intervals=(
+            ReserveInputInterval(
+                interval,
+                Decimal("0"),
+                Decimal("2"),
+                CheapClassification.NOT_CHEAP,
+            ),
+            ReserveInputInterval(
+                TimeInterval(interval.end, interval.end + timedelta(hours=1)),
+                Decimal("1"),
+                Decimal("0"),
+                CheapClassification.NOT_CHEAP,
+            ),
+        ),
+        capacity_kwh=Decimal("10"),
+        minimum_energy_kwh=Decimal("1"),
+        reserve_margin_kwh=Decimal("0"),
+        charge_efficiency=Decimal("0.95"),
+        discharge_efficiency=Decimal("0.95"),
+        maximum_charge_power_kw=Decimal("5"),
+        maximum_discharge_power_kw=Decimal("5"),
+    )
+    assert surplus_then_demand.reserve_energy_kwh == Decimal(
+        "2.052631578947368421052631579"
+    )
     with_margin = plan_reserve(
         intervals=(ReserveInputInterval(
             interval, Decimal("0"), Decimal("0"), CheapClassification.STANDARD_CHEAP,

@@ -23,8 +23,8 @@ One-time Solis commissioning is complete:
 - Grid Feed-In Power Limit is disabled and unmanaged.
 - Solis Cloud Control is the sole control integration.
 - Solis Inverter is telemetry-only; its experimental controls are disabled.
-- The separate PV inverter is not Solis telemetry, but negative house load is
-  valid surplus PV and may charge the battery.
+- The separate PV inverter is not Solis telemetry. Its production offsets
+  concurrent house load, while surplus is exported rather than stored.
 
 Runtime owns only:
 
@@ -49,7 +49,7 @@ configured efficiencies.
 Keep the proven dynamic reserve model:
 
 - reverse-plan household energy until the next cheap opportunity;
-- include forecast load, negative-load PV, reserve margin and efficiencies;
+- include forecast load, concurrent PV, reserve margin and efficiencies;
 - respect live charge/discharge capability;
 - clamp to `MINIMUM_SOC_PERCENT` and the physical battery range; and
 - return unavailable instead of inventing a result from bad inputs.

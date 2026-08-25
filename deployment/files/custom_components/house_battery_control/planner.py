@@ -22,7 +22,6 @@ from .model import (
 )
 
 BATTERY_CYCLE_COST_PER_KWH = Decimal("0.0165")
-MAXIMUM_GRID_IMPORT_POWER_KW = Decimal("0.1")
 MAXIMUM_SOURCE_FUTURE_SKEW = timedelta(minutes=2)
 OCTOPUS_EXPORT_SOURCE_MAX_AGE = timedelta(hours=26)
 OCTOPUS_RATE_SOURCE_MAX_AGE = timedelta(hours=26)
@@ -1032,18 +1031,10 @@ def plan_reserve(
                 required - maximum_charge_power_kw * hours * charge_efficiency,
             )
         elif deficit > 0:
-            battery_output = max(
-                Decimal(0),
-                deficit - MAXIMUM_GRID_IMPORT_POWER_KW * hours,
-            )
+            battery_output = deficit
             if battery_output > maximum_discharge_power_kw * hours:
-                return ReservePlanResult(issue="forecast demand exceeds battery and grid power")
+                return ReservePlanResult(issue="forecast demand exceeds battery power")
             required += battery_output / discharge_efficiency
-        else:
-            # External-PV surplus appears as negative load and charges in
-            # Feed-In Priority.
-            stored = min(-deficit, maximum_charge_power_kw * hours) * charge_efficiency
-            required = max(floor, required - stored)
         if required > capacity_kwh:
             return ReservePlanResult(issue="required household reserve exceeds battery capacity")
     return ReservePlanResult(required)

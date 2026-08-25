@@ -1,6 +1,9 @@
 # T0045 — Lean reserve forecast
 
-Status: Accepted — implementation pending
+Status: Implemented locally — deployment and live verification pending
+
+Supersedes the ordinary-grid contribution and stored external-PV-surplus
+assumptions in T0001, T0013, T0026 and T0028.
 
 ## Objective
 

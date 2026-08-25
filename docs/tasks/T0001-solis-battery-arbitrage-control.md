@@ -69,15 +69,14 @@ thresholds or the inverter clock.
 
 - `FULL_SOC_PERCENT = 100`.
 - `MINIMUM_SOC_PERCENT = 10`.
-- The reverse reserve planner allows the established 0.1 kW residual-grid
-  contribution through its named planning constant; this is not a Peak Shaving
-  control.
 - Cycle discharge duration is a live 1–60 minute helper, initially 10 minutes.
 
 The dynamic reserve is the energy required to avoid expensive import before the
 next trusted cheap opportunity. Reverse planning accounts for forecast demand,
-negative-load PV, charge/discharge efficiency, live inverter capability and a
-configured reserve margin. It never returns a reserve below
+concurrent PV, charge/discharge efficiency, live inverter capability and a
+configured reserve margin. Surplus PV is exported and never carried forward as
+stored energy; no ordinary-grid contribution is assumed. The planner never
+returns a reserve below
 `MINIMUM_SOC_PERCENT` or above the physical battery range, and returns
 unavailable rather than inventing an answer from invalid inputs.
 
