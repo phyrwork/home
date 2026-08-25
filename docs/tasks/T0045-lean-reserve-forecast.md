@@ -1,6 +1,6 @@
 # T0045 — Lean reserve forecast
 
-Status: Implemented locally — deployment and live verification pending
+Status: Deployed and live-verified
 
 Supersedes the ordinary-grid contribution and stored external-PV-surplus
 assumptions in T0001, T0013, T0026 and T0028.
@@ -67,3 +67,13 @@ dashboard's House Battery section. Dashboard configuration remains UI-managed.
 - The complete component and deployment suites pass.
 - Live readback proves all three reserve diagnostics are available and ordered
   together on the dashboard.
+
+## Deployment evidence — 2026-08-25
+
+- Full Ansible deployment completed with `ok=140`, `changed=4`, no failures,
+  configuration validation, and a Home Assistant restart.
+- Fresh controller output reported total reserve `5.28382598494008 kWh`, usable
+  reserve `2.06846598494008 kWh`, and forecast reserve
+  `0.0684659849400784 kWh`.
+- The Power dashboard was saved and read back with `Reserve`,
+  `Reserve (Usable)`, `Reserve (Forecast)`, then `Surplus` in that order.

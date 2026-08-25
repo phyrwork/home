@@ -1,6 +1,6 @@
 # T0046 — Stabilize active bonus-dispatch authority
 
-Status: Implemented locally — deployment and live verification pending
+Status: Deployed and live-verified
 
 Depends on: T0039
 
@@ -60,3 +60,16 @@ may issue a fresh bounded lease only after authoritative off proof.
   stop debt.
 - House-battery component suite: `144 passed`.
 - Deployment suite: `53 passed`.
+
+## Deployment evidence — 2026-08-25
+
+- Deployed atomically with T0045 through the full Ansible playbook; Home
+  Assistant configuration validation and restart completed successfully.
+- Four samples spanning a minute boundary retained slot 1 charge at
+  `19:26-19:30`, the same `19:30 BST` lease deadline,
+  `HEALTHY/CHEAP_CHARGE`, no pending operation, and Peak Shaving disabled.
+- At the half-open `19:30 BST` boundary, health truthfully entered `DEGRADED`
+  while the important stop was in progress. Slot 1 was confirmed off within
+  19 ms and health first recovered after 3.4 seconds. The staged return ended
+  at `HEALTHY/RESERVE_FOLLOW`, every slot off, and Peak Shaving enabled. No
+  fail-safe transition occurred.

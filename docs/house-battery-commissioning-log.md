@@ -386,3 +386,29 @@ Bonus charge remains positional and now-based with its existing native lease
 clipping, and full-SOC cycle timing remains independently now-based. The
 exact-start `23:59` bonus empty-first-segment edge is deferred and is not
 broadened; T0042's one-minute boundary remains in force.
+
+## 2026-08-25 reserve forecast and stable bonus authority
+
+T0045 and T0046 were deployed together through the full Ansible playbook.
+Configuration validation passed, Home Assistant restarted, and the play
+completed with `ok=140`, `changed=4`, and no failures.
+
+The corrected reserve model produced a total target of approximately
+`5.284 kWh`: `3.215 kWh` absolute 10% safety floor, `2.000 kWh` configured
+margin, and `0.068 kWh` modelled household forecast. Live entities exposed the
+total, usable and forecast values separately. The Power dashboard was saved
+and read back with `Reserve (Forecast)` immediately after `Reserve (Usable)`.
+
+An active Intelligent Dispatch provided live T0046 acceptance. Across four
+samples spanning a minute boundary, charge slot 1 remained fixed at
+`19:26-19:30`, the lease deadline remained `19:30 BST`, controller state stayed
+`HEALTHY/CHEAP_CHARGE`, no operation was pending, and Peak Shaving remained
+off. The previous every-minute stop/recreate churn did not recur.
+
+At the half-open dispatch boundary, health entered `DEGRADED` while the charge
+stop was being confirmed; the slot changed to off within 19 ms. Health first
+recovered 3.4 seconds later. A further 1.76-second transition covered the
+staged return to reserve following. By `19:30:28.552 BST`, the controller was
+stably `HEALTHY/RESERVE_FOLLOW`, all slots were off and Peak Shaving was on.
+This is the intended truthful in-progress health signal, not fail-safe
+escalation.
