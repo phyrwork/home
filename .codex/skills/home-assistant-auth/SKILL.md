@@ -17,7 +17,12 @@ Use this skill for auth-sensitive Home Assistant deployment work in this repo.
 ## 1Password
 
 - The Ansible vault password and Home Assistant API token come from `op`.
-- If `op` auth fails or times out, stop and ask Connor to retry. Do not bypass `op` for the same secret.
+- Before the first `op read` in a new agent/session, run `op signin` so the CLI
+  session is authenticated even when the desktop app is already open.
+- If `op read` reports that the CLI cannot connect to the desktop app, run
+  `op signin` once and retry the read once before asking Connor for help.
+- If `op signin` or the retried `op read` fails or times out, stop and ask
+  Connor to retry. Do not bypass `op` for the same secret.
 
 ## HA API Token Cache
 
