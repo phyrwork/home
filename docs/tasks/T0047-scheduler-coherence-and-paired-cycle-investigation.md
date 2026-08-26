@@ -1,6 +1,6 @@
 # T0047 — Simplify the scheduler and investigate paired native cycling
 
-Status: Accepted — audit complete; live capability test pending
+Status: In progress — live capability experiment armed for 2026-08-27
 
 Depends on: T0039, T0040, T0041, T0042, T0043, T0046
 
@@ -241,6 +241,40 @@ experiment-only settings as required, and restore the controller.
 Record exact settings, timestamps, readbacks and physical outcomes in the
 commissioning log.
 
+## Execution record
+
+The first live capability experiment is scheduled for the static cheap period
+on 2026-08-27. A self-contained runner is active in the Advanced SSH add-on as
+PID `29443`; it is read-only until the experiment starts. Its validated
+SHA-256 is
+`b9989ae2a283a914882e1efe499fca4d884b48795b4466bcede1d60d7b919d36`.
+
+The bounded sequence is:
+
+- at 04:25 Europe/London, prove the static cheap rate and prove that bonus
+  dispatch is not active;
+- snapshot the persistent controls and every native direction;
+- disable the YAML controller include and restart Core, leaving the Solis
+  control and telemetry integrations available;
+- prove the controller heartbeat has stopped and stop only directions observed
+  on;
+- arm slot 1 discharge `[05:00,05:10)` at the observed maximum current and the
+  captured quantized reserve target;
+- arm slot 1 recharge `[05:10,05:20)` at the observed maximum current and 100%;
+- enable recharge first and discharge last, then prove the entire configuration
+  before 04:58;
+- make no control write at either 05:00 or 05:10 while capturing 15-second HA
+  control, Solis telemetry and Octopus whole-site-demand evidence;
+- after 05:22, disable and prove both directions off; and
+- after the 05:30 tariff boundary, restore the controller include and restart
+  Core.
+
+If static cheap authority, dispatch provenance, controller shutdown, any
+readback or the complete pair cannot be proven, the runner aborts the discharge,
+cleans up the two experiment directions, selects Self-Use during emergency
+cleanup and restores the controller. Evidence is retained on HA under
+`/config/t0047-evidence/`.
+
 ## Decision gate
 
 ### If paired execution is proven
@@ -307,4 +341,3 @@ Whichever implementation path is selected must prove:
 - fail-safe, sentinel and shutdown semantics remain unchanged;
 - native schedules never overlap under half-open interpretation; and
 - the full component and deployment suites pass.
-
