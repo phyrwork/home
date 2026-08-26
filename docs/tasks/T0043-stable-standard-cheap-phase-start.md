@@ -27,7 +27,7 @@ at rollover, so the active Solis adapter bridges that boundary by reusing a
 unique already-enabled allocated cheap slot whose owner, direction, values,
 native end, and active half-open schedule match exactly.
 
-`BONUS_DISPATCH` remains now-based and retains its existing native component
+`BONUS_CHEAP` remains now-based and retains its existing native component
 lease clipping. Full-SOC cycling remains independently now-based. Adjacent
 mixed phases use the current component start; a bonus component never lends its
 start or lease to a neighboring standard-cheap phase.

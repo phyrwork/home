@@ -69,7 +69,7 @@ class CheapClassification(str, Enum):
     """The only source-backed classifications accepted by the model."""
 
     STANDARD_CHEAP = "STANDARD_CHEAP"
-    BONUS_DISPATCH = "BONUS_DISPATCH"
+    BONUS_CHEAP = "BONUS_CHEAP"
     NOT_CHEAP = "NOT_CHEAP"
 
 
@@ -335,7 +335,7 @@ def parse_fused_import_rates(rates: str | Sequence[Mapping[str, Any]]) -> tuple[
         if supplied_min != expected_min or supplied_unique != len(set(prices)):
             raise ValueError("event minimum or unique-price count does not match rates")
         for interval in (item for item in result if (item.source, item.source_event) == key):
-            if interval.classification is CheapClassification.BONUS_DISPATCH:
+            if interval.classification is CheapClassification.BONUS_CHEAP:
                 if interval.import_price != expected_min or not _adjusted_for(interval):
                     raise ValueError("bonus dispatch interval has inconsistent provenance")
             elif interval.classification is CheapClassification.STANDARD_CHEAP:
@@ -394,7 +394,7 @@ def _validate_import_interval_sequence(intervals: Sequence[AdjustedRateInterval]
         return issue
     allowed = {
         CheapClassification.STANDARD_CHEAP,
-        CheapClassification.BONUS_DISPATCH,
+        CheapClassification.BONUS_CHEAP,
         CheapClassification.NOT_CHEAP,
     }
     groups: dict[str, list[AdjustedRateInterval]] = {}
@@ -435,7 +435,7 @@ def _validate_import_interval_sequence(intervals: Sequence[AdjustedRateInterval]
             return f"event unique-price count does not match rates: {event}"
         for item in group:
             expected_classification = (
-                CheapClassification.BONUS_DISPATCH
+                CheapClassification.BONUS_CHEAP
                 if item.is_intelligent_adjusted and item.import_price == first.event_minimum
                 else CheapClassification.STANDARD_CHEAP
                 if (
@@ -714,7 +714,7 @@ def evaluate_trusted_import_rates(
     bonus = tuple(
         item
         for item in result.intervals
-        if item.classification is CheapClassification.BONUS_DISPATCH
+        if item.classification is CheapClassification.BONUS_CHEAP
         and _instant(item.end) > _instant(start)
         and _instant(item.start) < _instant(end)
     )
@@ -847,7 +847,7 @@ def evaluate_cheap_windows(
                 candidates.append(component)
 
     bonus_actionable = any(
-        item.rate_interval.classification is CheapClassification.BONUS_DISPATCH for item in candidates
+        item.rate_interval.classification is CheapClassification.BONUS_CHEAP for item in candidates
     )
     if bonus_actionable:
         dispatch_issue = _dispatch_observation_issue(dispatch_source, now)
@@ -858,7 +858,7 @@ def evaluate_cheap_windows(
                 issues=(dispatch_issue,),
             )
         if any(
-            item.rate_interval.classification is CheapClassification.BONUS_DISPATCH
+            item.rate_interval.classification is CheapClassification.BONUS_CHEAP
             and item.rate_interval.dispatch_source_entity_id != dispatch_source.source
             for item in candidates
         ):
@@ -1025,7 +1025,10 @@ def plan_reserve(
     for item in reversed(intervals):
         hours = _hours(item.interval.start, item.interval.end)
         deficit = item.load_kwh - item.solar_kwh
-        if item.classification is not CheapClassification.NOT_CHEAP:
+        # A scheduled Intelligent Dispatch is not a guaranteed refill: the EV
+        # can finish early and cancel it.  Only the static tariff may reduce
+        # the household reserve requirement.
+        if item.classification is CheapClassification.STANDARD_CHEAP:
             required = max(
                 floor,
                 required - maximum_charge_power_kw * hours * charge_efficiency,
@@ -1044,6 +1047,26 @@ def _hours(start: datetime, end: datetime) -> Decimal:
     delta = _instant(end) - _instant(start)
     micros = (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
     return Decimal(micros) / Decimal(3_600_000_000)
+
+
+def _next_standard_cheap_start(
+    import_rates: Sequence[AdjustedRateInterval], now: datetime
+) -> datetime | None:
+    """Return the start of the next static-cheap phase after now."""
+
+    previous_standard_end: datetime | None = None
+    for rate in import_rates:
+        if rate.classification is not CheapClassification.STANDARD_CHEAP:
+            previous_standard_end = None
+            continue
+        starts_phase = (
+            previous_standard_end is None
+            or _instant(rate.start) != _instant(previous_standard_end)
+        )
+        if starts_phase and _instant(rate.start) > _instant(now):
+            return rate.start
+        previous_standard_end = rate.end
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1165,7 +1188,8 @@ async def build_plan(
             if dispatch_state.state != "on":
                 raise ValueError("dispatch source is not on")
 
-        reserve_end = next_window.start if next_window is not None else horizon_end
+        next_standard_cheap = _next_standard_cheap_start(import_rates, now)
+        reserve_end = next_standard_cheap if next_standard_cheap is not None else horizon_end
         reserve_end = _minute_floor(min(reserve_end, now + timedelta(hours=23, minutes=59)))
         if reserve_end <= now:
             reserve_end = _minute_floor(now + timedelta(minutes=1))
@@ -1450,7 +1474,7 @@ def _window_has_bonus_at(window: CheapWindow | None, now: datetime) -> bool:
     if window is None:
         return False
     return any(
-        item.rate_interval.classification is CheapClassification.BONUS_DISPATCH
+        item.rate_interval.classification is CheapClassification.BONUS_CHEAP
         and _instant(item.interval.start) <= _instant(now) < _instant(item.interval.end)
         for item in window.components
     )
@@ -1472,7 +1496,7 @@ def _charge_phase_end(window: CheapWindow, now: datetime) -> tuple[datetime, boo
         return window.end, False
     classification = components[current_index].rate_interval.classification
     end = components[current_index].interval.end
-    if classification is CheapClassification.BONUS_DISPATCH:
+    if classification is CheapClassification.BONUS_CHEAP:
         # A lease is tied to exactly one observed bonus component. Adjacent
         # bonus components may have different source/repricing semantics and
         # must never inherit one another's native boundary.
@@ -1484,7 +1508,7 @@ def _charge_phase_end(window: CheapWindow, now: datetime) -> tuple[datetime, boo
         ):
             break
         end = item.interval.end
-    return end, classification is CheapClassification.BONUS_DISPATCH
+    return end, classification is CheapClassification.BONUS_CHEAP
 
 
 def _charge_phase_start(window: CheapWindow, now: datetime) -> tuple[datetime, CheapClassification]:

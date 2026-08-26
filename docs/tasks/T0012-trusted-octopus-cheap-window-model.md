@@ -110,7 +110,7 @@ Define an enum with at least:
 
 ```python
 STANDARD_CHEAP
-BONUS_DISPATCH
+BONUS_CHEAP
 NOT_CHEAP
 ```
 
@@ -118,7 +118,7 @@ For one independently validated source event:
 
 - `STANDARD_CHEAP` requires adjustment `false`, price equal to that event's
   exact minimum, and exactly two or three unique event prices;
-- `BONUS_DISPATCH` requires adjustment `true` and price equal to that same
+- `BONUS_CHEAP` requires adjustment `true` and price equal to that same
   event's exact minimum; and
 - all other consistent intervals are `NOT_CHEAP`.
 
@@ -220,7 +220,7 @@ at most one.
 
 An interval is an actionable component only when:
 
-- its explicit classification is `STANDARD_CHEAP` or `BONUS_DISPATCH`; and
+- its explicit classification is `STANDARD_CHEAP` or `BONUS_CHEAP`; and
 - its margin is strictly greater than zero.
 
 Zero margin is not profitable. Preserve the exact margin on every component.

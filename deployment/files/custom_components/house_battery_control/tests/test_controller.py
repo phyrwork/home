@@ -57,7 +57,7 @@ def test_bonus_fingerprint_binds_dispatch_source_identity() -> None:
         rate_interval=SimpleNamespace(
             start=NOW,
             end=NOW + timedelta(minutes=15),
-            classification=CheapClassification.BONUS_DISPATCH,
+            classification=CheapClassification.BONUS_CHEAP,
             import_price=Decimal("0.07"), source="import", source_event="event",
             dispatch_source_entity_id="binary_sensor.a", source_revision_at=NOW,
         ),
@@ -83,7 +83,7 @@ def test_bonus_fingerprint_ignores_now_clipping_but_binds_source_boundary() -> N
     rate = SimpleNamespace(
         start=NOW - timedelta(minutes=5),
         end=NOW + timedelta(minutes=30),
-        classification=CheapClassification.BONUS_DISPATCH,
+        classification=CheapClassification.BONUS_CHEAP,
         import_price=Decimal("0.07"),
         source="import",
         source_event="event",
@@ -138,7 +138,7 @@ async def test_bonus_heartbeat_does_not_manufacture_stop_debt(
             rate_interval=SimpleNamespace(
                 start=source_start,
                 end=source_end,
-                classification=CheapClassification.BONUS_DISPATCH,
+                classification=CheapClassification.BONUS_CHEAP,
                 import_price=Decimal("0.07"),
                 source="import",
                 source_event="event",
@@ -395,7 +395,7 @@ async def test_start_retries_at_exact_generation_offsets_then_suppresses(
     ) != generation
     bonus_component = SimpleNamespace(
         interval=stable_standard.current_cheap_window.components[0].interval,
-        rate_interval=SimpleNamespace(classification=CheapClassification.BONUS_DISPATCH),
+        rate_interval=SimpleNamespace(classification=CheapClassification.BONUS_CHEAP),
     )
     bonus_plan = replace(
         stable_standard,
@@ -804,7 +804,7 @@ async def test_expired_bonus_lease_stops_then_renews_only_after_off_proof(
         interval=SimpleNamespace(start=NOW, end=NOW + timedelta(minutes=30)),
         rate_interval=SimpleNamespace(
             start=NOW, end=NOW + timedelta(minutes=30),
-            classification=CheapClassification.BONUS_DISPATCH,
+            classification=CheapClassification.BONUS_CHEAP,
             import_price=Decimal("0.07"), source="import", source_event="event",
             dispatch_source_entity_id="binary_sensor.dispatch", source_revision_at=NOW,
         ),
@@ -864,7 +864,7 @@ async def test_fresh_controller_reconstructs_ephemeral_bonus_lease_and_expires_i
         interval=SimpleNamespace(start=NOW, end=NOW + timedelta(minutes=30)),
         rate_interval=SimpleNamespace(
             start=NOW, end=NOW + timedelta(minutes=30),
-            classification=CheapClassification.BONUS_DISPATCH,
+            classification=CheapClassification.BONUS_CHEAP,
             import_price=Decimal("0.07"), source="import", source_event="event",
             dispatch_source_entity_id="binary_sensor.dispatch", source_revision_at=NOW,
         ),

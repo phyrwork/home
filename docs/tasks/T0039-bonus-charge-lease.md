@@ -20,7 +20,7 @@ withdrawal signal.
 ## Decisions
 
 Define one named `BONUS_CHARGE_LEASE_DURATION = 15 minutes`. A newly created
-`BONUS_DISPATCH` charge segment has the native half-open deadline:
+`BONUS_CHEAP` charge segment has the native half-open deadline:
 
 `min(native bonus-component end, lease start + BONUS_CHARGE_LEASE_DURATION)`
 
@@ -29,7 +29,7 @@ discharge and full-SOC cycling retain their existing native bounds.
 
 A valid bonus authority requires:
 
-- complete fused-rate coverage at `now` with actionable `BONUS_DISPATCH`
+- complete fused-rate coverage at `now` with actionable `BONUS_CHEAP`
   classification;
 - exact configured dispatch-source identity and direct source state `on`;
 - valid event minimum, price and provenance fields;
@@ -152,5 +152,5 @@ required before closing rollout.
 - Recent Home Assistant logs contained no house-battery-controller error or
   traceback; only Home Assistant's standard custom-integration warning.
 
-A live `BONUS_DISPATCH` was not active after this restart, so the required
+A live `BONUS_CHEAP` was not active after this restart, so the required
 fixed 15-minute lease, off proof and renewal/withdrawal sequence remains open.

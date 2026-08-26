@@ -27,7 +27,7 @@ change the coordinator.
 A new cycle may be considered only inside:
 
 - a complete trusted `STANDARD_CHEAP` window; or
-- a current `BONUS_DISPATCH` window with independently fresh dispatch evidence.
+- a current `BONUS_CHEAP` window with independently fresh dispatch evidence.
 
 Require all of:
 

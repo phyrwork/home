@@ -25,7 +25,7 @@ composer.
 ## Strategy boundary
 
 This strategy applies only to a complete trusted `STANDARD_CHEAP` window.
-Never pre-discharge for `BONUS_DISPATCH`: planned Intelligent dispatches may be
+Never pre-discharge for `BONUS_CHEAP`: planned Intelligent dispatches may be
 removed or may arrive too late for a safe pre-window export.
 
 Require:

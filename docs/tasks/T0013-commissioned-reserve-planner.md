@@ -30,7 +30,7 @@ The new planner consumes a separate, complete trusted import-classification
 view retained by T0012:
 
 - `STANDARD_CHEAP` can replenish energy needed for later household demand;
-- `BONUS_DISPATCH` can do the same only with an independently fresh dispatch
+- `BONUS_CHEAP` can do the same only with an independently fresh dispatch
   observation; and
 - `NOT_CHEAP` is not a grid-recharge interval.
 
@@ -135,7 +135,7 @@ Reverse across the complete contiguous requested horizon.
 
 ### Explicitly cheap interval
 
-For trusted `STANDARD_CHEAP`, or trusted and fresh `BONUS_DISPATCH`, potential
+For trusted `STANDARD_CHEAP`, or trusted and fresh `BONUS_CHEAP`, potential
 stored recharge is:
 
 ```text

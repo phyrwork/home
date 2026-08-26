@@ -328,7 +328,7 @@ the live reserve-continuity and physical-discharge gates from T0035.
 ## 2026-08-24 Intelligent dispatch and cheap-charge continuity
 
 An Intelligent dispatch beginning at approximately `14:39 BST` correctly
-changed the fused tariff state to `BONUS_DISPATCH`. The controller stopped
+changed the fused tariff state to `BONUS_CHEAP`. The controller stopped
 reserve discharge before enabling charge, so no charge/discharge overlap was
 observed. Before T0038, the active charge schedule chased the current minute,
 toggling slot 1 seventeen times during an 81-sample observation. Controller

@@ -46,6 +46,7 @@ from custom_components.house_battery_control.planner import (
     _common_quantize_target,
     _charge_phase_start,
     _charge_phase_end,
+    _next_standard_cheap_start,
     _recover_standard_phase_start,
 )
 from custom_components.house_battery_control.solis import read_state
@@ -158,7 +159,7 @@ def test_fused_schema_rejects_inconsistent_minimum_and_adjusted_rate() -> None:
             "start": NOW.isoformat(), "end": (NOW + timedelta(minutes=30)).isoformat(),
             "start_fold": 0, "end_fold": 0,
             "value_inc_vat": "0.08", "unit": "GBP/kWh", "is_intelligent_adjusted": True,
-            "classification": "BONUS_DISPATCH", "source": "i", "source_event": "e",
+            "classification": "BONUS_CHEAP", "source": "i", "source_event": "e",
             "source_day": "current", "tariff": "T", "source_revision_at": NOW.isoformat(),
             "event_min_rate": "0.07", "event_unique_price_count": 2,
             "retrieval_source_entity_id": IMPORT_SOURCE,
@@ -271,7 +272,7 @@ def test_stale_and_future_sources_fail_closed() -> None:
 
 def test_dispatch_last_reported_age_does_not_withdraw_actionable_bonus() -> None:
     rates = _import_rates(
-        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.07", CheapClassification.BONUS_CHEAP, True),
         ("0.30", CheapClassification.NOT_CHEAP, False),
         source="import-rates", source_event="current-day",
     )
@@ -361,7 +362,7 @@ def test_exact_retrieval_source_and_timestamp_are_bound_to_observation() -> None
 
 def test_bonus_dispatch_source_must_match_exact_configured_entity() -> None:
     rates = _import_rates(
-        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.07", CheapClassification.BONUS_CHEAP, True),
         ("0.30", CheapClassification.NOT_CHEAP, False),
         source="current-day",
     )
@@ -410,7 +411,7 @@ def test_forged_direct_intervals_and_wrong_concrete_types_fail_closed() -> None:
     forged = (
         replace(
             rates[0],
-            classification=CheapClassification.BONUS_DISPATCH,
+            classification=CheapClassification.BONUS_CHEAP,
             is_intelligent_adjusted=False,
         ),
         rates[1],
@@ -462,7 +463,7 @@ def test_trusted_import_view_is_complete_without_export_and_bonus_is_independent
     assert result.intervals == standard
 
     bonus = _import_rates(
-        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.07", CheapClassification.BONUS_CHEAP, True),
         ("0.30", CheapClassification.NOT_CHEAP, False),
         source="current-day",
     )
@@ -561,6 +562,9 @@ def test_reverse_reserve_handles_concurrent_pv_without_banking_surplus() -> None
         "1.526315789473684210526315790"
     )
     assert reserve("0", classification=CheapClassification.STANDARD_CHEAP).reserve_energy_kwh == Decimal("1")
+    assert reserve("1", classification=CheapClassification.BONUS_CHEAP).reserve_energy_kwh == Decimal(
+        "2.052631578947368421052631579"
+    )
     assert reserve("0", solar="2").reserve_energy_kwh == Decimal("1")
     assert reserve("6").issue == "forecast demand exceeds battery power"
 
@@ -600,6 +604,34 @@ def test_reverse_reserve_handles_concurrent_pv_without_banking_surplus() -> None
         maximum_discharge_power_kw=Decimal("5"),
     )
     assert with_margin.reserve_energy_kwh == Decimal("1.5")
+
+
+def test_reserve_horizon_ignores_dispatch_and_skips_active_static_phase() -> None:
+    bonus = _import_rates(
+        ("0.07", CheapClassification.BONUS_CHEAP, True),
+        ("0.30", CheapClassification.NOT_CHEAP, False),
+    )[0]
+    first_static = replace(
+        bonus,
+        start=NOW + timedelta(hours=1),
+        end=NOW + timedelta(hours=1, minutes=30),
+        classification=CheapClassification.STANDARD_CHEAP,
+        is_intelligent_adjusted=False,
+    )
+    second_static = replace(
+        first_static,
+        start=first_static.end,
+        end=first_static.end + timedelta(minutes=30),
+    )
+    later_static = replace(
+        first_static,
+        start=NOW + timedelta(hours=12),
+        end=NOW + timedelta(hours=12, minutes=30),
+    )
+    rates = (bonus, first_static, second_static, later_static)
+
+    assert _next_standard_cheap_start(rates, NOW) == first_static.start
+    assert _next_standard_cheap_start(rates, first_static.start + timedelta(minutes=15)) == later_static.start
 
 
 def _config():
@@ -645,7 +677,7 @@ async def _build(
     ):
         hass.states.async_set(entity_id, value, {"rates": ("placeholder",)})
     imports = import_rates_override or _import_rates(
-        ("0.07", CheapClassification.BONUS_DISPATCH if bonus else CheapClassification.STANDARD_CHEAP, bonus),
+        ("0.07", CheapClassification.BONUS_CHEAP if bonus else CheapClassification.STANDARD_CHEAP, bonus),
         ("0.30", CheapClassification.NOT_CHEAP, False),
     )
     if bonus:
@@ -798,7 +830,7 @@ async def test_bonus_charge_lease_is_clipped_to_fifteen_minutes_and_does_not_ext
 
 def test_adjacent_bonus_components_keep_the_first_native_lease_boundary() -> None:
     first = _import_rates(
-        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.07", CheapClassification.BONUS_CHEAP, True),
         ("0.30", CheapClassification.NOT_CHEAP, False),
     )[0]
     first = replace(first, end=NOW + timedelta(minutes=5))
@@ -859,7 +891,7 @@ def test_standard_phase_recovery_stops_at_adjacent_bonus_component() -> None:
         standard,
         start=bonus_start,
         end=standard_start,
-        classification=CheapClassification.BONUS_DISPATCH,
+        classification=CheapClassification.BONUS_CHEAP,
         is_intelligent_adjusted=True,
         source_event="bonus",
     )
@@ -886,7 +918,7 @@ def test_bonus_lease_component_boundary_uses_utc_instants_across_dst_fold() -> N
     start = datetime(2026, 10, 25, 1, 0, tzinfo=london, fold=0)
     end = datetime(2026, 10, 25, 1, 0, tzinfo=london, fold=1)
     rate = _import_rates(
-        ("0.07", CheapClassification.BONUS_DISPATCH, True),
+        ("0.07", CheapClassification.BONUS_CHEAP, True),
         ("0.30", CheapClassification.NOT_CHEAP, False),
     )[0]
     rate = replace(rate, start=start, end=end)

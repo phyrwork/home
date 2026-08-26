@@ -1271,7 +1271,7 @@ def _bonus_fingerprint(plan: Plan, now: datetime) -> Hashable | None:
         ):
             continue
         rate = component.rate_interval
-        if getattr(rate.classification, "value", rate.classification) != "BONUS_DISPATCH":
+        if getattr(rate.classification, "value", rate.classification) != "BONUS_CHEAP":
             return None
         export = component.export_interval
         source_start = max((rate.start, export.start), key=_instant)
