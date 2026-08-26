@@ -203,6 +203,40 @@ Every encoded charge and discharge boundary remains inside trusted cheap
 authority. Tariff or lease end always wins over completing or repeating a
 cycle.
 
+### Generic cheap-window placement
+
+Production cycle placement is driven by the fused trusted cheap interval, not
+by whether the authority originated from the static tariff or Intelligent
+Dispatch. For cycle duty `d`, a block is eligible only when one current trusted
+interval contains the complete half-open range `[D0,D0 + 2d)`. With the initial
+10-minute duty this requires at least 20 minutes of remaining cheap authority,
+plus enough lead time to arm and prove the pair before `D0`.
+
+While the battery is below 100%, the same interval selects ordinary
+`CHEAP_CHARGE`. A fresh device observation reaching 100% may select the first
+eligible paired block wholly inside the remaining interval. The accepted
+20-minute cycle block is a narrow exception to the ordinary 15-minute future
+charge-lease horizon: each physical direction remains bounded to 10 minutes,
+the native end boundary caps exposure, and an authority change requests an
+immediate reconciliation.
+
+Changes to static rates, fused rates or Intelligent Dispatch provenance are
+ordinary controller events:
+
+- if the currently armed pair is still wholly covered, leave it unchanged;
+- before `D0`, cancel or replace a pair no longer covered by trusted cheap
+  authority;
+- during either phase, loss or shortening of authority creates immediate stop
+  debt for every direction whose remaining range is no longer cheap;
+- an extension that still covers the existing pair causes no Solis write; and
+- the one-minute reconciliation remains only a backstop for missed events.
+
+Do not build separate static and dispatch cycle workflows. Existing tariff
+trust, dispatch provenance, equality/readback and important-stop rules are the
+boundaries. Initially retain the same-inverter-day restriction; midnight split
+support can be admitted later using the existing segment encoder after the
+simple case is proven.
+
 ## Live capability experiment
 
 Run the first experiment only during a trusted static cheap period, within one
@@ -245,14 +279,14 @@ commissioning log.
 
 The first live capability experiment is scheduled for the static cheap period
 on 2026-08-27. A self-contained runner is active in the Advanced SSH add-on as
-PID `29443`; it is read-only until the experiment starts. Its validated
+PID `29611`; it is read-only until the experiment starts. Its validated
 SHA-256 is
-`b9989ae2a283a914882e1efe499fca4d884b48795b4466bcede1d60d7b919d36`.
+`baf8a88af0b0c3dca598d9eb60151f4dfb8a52ee098aef9df9f816d930bf766e`.
 
 The bounded sequence is:
 
-- at 04:25 Europe/London, prove the static cheap rate and prove that bonus
-  dispatch is not active;
+- at 04:25 Europe/London, prove the static cheap rate independently of any
+  overlapping bonus dispatch;
 - snapshot the persistent controls and every native direction;
 - disable the YAML controller include and restart Core, leaving the Solis
   control and telemetry integrations available;
@@ -269,8 +303,8 @@ The bounded sequence is:
 - after the 05:30 tariff boundary, restore the controller include and restart
   Core.
 
-If static cheap authority, dispatch provenance, controller shutdown, any
-readback or the complete pair cannot be proven, the runner aborts the discharge,
+If static cheap authority, controller shutdown, any readback or the complete
+pair cannot be proven, the runner aborts the discharge,
 cleans up the two experiment directions, selects Self-Use during emergency
 cleanup and restores the controller. Evidence is retained on HA under
 `/config/t0047-evidence/`.
