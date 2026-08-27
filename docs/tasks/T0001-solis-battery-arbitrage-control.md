@@ -41,7 +41,7 @@ These are one-time operator settings, documented rather than runtime-managed:
 - Grid Feed-In Power Limit: disabled. The DNO-approved site limit requires no
   lower software limit.
 - Over-discharge SOC: 10%.
-- Protective force-charge threshold: 7%, recovering to 10%.
+- Protective force-charge threshold: 7%; live Battery Recovery SOC is 11%.
 - Maximum battery charge SOC and inverter output: 100%.
 - Export: unlimited within the DNO-approved site-inverter limit.
 

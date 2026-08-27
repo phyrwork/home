@@ -345,7 +345,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         change = self.solis.next_start_change(
             observation,
             plan.intent,
-            reserve_soc_percent=plan.reserve_soc_percent,
+            battery_reserve_soc_percent=self.config.battery.minimum_soc_percent,
             peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
             preserve_standard_cheap_slot=preserve_standard_cheap_slot,
         )
@@ -360,7 +360,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         if not self.solis.intent_matches(
             observation,
             plan.intent,
-            reserve_soc_percent=plan.reserve_soc_percent,
+            battery_reserve_soc_percent=self.config.battery.minimum_soc_percent,
             peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
             preserve_standard_cheap_slot=preserve_standard_cheap_slot,
         ):

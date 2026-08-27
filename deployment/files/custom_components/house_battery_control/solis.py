@@ -725,7 +725,7 @@ class SolisAdapter:
         state: SolisState,
         intent: LogicalIntent | None,
         *,
-        reserve_soc_percent: Decimal,
+        battery_reserve_soc_percent: Decimal,
         peak_shaving: bool,
         preserve_standard_cheap_slot: bool = False,
     ) -> SolisChange | None:
@@ -793,14 +793,14 @@ class SolisAdapter:
             if peak_change is not None:
                 return peak_change
 
-        reserve = _quantize(
-            max(Decimal(MINIMUM_SOC_PERCENT), reserve_soc_percent),
+        battery_reserve = _quantize(
+            max(Decimal(MINIMUM_SOC_PERCENT), battery_reserve_soc_percent),
             state.persistent.battery_reserve_soc,
         )
         persistent_targets: tuple[tuple[str, object, ObservedCapability | None], ...] = (
             (self.config.persistent.storage_mode_entity_id, StorageMode.FEED_IN_PRIORITY.value, None),
             (self.config.persistent.allow_grid_charging_entity_id, True, None),
-            (self.config.protection.battery_reserve_soc_entity_id, reserve, state.persistent.battery_reserve_soc),
+            (self.config.protection.battery_reserve_soc_entity_id, battery_reserve, state.persistent.battery_reserve_soc),
             (self.config.protection.battery_reserve_entity_id, True, None),
         )
         for entity_id, target, capability in persistent_targets:
@@ -838,29 +838,29 @@ class SolisAdapter:
         state: SolisState,
         intent: LogicalIntent | None,
         *,
-        reserve_soc_percent: Decimal,
+        battery_reserve_soc_percent: Decimal,
         peak_shaving: bool,
         preserve_standard_cheap_slot: bool = False,
     ) -> bool:
         """Return whether the full policy and complete desired intent match."""
 
         if self.next_start_change(
-            state, intent, reserve_soc_percent=reserve_soc_percent,
+            state, intent, battery_reserve_soc_percent=battery_reserve_soc_percent,
             peak_shaving=peak_shaving,
             preserve_standard_cheap_slot=preserve_standard_cheap_slot,
         ) is not None:
             return False
         if state.health is not ControllerHealth.HEALTHY or state.persistent is None:
             return False
-        reserve = _quantize(
-            max(Decimal(MINIMUM_SOC_PERCENT), reserve_soc_percent),
+        battery_reserve = _quantize(
+            max(Decimal(MINIMUM_SOC_PERCENT), battery_reserve_soc_percent),
             state.persistent.battery_reserve_soc,
         )
         if (
             state.persistent.storage_mode != StorageMode.FEED_IN_PRIORITY.value
             or not state.persistent.allow_grid_charging
             or not state.persistent.battery_reserve
-            or state.persistent.battery_reserve_soc.current_value != reserve
+            or state.persistent.battery_reserve_soc.current_value != battery_reserve
             or state.grid_peak_shaving is None
             or state.grid_peak_shaving != peak_shaving
         ):

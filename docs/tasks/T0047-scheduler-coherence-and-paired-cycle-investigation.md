@@ -147,7 +147,7 @@ CHEAP_CHARGE       ordinary tariff-driven charging
 CYCLE_DISCHARGE    full-SOC cycle discharge phase
 CYCLE_RECHARGE     full-SOC cycle recharge phase
 RESERVE_DISCHARGE  export toward the dynamic reserve
-RESERVE_FOLLOW     ordinary house-load following at reserve
+RESERVE_FOLLOW     house-load following through planned reserve to the safety floor
 IDLE               no active forced or reserve-follow action
 ```
 

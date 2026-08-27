@@ -289,6 +289,38 @@ def adapter(controller: Controller, *, reconciled: bool = True) -> MagicMock:
     return result
 
 
+async def test_dynamic_reserve_does_not_raise_load_following_floor(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    reserve_follow = replace(
+        plan(),
+        action=StrategyAction.RESERVE_FOLLOW,
+        reserve_soc_percent=Decimal("20"),
+        control_reserve_soc_percent=Decimal("20"),
+    )
+    with (
+        patch(
+            "custom_components.house_battery_control.controller.read_state",
+            return_value=observation(),
+        ),
+        patch(
+            "custom_components.house_battery_control.controller.build_plan",
+            AsyncMock(return_value=reserve_follow),
+        ),
+    ):
+        await controller._reconcile()
+
+    assert solis.next_start_change.call_args.kwargs[
+        "battery_reserve_soc_percent"
+    ] == Decimal("10")
+    assert solis.intent_matches.call_args.kwargs[
+        "battery_reserve_soc_percent"
+    ] == Decimal("10")
+    assert controller.data.health is ControllerHealth.HEALTHY
+
+
 async def test_dirty_worker_coalesces_event_during_write_without_losing_it(
     hass: HomeAssistant,
 ) -> None:

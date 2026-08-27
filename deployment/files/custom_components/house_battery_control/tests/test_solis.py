@@ -117,7 +117,7 @@ def advance(adapter: SolisAdapter, states: dict[str, object], desired: LogicalIn
     changes: list[SolisChange] = []
     for _ in range(20):
         observed = read_state(states, adapter.config, now=NOW)
-        change = adapter.next_start_change(observed, desired, reserve_soc_percent=reserve, peak_shaving=False)
+        change = adapter.next_start_change(observed, desired, battery_reserve_soc_percent=reserve, peak_shaving=False)
         if change is None:
             return changes
         changes.append(change)
@@ -213,7 +213,7 @@ def test_unknown_peak_shaving_does_not_hide_mode_but_blocks_start() -> None:
     assert observed.persistent.storage_mode == StorageMode.FEED_IN_PRIORITY.value
     assert observed.grid_peak_shaving is None
     adapter = SolisAdapter(states, parsed, timezone=LONDON)
-    assert adapter.next_start_change(observed, intent(), reserve_soc_percent=Decimal("10"), peak_shaving=False) is None
+    assert adapter.next_start_change(observed, intent(), battery_reserve_soc_percent=Decimal("10"), peak_shaving=False) is None
 
 
 @pytest.mark.parametrize(
@@ -244,7 +244,7 @@ def test_split_midnight_encodes_configured_boundary(
         times = [change.target for change in changes if change.entity_id.startswith("text.")]
         assert times == [expected_first, "00:00-01:00"]
         final = read_state(local_states, parsed, now=NOW)
-        assert adapter.intent_matches(final, desired, reserve_soc_percent=Decimal("10"), peak_shaving=False)
+        assert adapter.intent_matches(final, desired, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False)
 
 
 def test_2359_representation_keeps_explicit_native_one_minute_gap() -> None:
@@ -294,7 +294,7 @@ def test_prearmed_2359_split_rollover_reuses_active_standard_slot() -> None:
     assert adapter.next_start_change(
         observed,
         rollover,
-        reserve_soc_percent=Decimal("10"),
+        battery_reserve_soc_percent=Decimal("10"),
         peak_shaving=False,
         preserve_standard_cheap_slot=True,
     ) is None
@@ -306,14 +306,14 @@ def test_prearmed_2359_split_rollover_reuses_active_standard_slot() -> None:
     assert adapter.next_start_change(
         observed,
         rollover,
-        reserve_soc_percent=Decimal("10"),
+        battery_reserve_soc_percent=Decimal("10"),
         peak_shaving=False,
         preserve_standard_cheap_slot=True,
     ) is None
     assert adapter.intent_matches(
         observed,
         rollover,
-        reserve_soc_percent=Decimal("10"),
+        battery_reserve_soc_percent=Decimal("10"),
         peak_shaving=False,
         preserve_standard_cheap_slot=True,
     )
@@ -353,11 +353,11 @@ def test_bonus_charge_remains_positional_and_never_reuses_noncanonical_slot() ->
     adapter = SolisAdapter(states, parsed, timezone=LONDON)
     assert adapter.conflicting_enabled_keys(observed, desired) == (second,)
     assert adapter.next_start_change(
-        observed, desired, reserve_soc_percent=Decimal("10"), peak_shaving=False
+        observed, desired, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False
     ) is None
 
 
-def test_ordered_start_changes_enable_last_and_quantize_dynamic_reserve() -> None:
+def test_ordered_start_changes_enable_last_and_quantize_battery_reserve() -> None:
     parsed, states = fixture()
     states[parsed.persistent.storage_mode_entity_id]["state"] = "Self-Use"
     states[parsed.persistent.allow_grid_charging_entity_id]["state"] = "off"
@@ -382,6 +382,29 @@ def test_ordered_start_changes_enable_last_and_quantize_dynamic_reserve() -> Non
     assert slot_changes[-1].target is True
 
 
+def test_discharge_slot_target_is_independent_of_battery_reserve_floor() -> None:
+    parsed, states = fixture()
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    desired = intent(
+        SlotOwner.RESERVE_EXPORT,
+        SlotDirection.DISCHARGE,
+        target="21",
+    )
+
+    changes = advance(adapter, states, desired, reserve=Decimal("10"))
+    reserve_entity = parsed.protection.battery_reserve_soc_entity_id
+    slot = parsed.direction(parsed.allocation(SlotOwner.RESERVE_EXPORT)[0])
+
+    assert all(change.entity_id != reserve_entity for change in changes)
+    assert next(
+        change.target
+        for change in changes
+        if change.entity_id == slot.target_soc_entity_id
+    ) == Decimal("21")
+    assert states[reserve_entity]["state"] == "10"
+    assert states[slot.target_soc_entity_id]["state"] == "21"
+
+
 def test_forced_entry_reconciles_policy_before_peak_off() -> None:
     parsed, states = fixture()
     desired = intent()
@@ -395,7 +418,7 @@ def test_forced_entry_reconciles_policy_before_peak_off() -> None:
     states[parsed.persistent.storage_mode_entity_id]["state"] = "Self-Use"
     observed = read_state(states, parsed, now=NOW)
     first = adapter.next_start_change(
-        observed, desired, reserve_soc_percent=Decimal("10"), peak_shaving=False
+        observed, desired, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False
     )
     assert first is not None
     assert first.entity_id == parsed.persistent.storage_mode_entity_id
@@ -470,7 +493,7 @@ async def test_forced_entry_peak_off_failure_retains_peak_and_slot() -> None:
     adapter = SolisAdapter(fake, parsed, timezone=LONDON)
     observed = read_state(states, parsed, now=NOW)
     change = adapter.next_start_change(
-        observed, desired, reserve_soc_percent=Decimal("10"), peak_shaving=False
+        observed, desired, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False
     )
     assert change is not None
     assert change.entity_id == peak_entity
@@ -494,7 +517,7 @@ def test_active_half_open_adjacency_is_accepted_but_conflict_or_unknown_blocks_s
     states[first.target_soc_entity_id]["state"] = "100"
     states[first.enable_entity_id]["state"] = "on"
     observed = read_state(states, parsed, now=NOW)
-    change = adapter.next_start_change(observed, desired, reserve_soc_percent=Decimal("10"), peak_shaving=False)
+    change = adapter.next_start_change(observed, desired, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False)
     assert change is not None and change.entity_id == parsed.slots[1].charge.time_entity_id
     assert split.segments[0].end == split.segments[1].start
 
@@ -502,10 +525,10 @@ def test_active_half_open_adjacency_is_accepted_but_conflict_or_unknown_blocks_s
     states[conflict.time_entity_id]["state"] = "22:30-23:30"
     states[conflict.enable_entity_id]["state"] = "on"
     observed = read_state(states, parsed, now=NOW)
-    assert adapter.next_start_change(observed, desired, reserve_soc_percent=Decimal("10"), peak_shaving=False) is None
+    assert adapter.next_start_change(observed, desired, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False) is None
     states[conflict.enable_entity_id]["state"] = "unavailable"
     observed = read_state(states, parsed, now=NOW)
-    assert adapter.next_start_change(observed, desired, reserve_soc_percent=Decimal("10"), peak_shaving=False) is None
+    assert adapter.next_start_change(observed, desired, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False) is None
 
 
 def test_conflicting_or_unknown_enable_blocks_persistent_start_preparation() -> None:
@@ -517,13 +540,13 @@ def test_conflicting_or_unknown_enable_blocks_persistent_start_preparation() -> 
 
     observed = read_state(states, parsed, now=NOW)
     assert adapter.next_start_change(
-        observed, intent(), reserve_soc_percent=Decimal("10"), peak_shaving=False
+        observed, intent(), battery_reserve_soc_percent=Decimal("10"), peak_shaving=False
     ) is None
 
     states[conflicting.enable_entity_id]["state"] = "unavailable"
     observed = read_state(states, parsed, now=NOW)
     assert adapter.next_start_change(
-        observed, intent(), reserve_soc_percent=Decimal("10"), peak_shaving=False
+        observed, intent(), battery_reserve_soc_percent=Decimal("10"), peak_shaving=False
     ) is None
 
 
@@ -536,13 +559,13 @@ def test_active_or_unknown_enable_blocks_idle_persistent_reconciliation() -> Non
 
     observed = read_state(states, parsed, now=NOW)
     assert adapter.next_start_change(
-        observed, None, reserve_soc_percent=Decimal("10"), peak_shaving=True
+        observed, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=True
     ) is None
 
     states[active.enable_entity_id]["state"] = "unavailable"
     observed = read_state(states, parsed, now=NOW)
     assert adapter.next_start_change(
-        observed, None, reserve_soc_percent=Decimal("10"), peak_shaving=True
+        observed, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=True
     ) is None
 
 
@@ -560,10 +583,10 @@ def test_idle_reconciles_peak_shaving_and_matches_after_readback(
 
     observed = read_state(states, parsed, now=NOW)
     assert not adapter.intent_matches(
-        observed, None, reserve_soc_percent=Decimal("10"), peak_shaving=desired_peak
+        observed, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=desired_peak
     )
     change = adapter.next_start_change(
-        observed, None, reserve_soc_percent=Decimal("10"), peak_shaving=desired_peak
+        observed, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=desired_peak
     )
     assert change is not None
     assert change.entity_id == peak_entity
@@ -572,7 +595,7 @@ def test_idle_reconciles_peak_shaving_and_matches_after_readback(
     revise(states, change)
     readback = read_state(states, parsed, now=NOW)
     assert adapter.intent_matches(
-        readback, None, reserve_soc_percent=Decimal("10"), peak_shaving=desired_peak
+        readback, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=desired_peak
     )
 
 
@@ -582,19 +605,19 @@ def test_disabled_stored_overlap_is_ignored_and_idle_observes_without_cleaning_s
     states[disabled.time_entity_id]["state"] = "21:30-22:30"
     adapter = SolisAdapter(states, parsed, timezone=LONDON)
     observed = read_state(states, parsed, now=NOW)
-    assert adapter.next_start_change(observed, intent(), reserve_soc_percent=Decimal("10"), peak_shaving=False) is not None
+    assert adapter.next_start_change(observed, intent(), battery_reserve_soc_percent=Decimal("10"), peak_shaving=False) is not None
     states[disabled.enable_entity_id]["state"] = "on"
     observed = read_state(states, parsed, now=NOW)
-    assert adapter.next_start_change(observed, None, reserve_soc_percent=Decimal("10"), peak_shaving=True) is None
-    assert not adapter.intent_matches(observed, None, reserve_soc_percent=Decimal("10"), peak_shaving=True)
+    assert adapter.next_start_change(observed, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=True) is None
+    assert not adapter.intent_matches(observed, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=True)
 
     states[disabled.enable_entity_id]["state"] = "unavailable"
     observed = read_state(states, parsed, now=NOW)
-    assert not adapter.intent_matches(observed, None, reserve_soc_percent=Decimal("10"), peak_shaving=True)
+    assert not adapter.intent_matches(observed, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=True)
 
     states[disabled.enable_entity_id]["state"] = "off"
     observed = read_state(states, parsed, now=NOW)
-    assert adapter.intent_matches(observed, None, reserve_soc_percent=Decimal("10"), peak_shaving=True)
+    assert adapter.intent_matches(observed, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=True)
 
 
 def test_conflict_projection_is_exact_read_only_and_omits_unknown() -> None:
@@ -657,7 +680,7 @@ def test_active_reserve_discharge_survives_minute_start_shift_only_while_exact()
     observed = read_state(states, parsed, now=next_minute)
     assert adapter.conflicting_enabled_keys(observed, continued) == ()
     assert adapter.intent_matches(
-        observed, continued, reserve_soc_percent=Decimal("10"), peak_shaving=False
+        observed, continued, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False
     )
 
     before_desired_start = read_state(states, parsed, now=NOW)
@@ -725,7 +748,7 @@ def test_active_cheap_charge_survives_three_minute_start_shifts_only_while_exact
         observed = read_state(states, parsed, now=NOW + timedelta(minutes=minutes))
         assert adapter.conflicting_enabled_keys(observed, shifted) == ()
         assert adapter.intent_matches(
-            observed, shifted, reserve_soc_percent=Decimal("10"), peak_shaving=False
+            observed, shifted, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False
         )
 
     continued = intent(
@@ -800,7 +823,7 @@ def test_active_cheap_charge_never_preserves_past_native_midnight_end(midnight_e
     at_native_end = read_state(states, parsed, now=active.end)
     assert adapter.conflicting_enabled_keys(at_native_end, shifted) == (key,)
     assert adapter.conflicting_enabled_keys(at_native_end, None) == (key,)
-    assert not adapter.intent_matches(at_native_end, None, reserve_soc_percent=Decimal("10"), peak_shaving=False)
+    assert not adapter.intent_matches(at_native_end, None, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False)
 
 
 class FakeHA:
@@ -856,7 +879,7 @@ class FakeHA:
 
 def first_slot_change(adapter: SolisAdapter, states: dict[str, object]) -> SolisChange:
     observed = read_state(states, adapter.config, now=NOW)
-    result = adapter.next_start_change(observed, intent(), reserve_soc_percent=Decimal("10"), peak_shaving=False)
+    result = adapter.next_start_change(observed, intent(), battery_reserve_soc_percent=Decimal("10"), peak_shaving=False)
     assert result is not None
     return result
 

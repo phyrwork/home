@@ -639,9 +639,18 @@ def _config():
     return integration_config.from_mapping(source)
 
 
-def _solis(*, soc: str = "55", cycle_target_step: str | None = None):
+def _solis(
+    *,
+    soc: str = "55",
+    cycle_target_step: str | None = None,
+    battery_reserve_step: str | None = None,
+):
     parsed, states = solis_fixture()
     states[parsed.telemetry.state_of_charge_entity_id]["state"] = soc
+    if battery_reserve_step is not None:
+        states[parsed.protection.battery_reserve_soc_entity_id]["attributes"][
+            "step"
+        ] = battery_reserve_step
     if cycle_target_step is not None:
         cycle_key = parsed.allocation(SlotOwner.FULL_SOC_CYCLING)[0]
         cycle_target = parsed.direction(cycle_key).target_soc_entity_id
@@ -664,6 +673,7 @@ async def _build(
     bonus: bool = False,
     charge_lease_deadline: datetime | None = None,
     cycle_target_step: str | None = None,
+    battery_reserve_step: str | None = None,
     now: datetime = NOW,
     window_override: CheapWindow | None = None,
     import_rates_override: tuple[AdjustedRateInterval, ...] | None = None,
@@ -719,7 +729,15 @@ async def _build(
         patch("custom_components.house_battery_control.planner.plan_reserve", return_value=ReservePlanResult(reserve_energy)),
     ):
         return await build_plan(
-            hass, config, _solis(soc=soc, cycle_target_step=cycle_target_step), now=now, cycle_state=state,
+            hass,
+            config,
+            _solis(
+                soc=soc,
+                cycle_target_step=cycle_target_step,
+                battery_reserve_step=battery_reserve_step,
+            ),
+            now=now,
+            cycle_state=state,
             cycle_deadline=deadline, charge_lease_deadline=charge_lease_deadline,
         )
 
@@ -803,6 +821,21 @@ async def test_cycle_target_capability_is_in_common_reserve_quantization_domain(
     assert result.control_reserve_soc_percent == Decimal("18")
     assert result.intent is not None
     assert result.intent.segments[0].target_soc == Decimal("18")
+
+
+@pytest.mark.asyncio
+async def test_battery_reserve_capability_does_not_quantize_slot_target(hass) -> None:
+    result = await _build(
+        hass,
+        cheap=False,
+        soc="19",
+        reserve_energy=Decimal("5.4649418"),
+        battery_reserve_step="5",
+    )
+
+    assert result.control_reserve_soc_percent == Decimal("17")
+    assert result.intent is not None
+    assert result.intent.segments[0].target_soc == Decimal("17")
 
 
 @pytest.mark.asyncio

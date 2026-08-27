@@ -2,6 +2,10 @@
 
 Status: Implemented locally — focused validation complete; live acceptance remains deployment-gated
 
+Superseded in part by T0049: the dynamic quantized reserve remains the forced
+discharge-slot target, but the global Battery Reserve SOC is the fixed 10%
+safety floor so ordinary load following can consume the planned reserve.
+
 Local evidence: planner, Solis adapter/controller, sensor, configuration, and
 deployment mapping changes are implemented on
 `codex/t0041-quantized-reserve-following`. The focused integration suite passes
@@ -27,7 +31,7 @@ house-load following.
 Normal load following is a real controller action, `RESERVE_FOLLOW`, not idle:
 
 - Storage Mode remains Feed-In Priority;
-- Battery Reserve remains enabled at the dynamic reserve SOC;
+- Battery Reserve remains enabled at the fixed safety-floor SOC;
 - Grid Peak Shaving is enabled; and
 - no charge or discharge slot is enabled.
 
@@ -58,12 +62,16 @@ Keep two deliberately distinct reserve values:
    10% safety floor and configured reserve margin. It is diagnostic only.
 2. `control_reserve_soc_percent` and `control_reserve_energy_kwh`: the
    upward-quantized native target and its energy equivalent. These drive all
-   control decisions.
+   reserve-export and cycle-discharge slot decisions.
+
+T0049 adds a third, independent native value: the global Battery Reserve SOC is
+the fixed configured safety floor. It is not the dynamic model reserve and is
+not part of the common discharge-slot target capability domain.
 
 Derive the control target by converting exact reserve energy to SOC and choosing
-the smallest supported percentage at or above it that is representable by both
-the Battery Reserve SOC capability and every configured reserve-export and
-full-SOC-cycle discharge slot target capability. Clamp to the safety floor and
+the smallest supported percentage at or above it that is representable by
+every configured reserve-export and full-SOC-cycle discharge slot target
+capability. Clamp to the safety floor and
 the common capability range;
 report planning unavailable if no common value exists. Convert the resulting
 SOC back to energy. This common quantizer is the sole reserve control domain;
@@ -240,8 +248,8 @@ plan and live slot state.
 - Preserve the independent 10% safety floor.
 - Distinguish exact and control targets/balances in diagnostics without adding
   helper entities.
-- Prove the common quantizer across Battery Reserve SOC and every configured
-  reserve-export and full-SOC-cycle discharge target capability, including
+- Prove the common quantizer across every configured reserve-export and
+  full-SOC-cycle discharge target capability, including
   incompatible-capability failure and no adapter re-round mismatch.
 
 ### Solis adapter and controller
@@ -269,7 +277,8 @@ plan and live slot state.
 ## Live acceptance after deployment approval
 
 1. At the quantized reserve boundary, prove no discharge slot remains enabled,
-   Peak Shaving is on, Feed-In Priority and Battery Reserve remain correct, and
+   Peak Shaving is on, Feed-In Priority remains correct, Battery Reserve is on
+   at the fixed safety floor, and
    battery power follows house demand for at least five minutes with grid import
    no greater than the commissioned behavior.
 2. Above the reserve boundary, prove the make-before-break export entry and

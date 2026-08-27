@@ -29,6 +29,7 @@ proof that the inverter acted.
 | A cross-midnight interval was not the only charge failure | `21:56-07:00` did not produce charging, and changing the same slot to the same-day interval `21:56-23:59` also did not produce charging. | Proven |
 | Immediate HA control state is not device proof | HA and direct control reads showed slot 1 enabled with the requested current, target and time, while physical battery power remained slightly negative and whole-site demand reflected the EV only. | Proven |
 | TOU-v2 uses discrete six-slot controls | The deployed Solis Cloud Control integration detects CID 6798 value `43605` and uses slot CIDs 5916-5987; it deliberately hides the legacy global Time Of Use switch. | Proven from deployed integration source |
+| Dynamic reserve and load-following floor are separate controls | Forced-discharge slot targets stop export at the quantized model reserve. Global Battery Reserve remains enabled at the fixed 10% safety floor so Peak Shaving can consume that planned reserve for house load. | Corrected locally in T0049; live verification pending |
 
 ## Experiment history
 
@@ -412,3 +413,23 @@ staged return to reserve following. By `19:30:28.552 BST`, the controller was
 stably `HEALTHY/RESERVE_FOLLOW`, all slots were off and Peak Shaving was on.
 This is the intended truthful in-progress health signal, not fail-safe
 escalation.
+
+## 2026-08-27 reserve-floor coupling diagnosis
+
+Read-only live evidence showed battery SOC and the global Battery Reserve SOC
+both at 21%, with all native slots off and the controller reporting
+`HEALTHY/RESERVE_FOLLOW`. Exact battery energy was `6.752256 kWh`; the reserve
+target was `6.44077738538028 kWh`; `Reserve (Usable)` was
+`3.22541738538028 kWh`; and the exact balance was `0.311478614619722 kWh`.
+The control-domain balance was zero because both battery and target quantized to
+21%.
+
+House demand was approximately 323 W while fresh battery output was only
+approximately 36 W. The forced-discharge target was behaving correctly, but
+reusing it as the global Battery Reserve floor prevented the planned reserve
+from serving house load. T0049 therefore keeps the dynamic target on discharge
+slots and fixes global Battery Reserve at the configured 10% safety floor.
+
+Live protection readback during the diagnosis was: Over-discharge SOC 10%,
+Force Charge SOC 7%, and Battery Recovery SOC 11%. No control was written during
+the diagnosis. Deployment and physical load-following proof remain pending.

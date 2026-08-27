@@ -1235,11 +1235,10 @@ async def build_plan(
         charge_state = solis_state.slots[0].charge
         cycle_slot_state = solis_state.slots[0].discharge
         reserve_slot_state = solis_state.slots[1].discharge
-        reserve_capabilities = [solis_state.persistent.battery_reserve_soc]
-        reserve_capabilities.extend(
+        reserve_capabilities = [
             solis_state.direction(key).target_soc
             for key in config.solis.allocation(SlotOwner.RESERVE_EXPORT)
-        )
+        ]
         reserve_capabilities.extend(
             solis_state.direction(key).target_soc
             for key in config.solis.allocation(SlotOwner.FULL_SOC_CYCLING)

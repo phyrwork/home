@@ -133,9 +133,10 @@ Consolidate Solis behavior tests into `test_solis.py` covering:
   extrapolated inverter time, observes live capabilities and records every one
   of the 12 enable directions, including unknown states. Legitimate adjacent
   split segments are no longer rejected merely because two enables are on.
-- `next_start_change` requires the separately planned dynamic reserve SOC,
-  quantizes it against the observed capability, and advances exactly one
-  ordered change. Feed-In Priority, grid charging and reserve controls precede
+- `next_start_change` requires the fixed global Battery Reserve safety floor,
+  quantizes it against that control's observed capability, and advances exactly
+  one ordered change. Dynamic discharge targets arrive independently in the
+  logical slot intent. Feed-In Priority, grid charging and reserve controls precede
   disabled slot time/current/SOC configuration; enable is final.
 - Allocation uses only the T0027 owner map. Full logical-intent comparison
   covers every enabled segment. Unknown or conflicting enables block starts;
