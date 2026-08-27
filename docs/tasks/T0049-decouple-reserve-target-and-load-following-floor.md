@@ -1,6 +1,6 @@
 # T0049 — Decouple reserve target from load-following floor
 
-Status: Deployed — local validation complete; live acceptance pending
+Status: Deployed and load-following live-verified — later forced-export boundary proof pending
 
 Supersedes T0041 statements that set the global Solis Battery Reserve SOC to
 the dynamic model reserve.
@@ -83,5 +83,16 @@ After SSH key-agent reauthorization, the same full playbook completed with
 `ok=140`, `changed=4`, no failures and successful pre-restart Home Assistant
 configuration validation. The custom component and bytecode cache were replaced
 and Home Assistant restarted. Final live entity and physical power-flow proof
-remains pending because the subsequent Home Assistant API-token read failed
-after the prescribed 1Password sign-in and single retry.
+was initially delayed because the subsequent Home Assistant API-token read
+failed after the prescribed 1Password sign-in and single retry.
+
+After 1Password access was restored, live readback proved Battery Reserve SOC
+changed from 20% to the fixed 10% floor while the independently calculated
+dynamic reserve remained 20%. Feed-In Priority, Battery Reserve and Peak Shaving
+were on, all 12 slot directions were off, and the controller was
+`HEALTHY/RESERVE_FOLLOW`. Battery SOC had fallen from the pre-deployment 21% to
+20%. Five non-transient post-handover whole-site import samples were 128, 132,
+128, 132 and 138 W, close to the commissioned 0.1 kW Peak Shaving allowance; one
+274 W transient was also recorded. This accepts the control split and physical
+load-following gates. A later active reserve-export slot must still prove that
+its native target remains the dynamic reserve rather than 10%.
