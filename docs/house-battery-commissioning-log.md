@@ -29,7 +29,7 @@ proof that the inverter acted.
 | A cross-midnight interval was not the only charge failure | `21:56-07:00` did not produce charging, and changing the same slot to the same-day interval `21:56-23:59` also did not produce charging. | Proven |
 | Immediate HA control state is not device proof | HA and direct control reads showed slot 1 enabled with the requested current, target and time, while physical battery power remained slightly negative and whole-site demand reflected the EV only. | Proven |
 | TOU-v2 uses discrete six-slot controls | The deployed Solis Cloud Control integration detects CID 6798 value `43605` and uses slot CIDs 5916-5987; it deliberately hides the legacy global Time Of Use switch. | Proven from deployed integration source |
-| Dynamic reserve and load-following floor are separate controls | Forced-discharge slot targets stop export at the quantized model reserve. Global Battery Reserve remains enabled at the fixed 10% safety floor so Peak Shaving can consume that planned reserve for house load. | Corrected locally in T0049; live verification pending |
+| Dynamic reserve and load-following floor are separate controls | Forced-discharge slot targets stop export at the quantized model reserve. Global Battery Reserve remains enabled at the fixed 10% safety floor so Peak Shaving can consume that planned reserve for house load. | T0049 deployed; live verification pending |
 
 ## Experiment history
 
@@ -433,3 +433,8 @@ slots and fixes global Battery Reserve at the configured 10% safety floor.
 Live protection readback during the diagnosis was: Over-discharge SOC 10%,
 Force Charge SOC 7%, and Battery Recovery SOC 11%. No control was written during
 the diagnosis. Deployment and physical load-following proof remain pending.
+
+T0049 was subsequently deployed through the full Ansible playbook with
+`ok=140`, `changed=4`, no failures, successful Home Assistant configuration
+validation and a Core restart. Live readback remained blocked by the local
+1Password CLI session and is not inferred from deployment success.

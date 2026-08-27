@@ -1,6 +1,6 @@
 # T0049 — Decouple reserve target from load-following floor
 
-Status: Implemented locally — local validation complete; deployment and live acceptance pending
+Status: Deployed — local validation complete; live acceptance pending
 
 Supersedes T0041 statements that set the global Solis Battery Reserve SOC to
 the dynamic model reserve.
@@ -71,11 +71,17 @@ tests pass; component sources compile and `git diff --check` is clean.
 The repeated Grid Peak Shaving `off -> on` control churn observed during the
 same diagnosis is a separate defect and is outside this card.
 
-## Deployment attempt — 2026-08-27
+## Deployment — 2026-08-27
 
 The first deployment attempt did not start because the Ansible vault helper's
 1Password session had expired. After the prescribed single sign-in and retry,
 Ansible obtained the vault secret but SSH key-agent signing failed before host
 connection. The play recap was `ok=0`, `changed=0`, `unreachable=1`; no Home
-Assistant files or settings changed. Deployment remains pending SSH key-agent
-reauthorization.
+Assistant files or settings changed during that attempt.
+
+After SSH key-agent reauthorization, the same full playbook completed with
+`ok=140`, `changed=4`, no failures and successful pre-restart Home Assistant
+configuration validation. The custom component and bytecode cache were replaced
+and Home Assistant restarted. Final live entity and physical power-flow proof
+remains pending because the subsequent Home Assistant API-token read failed
+after the prescribed 1Password sign-in and single retry.
