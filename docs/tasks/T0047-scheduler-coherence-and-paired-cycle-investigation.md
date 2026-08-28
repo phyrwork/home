@@ -1,6 +1,6 @@
 # T0047 — Simplify the scheduler and investigate paired native cycling
 
-Status: Sequential fallback implemented locally — deployment and live acceptance pending
+Status: Sequential fallback deployed — live full-cycle acceptance pending
 
 Depends on: T0039, T0040, T0041, T0042, T0043, T0046
 
@@ -92,6 +92,15 @@ The local baseline is green: 152 house-battery component tests pass. Regression
 coverage now executes the complete discharge-to-recharge transition, exact
 fresh/stable recharge timing, controller latching across conflict stop, stale
 100% handling and repeat authorization from a newer device observation.
+
+Deployment `bbde141` completed on 2026-08-28 with Home Assistant configuration
+validation and restart successful. The deployed source contains the explicit
+`CYCLE_RECHARGE` action and two-minute arming lead. Solis discovery initially
+returned no inverter and the controller correctly remained `degraded` with a
+fresh heartbeat. Telemetry then recovered passively, after which controller
+health returned to `healthy` and normal `RESERVE_DISCHARGE` planning resumed.
+Live acceptance still requires observing a complete 100%-SOC discharge/recharge
+cycle during a cheap period.
 
 ## Retain
 
