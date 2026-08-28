@@ -1,6 +1,6 @@
 # T0047 — Simplify the scheduler and investigate paired native cycling
 
-Status: In progress — live capability experiment armed for 2026-08-27
+Status: In progress — sequential recharge failure captured; paired execution not yet proven
 
 Depends on: T0039, T0040, T0041, T0042, T0043, T0046
 
@@ -16,6 +16,8 @@ This task is a decision gate. Do not implement a composite scheduler before the
 native capability is physically proven.
 
 ## Current evidence
+
+### Earlier cycling evidence
 
 The overnight full-SOC observation proved that four sequential cycles discharged
 and recharged correctly. One later cycle performed two consecutive discharges.
@@ -36,7 +38,40 @@ This proves:
 - simultaneously enabled adjacent charge/discharge schedules have not yet been
   physically proven.
 
-The local baseline is green: 144 house-battery component tests pass.
+### 2026-08-28 sequential recharge failure
+
+Fresh overnight history disproves the broader conclusion that stale telemetry
+was the only possible cause of a missing recharge:
+
+- static charging on native charge slot 2 reached 100% SOC at 02:29 UTC;
+- cycle discharge slot 1 ran from 03:29 to 03:39 local time and physically
+  exported approximately 4.4 kW;
+- the controller then stopped and proved that discharge direction off;
+- fresh Solis device samples reported 99% during discharge and 98% immediately
+  after it, so the recharge decision was not based on the original 100% sample;
+- at 02:39 UTC the controller enabled charge slot 1 at 100 A and target 100%,
+  with Feed-In Priority, Allow Grid Charging on and Grid Peak Shaving off; but
+- the charge schedule was the original standard-cheap interval `00:00-05:30`,
+  whose start boundary was already 3 hours 39 minutes in the past. Whole-site
+  demand remained approximately 250 W and battery power remained around zero
+  until cheap authority ended, proving that charging was physically
+  ineffective.
+
+The working standard slot was armed before its native start boundary. The
+separate post-midnight recovery evidence armed at the 00:00 boundary itself;
+it does not prove that Solis will start a newly enabled timer several hours
+inside its encoded interval. Treat an already-past native start as unsuitable
+for a newly armed cycle recharge even though retaining that stable start is
+correct for an already-enabled ordinary standard-cheap slot.
+
+Therefore a sequential implementation must preserve explicit cycle provenance:
+after cycle discharge it selects `CYCLE_RECHARGE`, with a fresh actionable
+minute boundary inside the remaining cheap interval. It must not pass through
+ordinary `CHEAP_CHARGE` planning and reuse the historical standard-phase start.
+This is also the fallback required if the paired native experiment remains
+ambiguous.
+
+The local baseline is green: 148 house-battery component tests pass.
 
 ## Retain
 
