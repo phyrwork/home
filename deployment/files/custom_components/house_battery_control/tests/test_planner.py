@@ -23,6 +23,7 @@ from custom_components.house_battery_control.model import (
 from custom_components.house_battery_control.planner import (
     AdjustedRateInterval,
     BONUS_CHARGE_LEASE_DURATION,
+    CYCLE_RECHARGE_ARM_LEAD,
     CheapClassification,
     CheapWindow,
     CheapWindowComponent,
@@ -644,9 +645,16 @@ def _solis(
     soc: str = "55",
     cycle_target_step: str | None = None,
     battery_reserve_step: str | None = None,
+    device_timestamp: datetime = NOW,
+    observed_at: datetime = NOW,
 ):
     parsed, states = solis_fixture()
     states[parsed.telemetry.state_of_charge_entity_id]["state"] = soc
+    states[parsed.telemetry.device_timestamp_entity_id]["state"] = str(
+        device_timestamp.timestamp()
+    )
+    states[parsed.persistent.inverter_time_entity_id]["state"] = observed_at.isoformat()
+    states[parsed.persistent.inverter_time_entity_id]["last_updated"] = observed_at
     if battery_reserve_step is not None:
         states[parsed.protection.battery_reserve_soc_entity_id]["attributes"][
             "step"
@@ -655,7 +663,7 @@ def _solis(
         cycle_key = parsed.allocation(SlotOwner.FULL_SOC_CYCLING)[0]
         cycle_target = parsed.direction(cycle_key).target_soc_entity_id
         states[cycle_target]["attributes"]["step"] = cycle_target_step
-    result = read_state(states, parsed, now=datetime(2026, 8, 22, 12, tzinfo=UTC))
+    result = read_state(states, parsed, now=observed_at)
     assert result.health is ControllerHealth.HEALTHY
     return result
 
@@ -674,6 +682,8 @@ async def _build(
     charge_lease_deadline: datetime | None = None,
     cycle_target_step: str | None = None,
     battery_reserve_step: str | None = None,
+    cycle_observation_gate: datetime | None = None,
+    device_timestamp: datetime | None = None,
     now: datetime = NOW,
     window_override: CheapWindow | None = None,
     import_rates_override: tuple[AdjustedRateInterval, ...] | None = None,
@@ -735,10 +745,14 @@ async def _build(
                 soc=soc,
                 cycle_target_step=cycle_target_step,
                 battery_reserve_step=battery_reserve_step,
+                device_timestamp=device_timestamp or now,
+                observed_at=now,
             ),
             now=now,
             cycle_state=state,
-            cycle_deadline=deadline, charge_lease_deadline=charge_lease_deadline,
+            cycle_deadline=deadline,
+            cycle_observation_gate=cycle_observation_gate,
+            charge_lease_deadline=charge_lease_deadline,
         )
 
 
@@ -1054,6 +1068,95 @@ async def test_build_plan_cycle_deadline_is_fixed_and_requires_recharge_time(has
     too_short = await _build(hass, cheap=True, soc="100", window_minutes=15)
     assert too_short.action is StrategyAction.IDLE
     assert too_short.intent is None
+    rounding_short = await _build(hass, cheap=True, soc="100", window_minutes=22)
+    assert rounding_short.action is StrategyAction.IDLE
+    exact_fit = await _build(hass, cheap=True, soc="100", window_minutes=23)
+    assert exact_fit.action is StrategyAction.CYCLE_DISCHARGE
+
+
+@pytest.mark.asyncio
+async def test_cycle_recharge_uses_fresh_stable_start_not_historical_cheap_start(hass) -> None:
+    started = await _build(hass, cheap=True, soc="100", device_timestamp=NOW)
+    assert started.action is StrategyAction.CYCLE_DISCHARGE
+    assert started.cycle_observation_gate == NOW
+    assert started.cycle_deadline is not None
+
+    transition_now = started.cycle_deadline + timedelta(seconds=5)
+    recharge = await _build(
+        hass,
+        cheap=True,
+        soc="98",
+        state=CycleState.CYCLE_DISCHARGING,
+        deadline=started.cycle_deadline,
+        cycle_observation_gate=started.cycle_observation_gate,
+        device_timestamp=transition_now,
+        now=transition_now,
+    )
+
+    assert recharge.action is StrategyAction.CYCLE_RECHARGE
+    assert recharge.next_cycle_state is CycleState.CYCLE_RECHARGING
+    assert recharge.intent is not None
+    expected_start = NOW + timedelta(minutes=13)
+    assert recharge.intent.start == expected_start
+    assert recharge.intent.start >= transition_now + CYCLE_RECHARGE_ARM_LEAD
+    assert recharge.intent.start != NOW  # the ordinary standard-cheap phase start
+    assert recharge.intent.end == expected_start + timedelta(minutes=10)
+    assert recharge.cycle_deadline == recharge.intent.end
+
+    # Replanning while Solis writes are in progress retains the exact native
+    # interval and optimistically arms recharge despite the pre-cycle 100%
+    # sample still being the newest device observation.
+    heartbeat = await _build(
+        hass,
+        cheap=True,
+        soc="100",
+        state=CycleState.CYCLE_RECHARGING,
+        deadline=recharge.cycle_deadline,
+        cycle_observation_gate=started.cycle_observation_gate,
+        device_timestamp=started.cycle_observation_gate,
+        now=transition_now + timedelta(seconds=30),
+    )
+    assert heartbeat.action is StrategyAction.CYCLE_RECHARGE
+    assert heartbeat.intent == recharge.intent
+
+    fresh_full = await _build(
+        hass,
+        cheap=True,
+        soc="100",
+        state=CycleState.CYCLE_RECHARGING,
+        deadline=recharge.cycle_deadline,
+        cycle_observation_gate=started.cycle_observation_gate,
+        device_timestamp=transition_now + timedelta(minutes=1),
+        now=transition_now + timedelta(minutes=1),
+    )
+    assert fresh_full.action is StrategyAction.IDLE
+    assert fresh_full.next_cycle_state is CycleState.STOPPING
+    assert fresh_full.intent is None
+
+
+@pytest.mark.asyncio
+async def test_cycle_repeat_requires_strictly_newer_device_observation(hass) -> None:
+    blocked = await _build(
+        hass,
+        cheap=True,
+        soc="100",
+        cycle_observation_gate=NOW,
+        device_timestamp=NOW,
+        now=NOW + timedelta(minutes=1),
+    )
+    assert blocked.action is StrategyAction.IDLE
+    assert blocked.intent is None
+
+    allowed = await _build(
+        hass,
+        cheap=True,
+        soc="100",
+        cycle_observation_gate=NOW,
+        device_timestamp=NOW + timedelta(minutes=1),
+        now=NOW + timedelta(minutes=1),
+    )
+    assert allowed.action is StrategyAction.CYCLE_DISCHARGE
+    assert allowed.cycle_observation_gate == NOW + timedelta(minutes=1)
 
 
 @pytest.mark.asyncio

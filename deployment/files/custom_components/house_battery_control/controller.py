@@ -124,6 +124,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         self._zone = zone
         self._cycle_state = CycleState.IDLE
         self._cycle_deadline: datetime | None = None
+        self._cycle_observation_gate: datetime | None = None
         self._charge_lease_deadline: datetime | None = None
         self._bonus_charge_keys: set[SlotKey] = set()
         self._awaiting_off_proof: set[SlotKey] = set()
@@ -296,6 +297,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             now=now,
             cycle_state=self._cycle_state,
             cycle_deadline=self._cycle_deadline,
+            cycle_observation_gate=self._cycle_observation_gate,
             charge_lease_deadline=self._charge_lease_deadline,
         )
         if plan.issue is not None:
@@ -310,6 +312,24 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         if plan.reserve_soc_percent is None:
             raise ValueError("valid plan has no reserve SOC")
         self._last_plan = plan
+
+        # A proven discharge has ended and recharge must retain one fixed,
+        # actionable native interval while the reconciler stops the old
+        # direction and arms the replacement.  A below-target recharge may
+        # similarly roll to one new bounded interval after its prior expiry.
+        if (
+            plan.next_cycle_state is CycleState.CYCLE_RECHARGING
+            and (
+                self._cycle_state is CycleState.CYCLE_DISCHARGING
+                or (
+                    self._cycle_state is CycleState.CYCLE_RECHARGING
+                    and plan.cycle_deadline != self._cycle_deadline
+                )
+            )
+        ):
+            self._cycle_state = plan.next_cycle_state
+            self._cycle_deadline = plan.cycle_deadline
+            self._cycle_observation_gate = plan.cycle_observation_gate
 
         fingerprint = _bonus_fingerprint(plan, now)
         preserve_standard_cheap_slot = _preserve_standard_cheap_slot(plan, now)
@@ -377,6 +397,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         self._start_retry = None
         self._cycle_state = plan.next_cycle_state
         self._cycle_deadline = plan.cycle_deadline
+        self._cycle_observation_gate = plan.cycle_observation_gate
         if plan.action is StrategyAction.CHEAP_CHARGE and plan.charge_lease_deadline is not None:
             self._charge_lease_deadline = plan.charge_lease_deadline
         if await self._housekeep_one(observation, plan, now, monotonic):
@@ -415,7 +436,15 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 if soc is None or target is None:
                     continue
                 if direction.key.direction is SlotDirection.CHARGE and soc >= target:
-                    self._add_stop(direction.key, now, monotonic)
+                    waiting_for_post_cycle_sample = (
+                        self._cycle_state is CycleState.CYCLE_RECHARGING
+                        and self._cycle_observation_gate is not None
+                        and telemetry is not None
+                        and _instant(telemetry.device_timestamp)
+                        <= _instant(self._cycle_observation_gate)
+                    )
+                    if not waiting_for_post_cycle_sample:
+                        self._add_stop(direction.key, now, monotonic)
                 if direction.key.direction is SlotDirection.DISCHARGE:
                     boundary = target
                     if direction.owner is SlotOwner.RESERVE_EXPORT:
@@ -915,6 +944,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             plan.reserve_soc_percent,
             plan.control_reserve_soc_percent,
             plan.cycle_deadline,
+            plan.cycle_observation_gate,
             plan.charge_lease_deadline,
             tuple(source_tokens),
             change.entity_id,
@@ -1324,6 +1354,7 @@ def _plan_reason(plan: Plan) -> str:
         StrategyAction.CHEAP_CHARGE: "charge during trusted cheap window",
         StrategyAction.RESERVE_DISCHARGE: "export toward dynamic reserve",
         StrategyAction.CYCLE_DISCHARGE: "create profitable full-SOC headroom",
+        StrategyAction.CYCLE_RECHARGE: "restore full SOC after cycling",
     }[plan.action]
 
 

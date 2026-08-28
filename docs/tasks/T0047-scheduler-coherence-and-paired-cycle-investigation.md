@@ -1,6 +1,6 @@
 # T0047 — Simplify the scheduler and investigate paired native cycling
 
-Status: In progress — sequential recharge failure captured; paired execution not yet proven
+Status: Sequential fallback implemented locally — deployment and live acceptance pending
 
 Depends on: T0039, T0040, T0041, T0042, T0043, T0046
 
@@ -71,7 +71,27 @@ ordinary `CHEAP_CHARGE` planning and reuse the historical standard-phase start.
 This is also the fallback required if the paired native experiment remains
 ambiguous.
 
-The local baseline is green: 148 house-battery component tests pass.
+### Sequential fallback implementation
+
+The 2026-08-28 fix implements the previously accepted `CYCLE_RECHARGE` action
+without adding persistent state or a general schedule engine:
+
+- cycle discharge captures the authoritative Solis device timestamp that
+  permitted it;
+- after discharge, recharge receives a fresh minute boundary with a two-minute
+  arming lead instead of inheriting the historical standard-cheap start;
+- the desired recharge interval is fixed while the controller proves discharge
+  off and reconciles the charge controls;
+- the pre-discharge 100% sample cannot cancel recharge or authorize another
+  discharge;
+- only a strictly newer device observation at 100% permits the next cycle; and
+- a bounded recharge that still reports below 100% rolls to another fresh
+  bounded recharge interval while cheap authority remains.
+
+The local baseline is green: 152 house-battery component tests pass. Regression
+coverage now executes the complete discharge-to-recharge transition, exact
+fresh/stable recharge timing, controller latching across conflict stop, stale
+100% handling and repeat authorization from a newer device observation.
 
 ## Retain
 

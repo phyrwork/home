@@ -251,12 +251,14 @@ def plan(
     issue: str | None = None,
     state: CycleState = CycleState.IDLE,
     deadline: datetime | None = None,
+    gate: datetime | None = None,
 ) -> Plan:
     return Plan(
         action=StrategyAction.IDLE,
         intent=None,
         next_cycle_state=state,
         cycle_deadline=deadline,
+        cycle_observation_gate=gate,
         reserve_soc_percent=None if issue else Decimal("20"),
         reserve_energy_kwh=None if issue else Decimal("6.4"),
         battery_energy_kwh=Decimal("17.6"),
@@ -1016,6 +1018,82 @@ async def test_conflicting_direction_is_stopped_before_start(
 
     solis.stop.assert_awaited_once()
     solis.next_start_change.assert_not_called()
+
+
+async def test_cycle_recharge_transition_is_latched_while_discharge_stops(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    solis = adapter(controller)
+    discharge = SlotKey(1, SlotDirection.DISCHARGE)
+    gate = NOW - timedelta(minutes=10)
+    recharge_start = NOW + timedelta(minutes=2)
+    recharge_end = recharge_start + timedelta(minutes=10)
+    recharge_plan = replace(
+        plan(),
+        action=StrategyAction.CYCLE_RECHARGE,
+        intent=LogicalIntent((SlotIntent(
+            SlotOwner.CHEAP_CHARGING,
+            SlotDirection.CHARGE,
+            recharge_start,
+            recharge_end,
+            Decimal("100"),
+            Decimal("100"),
+            recharge_end,
+        ),)),
+        next_cycle_state=CycleState.CYCLE_RECHARGING,
+        cycle_deadline=recharge_end,
+        cycle_observation_gate=gate,
+    )
+    controller._cycle_state = CycleState.CYCLE_DISCHARGING
+    controller._cycle_deadline = NOW
+    controller._cycle_observation_gate = gate
+    solis.conflicting_enabled_keys.return_value = (discharge,)
+
+    with (
+        patch(
+            "custom_components.house_battery_control.controller.read_state",
+            return_value=observation(
+                enabled=discharge,
+                target_state="10",
+                time_state="11:00-13:00",
+            ),
+        ),
+        patch(
+            "custom_components.house_battery_control.controller.build_plan",
+            AsyncMock(return_value=recharge_plan),
+        ),
+    ):
+        await controller._reconcile()
+
+    solis.stop.assert_awaited_once()
+    assert controller._cycle_state is CycleState.CYCLE_RECHARGING
+    assert controller._cycle_deadline == recharge_end
+    assert controller._cycle_observation_gate == gate
+
+
+def test_stale_full_soc_does_not_cancel_cycle_recharge_but_fresh_full_soc_does(
+    hass: HomeAssistant,
+) -> None:
+    controller = Controller(hass, config())
+    charge = SlotKey(1, SlotDirection.CHARGE)
+    stale = observation(soc="100", enabled=charge, target_state="100")
+    assert stale.telemetry is not None
+    controller._cycle_state = CycleState.CYCLE_RECHARGING
+    controller._cycle_observation_gate = stale.telemetry.device_timestamp
+
+    controller._discover_unconditional_stops(stale, NOW, 0.0)
+    assert charge not in controller._stop_debts
+
+    fresh = replace(
+        stale,
+        telemetry=replace(
+            stale.telemetry,
+            device_timestamp=stale.telemetry.device_timestamp + timedelta(minutes=1),
+        ),
+    )
+    controller._discover_unconditional_stops(fresh, NOW + timedelta(minutes=1), 60.0)
+    assert charge in controller._stop_debts
 
 
 async def test_prolonged_planning_degradation_recovers_without_fail_safe(

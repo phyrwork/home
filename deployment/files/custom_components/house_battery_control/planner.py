@@ -26,6 +26,7 @@ MAXIMUM_SOURCE_FUTURE_SKEW = timedelta(minutes=2)
 OCTOPUS_EXPORT_SOURCE_MAX_AGE = timedelta(hours=26)
 OCTOPUS_RATE_SOURCE_MAX_AGE = timedelta(hours=26)
 BONUS_CHARGE_LEASE_DURATION = timedelta(minutes=15)
+CYCLE_RECHARGE_ARM_LEAD = timedelta(minutes=2)
 OCTOPUS_RATE_UNIT = "GBP/kWh"
 # Solis reports whole-percent SOC. Reserve export must clear the one-percent
 # reporting uncertainty before it can be physically actionable.
@@ -1077,6 +1078,7 @@ class Plan:
     intent: LogicalIntent | None
     next_cycle_state: CycleState
     cycle_deadline: datetime | None
+    cycle_observation_gate: datetime | None = None
     charge_lease_deadline: datetime | None = None
     current_cheap_window: CheapWindow | None = None
     next_cheap_window: CheapWindow | None = None
@@ -1101,10 +1103,13 @@ class _StrategyFacts:
     cheap_charge: SlotIntent | None
     reserve_discharge: SlotIntent | None
     cycle_discharge: SlotIntent | None
+    cycle_recharge: SlotIntent | None
     recharge_duration: timedelta
     cycle_duration: timedelta
     cycle_state: CycleState
     cycle_deadline: datetime | None
+    cycle_observation_gate: datetime | None
+    device_timestamp: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -1113,6 +1118,7 @@ class _Choice:
     intent: SlotIntent | None
     cycle_state: CycleState
     cycle_deadline: datetime | None
+    cycle_observation_gate: datetime | None
 
 
 async def build_plan(
@@ -1123,6 +1129,7 @@ async def build_plan(
     now: datetime,
     cycle_state: CycleState,
     cycle_deadline: datetime | None,
+    cycle_observation_gate: datetime | None = None,
     charge_lease_deadline: datetime | None = None,
 ) -> Plan:
     """Read planning inputs and return one model-only UTC plan."""
@@ -1134,6 +1141,8 @@ async def build_plan(
             raise ValueError("cycle state is invalid")
         if cycle_deadline is not None:
             _aware(cycle_deadline, "cycle deadline")
+        if cycle_observation_gate is not None:
+            _aware(cycle_observation_gate, "cycle observation gate")
         if charge_lease_deadline is not None:
             _aware(charge_lease_deadline, "charge lease deadline")
 
@@ -1258,6 +1267,7 @@ async def build_plan(
         charge_intent: SlotIntent | None = None
         effective_charge_lease_deadline = charge_lease_deadline
         cycle_intent: SlotIntent | None = None
+        cycle_recharge_intent: SlotIntent | None = None
         if current_window is not None:
             now_based_start = _slot_start(now, current_window.start)
             current_phase_start, current_classification = _charge_phase_start(current_window, now)
@@ -1316,6 +1326,35 @@ async def build_plan(
                     cycle_end,
                 )
 
+            recharge_start: datetime | None = None
+            if cycle_state is CycleState.CYCLE_DISCHARGING and cycle_deadline is not None:
+                if _instant(now) >= _instant(cycle_deadline):
+                    recharge_start = _minute_ceil(now + CYCLE_RECHARGE_ARM_LEAD)
+            elif cycle_state is CycleState.CYCLE_RECHARGING and cycle_deadline is not None:
+                fresh_after_cycle = (
+                    cycle_observation_gate is None
+                    or _instant(telemetry.device_timestamp) > _instant(cycle_observation_gate)
+                )
+                if _instant(now) < _instant(cycle_deadline):
+                    recharge_start = cycle_deadline - cycle_duration
+                elif (
+                    telemetry.state_of_charge_percent < Decimal(FULL_SOC_PERCENT)
+                    or not fresh_after_cycle
+                ):
+                    recharge_start = _minute_ceil(now + CYCLE_RECHARGE_ARM_LEAD)
+            if recharge_start is not None:
+                recharge_end = recharge_start + cycle_duration
+                if _instant(recharge_end) <= _instant(current_window.end):
+                    cycle_recharge_intent = _intent(
+                        SlotOwner.CHEAP_CHARGING,
+                        SlotDirection.CHARGE,
+                        recharge_start,
+                        recharge_end,
+                        charge_state.current.maximum,
+                        min(Decimal(FULL_SOC_PERCENT), charge_state.target_soc.maximum),
+                        recharge_end,
+                    )
+
         reserve_intent: SlotIntent | None = None
         if (
             current_window is None
@@ -1331,16 +1370,10 @@ async def build_plan(
                 reserve_end,
             )
 
-        recharge = timedelta(0)
-        if cycle_intent is not None:
-            withdrawn = (
-                maximum_discharge_power
-                * Decimal(str(cycle_duration.total_seconds()))
-                / Decimal(3600)
-                / config.battery.discharge_efficiency
-            )
-            recharge_hours = withdrawn / (maximum_charge_power * config.battery.charge_efficiency)
-            recharge = timedelta(seconds=float(recharge_hours * Decimal(3600)))
+        # Minute-ceiling a post-discharge start can consume almost one extra
+        # minute.  Refuse the discharge unless the complete recharge remains
+        # inside the same cheap authority even at that boundary.
+        recharge = CYCLE_RECHARGE_ARM_LEAD + cycle_duration + timedelta(minutes=1)
 
         choice = _select(
             _StrategyFacts(
@@ -1351,10 +1384,13 @@ async def build_plan(
                 cheap_charge=charge_intent,
                 reserve_discharge=reserve_intent,
                 cycle_discharge=cycle_intent,
+                cycle_recharge=cycle_recharge_intent,
                 recharge_duration=recharge,
                 cycle_duration=cycle_duration,
                 cycle_state=cycle_state,
                 cycle_deadline=cycle_deadline,
+                cycle_observation_gate=cycle_observation_gate,
+                device_timestamp=telemetry.device_timestamp,
             )
         )
         logical = None if choice.intent is None else LogicalIntent((choice.intent,))
@@ -1363,6 +1399,7 @@ async def build_plan(
             intent=logical,
             next_cycle_state=choice.cycle_state,
             cycle_deadline=choice.cycle_deadline,
+            cycle_observation_gate=choice.cycle_observation_gate,
             charge_lease_deadline=effective_charge_lease_deadline,
             current_cheap_window=current_window,
             next_cheap_window=next_window,
@@ -1384,6 +1421,7 @@ async def build_plan(
             intent=None,
             next_cycle_state=cycle_state,
             cycle_deadline=cycle_deadline,
+            cycle_observation_gate=cycle_observation_gate,
             charge_lease_deadline=charge_lease_deadline,
             battery_energy_kwh=actual_energy,
             issue=f"{type(exc).__name__}: {exc}",
@@ -1392,12 +1430,14 @@ async def build_plan(
 
 def _select(facts: _StrategyFacts) -> _Choice:
     cheap = _window_active(facts.cheap_window, facts.now)
+    gate = facts.cycle_observation_gate
     if facts.cycle_state is CycleState.STOPPING:
         return _Choice(
             StrategyAction.IDLE if cheap else StrategyAction.RESERVE_FOLLOW,
             None,
             CycleState.IDLE,
             None,
+            gate,
         )
 
     if facts.cycle_state is CycleState.RESERVE_DISCHARGING:
@@ -1408,13 +1448,14 @@ def _select(facts: _StrategyFacts) -> _Choice:
                 _safe_intent(facts.reserve_discharge, target),
                 CycleState.RESERVE_DISCHARGING,
                 None,
+                gate,
             )
-        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline)
+        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline, gate)
 
     if facts.cycle_state is CycleState.CHARGING:
         if cheap and facts.cheap_charge is not None and facts.soc_percent < Decimal(FULL_SOC_PERCENT):
-            return _Choice(StrategyAction.CHEAP_CHARGE, facts.cheap_charge, CycleState.CHARGING, None)
-        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline)
+            return _Choice(StrategyAction.CHEAP_CHARGE, facts.cheap_charge, CycleState.CHARGING, None, gate)
+        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline, gate)
 
     if facts.cycle_state is CycleState.CYCLE_DISCHARGING:
         if _cycle_can_continue(facts):
@@ -1434,11 +1475,36 @@ def _select(facts: _StrategyFacts) -> _Choice:
                 _safe_intent(bounded, facts.reserve_soc_percent),
                 CycleState.CYCLE_DISCHARGING,
                 deadline,
+                gate,
             )
-        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline)
+        if cheap and facts.cycle_recharge is not None:
+            return _Choice(
+                StrategyAction.CYCLE_RECHARGE,
+                facts.cycle_recharge,
+                CycleState.CYCLE_RECHARGING,
+                facts.cycle_recharge.end,
+                gate,
+            )
+        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline, gate)
+
+    if facts.cycle_state is CycleState.CYCLE_RECHARGING:
+        fresh_after_cycle = gate is None or _instant(facts.device_timestamp) > _instant(gate)
+        if (
+            cheap
+            and facts.cycle_recharge is not None
+            and (facts.soc_percent < Decimal(FULL_SOC_PERCENT) or not fresh_after_cycle)
+        ):
+            return _Choice(
+                StrategyAction.CYCLE_RECHARGE,
+                facts.cycle_recharge,
+                CycleState.CYCLE_RECHARGING,
+                facts.cycle_recharge.end,
+                gate,
+            )
+        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline, gate)
 
     if cheap and facts.cheap_charge is not None and facts.soc_percent < Decimal(FULL_SOC_PERCENT):
-        return _Choice(StrategyAction.CHEAP_CHARGE, facts.cheap_charge, CycleState.CHARGING, None)
+        return _Choice(StrategyAction.CHEAP_CHARGE, facts.cheap_charge, CycleState.CHARGING, None, gate)
     if _cycle_can_start(facts):
         assert facts.cycle_discharge is not None
         return _Choice(
@@ -1446,6 +1512,7 @@ def _select(facts: _StrategyFacts) -> _Choice:
             _safe_intent(facts.cycle_discharge, facts.reserve_soc_percent),
             CycleState.CYCLE_DISCHARGING,
             facts.cycle_discharge.end,
+            facts.device_timestamp,
         )
     target = _effective_reserve(facts.reserve_soc_percent, facts.reserve_discharge)
     if not cheap and facts.reserve_discharge is not None and _reserve_export_allowed(facts.soc_percent, target):
@@ -1454,12 +1521,13 @@ def _select(facts: _StrategyFacts) -> _Choice:
             _safe_intent(facts.reserve_discharge, target),
             CycleState.RESERVE_DISCHARGING,
             None,
+            gate,
         )
     if cheap:
-        return _Choice(StrategyAction.IDLE, None, CycleState.IDLE, None)
+        return _Choice(StrategyAction.IDLE, None, CycleState.IDLE, None, gate)
     # Normal load following is an active policy: Feed-In Priority with
     # Battery Reserve and Peak Shaving enabled, and no native slot.
-    return _Choice(StrategyAction.RESERVE_FOLLOW, None, CycleState.IDLE, None)
+    return _Choice(StrategyAction.RESERVE_FOLLOW, None, CycleState.IDLE, None, gate)
 
 
 def _window_active(window: CheapWindow | None, now: datetime) -> bool:
@@ -1618,6 +1686,11 @@ def _safe_intent(intent: SlotIntent, minimum_soc: Decimal) -> SlotIntent:
 def _cycle_can_start(facts: _StrategyFacts) -> bool:
     intent = facts.cycle_discharge
     if not _window_active(facts.cheap_window, facts.now) or intent is None or facts.cheap_charge is None:
+        return False
+    if (
+        facts.cycle_observation_gate is not None
+        and _instant(facts.device_timestamp) <= _instant(facts.cycle_observation_gate)
+    ):
         return False
     if facts.soc_percent < Decimal(FULL_SOC_PERCENT) or not intent.start <= facts.now < intent.end:
         return False
@@ -1874,7 +1947,8 @@ def _slot_start(now: datetime, window_start: datetime) -> datetime:
 
 
 __all__ = [
-    "AdjustedRateInterval", "BONUS_CHARGE_LEASE_DURATION", "CheapClassification", "CheapWindow",
+    "AdjustedRateInterval", "BONUS_CHARGE_LEASE_DURATION", "CYCLE_RECHARGE_ARM_LEAD",
+    "CheapClassification", "CheapWindow",
     "CheapWindowComponent", "CheapWindowResult", "CoverageStatus",
     "DispatchSourceObservation", "EnergyInterval", "ExportRateInterval",
     "LogicalIntent", "Plan", "RateSourceObservation", "ReserveInputInterval", "ReservePlanResult",
