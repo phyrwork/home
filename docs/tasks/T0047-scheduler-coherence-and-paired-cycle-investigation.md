@@ -90,6 +90,10 @@ coverage now executes the complete discharge-to-recharge transition, exact
 fresh/stable recharge timing, controller latching across conflict stop, stale
 100% handling and repeat authorization from a newer device observation.
 
+T0050 supersedes this narrow sequential regression with a six-step real-world
+behavioural replay of the accepted rolling pair. It checks planner output and
+actual Solis reconciliation across unchanged and alternating phase boundaries.
+
 Deployment `bbde141` completed on 2026-08-28 with Home Assistant configuration
 validation and restart successful. The deployed source contains the explicit
 `CYCLE_RECHARGE` action and two-minute arming lead. Solis discovery initially
