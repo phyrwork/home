@@ -89,3 +89,11 @@ tail and terminal stop.
 
 The complete house-battery suite passes with 157 tests and the deployment suite
 passes with 53 tests. No live system was accessed or changed.
+
+The replay was mutation-checked in an isolated worktree by replacing only
+`controller.py`, `model.py`, `planner.py` and `solis.py` with their pre-T0047
+versions from `f9f892a`, while retaining the new scenario and runner. The test
+failed at step 0 because the old planner returned one discharge segment instead
+of the required adjacent discharge/recharge pair. Restoring current runtime
+code made the same replay pass. This proves the acceptance test detects the
+specific silent implementation failure it was introduced to prevent.
