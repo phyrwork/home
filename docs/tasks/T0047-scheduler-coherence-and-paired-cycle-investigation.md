@@ -1,6 +1,6 @@
 # T0047 — Simplify the scheduler and investigate paired native cycling
 
-Status: Sequential fallback deployed — live full-cycle acceptance pending
+Status: Rolling paired cycle implemented locally — broader simplification, deployment and live acceptance pending
 
 Depends on: T0039, T0040, T0041, T0042, T0043, T0046
 
@@ -8,12 +8,9 @@ Depends on: T0039, T0040, T0041, T0042, T0043, T0046
 
 Reduce the house-battery scheduler to the smallest coherent model that retains
 only reliability and safety behaviour justified by requirements or live
-evidence. Before choosing the full-SOC-cycle implementation, prove whether the
-inverter can execute one pre-armed, adjacent discharge/recharge schedule without
-a cloud write at the phase boundary.
-
-This task is a decision gate. Do not implement a composite scheduler before the
-native capability is physically proven.
+evidence. Full-SOC cycling is represented as one rolling pair of adjacent native
+discharge/recharge phases so the next phase is always pre-armed before the
+inverter clock reaches the boundary.
 
 ## Current evidence
 
@@ -101,6 +98,28 @@ fresh heartbeat. Telemetry then recovered passively, after which controller
 health returned to `healthy` and normal `RESERVE_DISCHARGE` planning resumed.
 Live acceptance still requires observing a complete 100%-SOC discharge/recharge
 cycle during a cheap period.
+
+### 2026-08-31 sequential failure and recovered experiment result
+
+The next overnight run again proved the discharge half but not recharge:
+
+- static cheap charging reached 100% SOC;
+- cycle discharge slot 1 ran for 10 minutes at approximately 4.4 kW and reduced
+  SOC to 98%; and
+- the controller then repeatedly armed fresh 10-minute recharge intervals with
+  Feed-In Priority, Allow Grid Charging on and Grid Peak Shaving off, but none
+  produced material grid charging.
+
+The earlier paired capability experiment did not reject paired operation. Its
+runner exited before collecting a sample because an unset shell variable
+(`label`) was referenced; the retained sample file is empty. The experiment
+therefore supplied no physical evidence either way.
+
+Solis documents timers as continuously effective while the inverter time is
+inside the configured interval. Combined with the repeated sequential failure,
+the accepted implementation is now the narrow rolling pair below. Local tests
+are authoritative for scheduling and reconciliation; deployment must still be
+followed by one live physical cycle.
 
 ## Retain
 
@@ -218,7 +237,7 @@ IDLE               no active forced or reserve-follow action
 Do not use `RESERVE_CHARGE`: cycle and cheap charging target 100%, not the
 dynamic reserve.
 
-## Candidate paired native cycle
+## Accepted rolling paired native cycle
 
 For the configured cycle duty duration `d`, initially 10 minutes, the candidate
 block is:
@@ -231,37 +250,46 @@ recharge   [D1, D2)  where D2 = D1 + d
 Both directions use their observed supported maximum current. Discharge targets
 the current quantized reserve and recharge targets 100%.
 
-The block is atomic only as desired configuration; Solis API writes remain
-sequential. Stage it before `D0` in this order:
+The pair is atomic only as desired configuration; Solis API writes remain
+sequential. Reconciliation prepares it in this order:
 
 1. stop and prove conflicting directions off;
 2. configure both future schedules while disabled;
 3. prove Feed-In Priority, Allow Grid Charging, Battery Reserve/target and Grid
    Peak Shaving off;
-4. enable and prove the recharge schedule first;
-5. enable the discharge schedule last as the commit point; and
-6. prove the complete, adjacent, non-overlapping block before `D0`.
+4. enable and prove the recharge schedule first; and
+5. enable the discharge schedule last as the commit point.
 
-If the complete block is not proven before `D0`, discharge must remain or become
-off. A partial future recharge-to-100 schedule is preferable to an unpaired
-discharge.
+An interrupted start may leave only a future recharge-to-100 schedule armed; it
+must never leave an unpaired cycle discharge armed.
 
-The controller performs no service call at `D1`; the inverter clock performs the
-handover.
+The inverter clock performs the handover at `D1`. Reconciliation then retains
+the active recharge and rolls the expired discharge forward:
 
-### Repeat gate
+```text
+initial:  discharge [D0,D1) + recharge  [D1,D2)
+at D1:    recharge  [D1,D2) + discharge [D2,D3)
+at D2:    discharge [D2,D3) + recharge  [D3,D4)
+```
+
+The half-open intervals are adjacent and never overlap. A discharge is
+pre-armed only when its complete following recharge also fits inside the same
+trusted cheap window. The final phase is therefore always recharge.
+
+### Observation and restart behaviour
 
 Capture the Solis `device_timestamp` observation used to authorize the block.
 Do not compare Home Assistant `last_updated` values.
 
-After the block:
+The initial cycle still requires a fresh 100% device observation. Once a pair is
+running, the controller advances from the external tariff window and fixed
+phase deadline; it does not wait for a delayed SOC sample at each native
+boundary. Native target SOC and the controller's unconditional safety stop
+still prevent discharge through the reserve or absolute safety boundary.
 
-- a strictly newer device observation reporting 100% may authorize another
-  block if the complete eligibility window remains;
-- a strictly newer observation below 100% selects ordinary `CHEAP_CHARGE`;
-- an unchanged observation cannot authorize another discharge; and
-- absence of a newer observation prevents another block but does not by itself
-  create fail-safe state.
+Cycle phase is RAM-only. After restart the controller derives a fresh action
+from current tariff, telemetry and native control state; it does not reconstruct
+or persist the previous cycle.
 
 Every encoded charge and discharge boundary remains inside trusted cheap
 authority. Tariff or lease end always wins over completing or repeating a
@@ -273,8 +301,7 @@ Production cycle placement is driven by the fused trusted cheap interval, not
 by whether the authority originated from the static tariff or Intelligent
 Dispatch. For cycle duty `d`, a block is eligible only when one current trusted
 interval contains the complete half-open range `[D0,D0 + 2d)`. With the initial
-10-minute duty this requires at least 20 minutes of remaining cheap authority,
-plus enough lead time to arm and prove the pair before `D0`.
+10-minute duty this requires at least 20 minutes of remaining cheap authority.
 
 While the battery is below 100%, the same interval selects ordinary
 `CHEAP_CHARGE`. A fresh device observation reaching 100% may select the first
@@ -297,9 +324,8 @@ ordinary controller events:
 
 Do not build separate static and dispatch cycle workflows. Existing tariff
 trust, dispatch provenance, equality/readback and important-stop rules are the
-boundaries. Initially retain the same-inverter-day restriction; midnight split
-support can be admitted later using the existing segment encoder after the
-simple case is proven.
+boundaries. The existing local-midnight splitter allocates each split phase
+within its commissioned owner; no separate cross-midnight workflow exists.
 
 ## Live capability experiment
 
@@ -373,33 +399,23 @@ cleans up the two experiment directions, selects Self-Use during emergency
 cleanup and restores the controller. Evidence is retained on HA under
 `/config/t0047-evidence/`.
 
-## Decision gate
+The runner did not reach the experiment: it exited with `label: unbound
+variable`, performed emergency cleanup and wrote zero sample records. This is
+an aborted experiment, not a paired-operation rejection.
 
-### If paired execution is proven
+## Implementation decision
 
-Replace the current single-direction `LogicalIntent` wrapper with a small
-desired schedule supporting only:
+The desired schedule supports only:
 
 - zero logical segments;
 - one ordinary charge/discharge segment; or
 - exactly two ordered cycle segments: `CYCLE_DISCHARGE` then
   `CYCLE_RECHARGE`.
 
-The Solis adapter may split an individual segment at local midnight using the
-existing two-slot allocations. Do not build an arbitrary schedule graph,
-workflow engine, transaction journal or persistent cycle record.
-
-Add a bounded arming phase and hard `D0` abort. Recharge is enabled first and
-discharge last. Initially permit paired cycles only in static cheap authority and
-without a local-midnight crossing.
-
-### If paired execution is rejected or ambiguous
-
-Keep the existing single-direction intent model and implement sequential
-`CYCLE_DISCHARGE → CYCLE_RECHARGE` using authoritative off proof. Arm recharge
-optimistically despite an unchanged SOC value, retain the cycle phase through
-fast control events, and require a strictly newer Solis device observation
-before another discharge.
+The Solis adapter may split an individual phase at local midnight using the
+existing two-slot allocations. It configures every desired phase while disabled,
+enables recharge first and enables discharge last. Do not build an arbitrary
+schedule graph, workflow engine, transaction journal or persistent cycle record.
 
 ## Explicit exclusions
 
@@ -418,21 +434,21 @@ Do not add:
 
 ## Documentation completion
 
-After the decision gate, update one concise authoritative scheduler contract and
+After live acceptance, update one concise authoritative scheduler contract and
 the commissioning log. Historical task cards remain evidence, not current
 requirements. Resolve current contradictions about Peak Shaving ownership and
 cycle transitions in the active top-level documentation.
 
 ## Local acceptance for implementation
 
-Whichever implementation path is selected must prove:
+The rolling-pair implementation must prove:
 
 - ordinary cheap charge, reserve discharge and reserve follow require no generic
   transition state;
 - every conflict is off-proven before an incompatible start;
-- cycle discharge always has a bounded recharge outcome or an explicit abort;
-- unchanged device telemetry cannot authorize consecutive cycle discharges;
-- newer below-100 and newer 100% observations take the documented paths;
+- every cycle discharge is immediately followed by a bounded recharge;
+- an incomplete final discharge/recharge pair is never added near tariff end;
+- the active phase remains stable while its adjacent successor is pre-armed;
 - tariff/lease boundaries stop charge and discharge independently of telemetry;
 - Peak Shaving handovers follow the destination-aware ordering;
 - start failures remain best effort and important stops remain unbounded;

@@ -120,22 +120,48 @@ class SlotIntent:
 
 @dataclass(frozen=True, slots=True)
 class LogicalIntent:
-    """One or two adjacent, same-direction segments of one logical action."""
+    """One ordinary interval or one adjacent full-SOC cycle pair.
+
+    An ordinary interval may contain two same-direction segments after a local
+    midnight split.  A cycle contains exactly one full-SOC discharge phase and
+    one cheap-charge phase, in either order; either phase may also be split at
+    local midnight by the Solis adapter.
+    """
 
     segments: tuple[SlotIntent, ...]
 
     def __post_init__(self) -> None:
-        if len(self.segments) not in (1, 2):
-            raise ValueError("logical intent must contain one or two segments")
-        first = self.segments[0]
-        for segment in self.segments:
-            if (segment.owner, segment.direction, segment.current, segment.target_soc) != (
-                first.owner, first.direction, first.current, first.target_soc
-            ):
-                raise ValueError("logical intent segments must share owner, direction and values")
+        if not 1 <= len(self.segments) <= 4:
+            raise ValueError("logical intent must contain one to four segments")
         for previous, current in zip(self.segments, self.segments[1:]):
-            if previous.end != current.start or previous.end > current.start:
+            if previous.end != current.start:
                 raise ValueError("logical intent segments must be adjacent and ordered")
+
+        runs: list[tuple[SlotIntent, ...]] = []
+        for segment in self.segments:
+            identity = (segment.owner, segment.direction, segment.current, segment.target_soc)
+            if not runs or (
+                runs[-1][0].owner,
+                runs[-1][0].direction,
+                runs[-1][0].current,
+                runs[-1][0].target_soc,
+            ) != identity:
+                runs.append((segment,))
+            else:
+                runs[-1] += (segment,)
+
+        if len(runs) == 1:
+            if len(runs[0]) > 2:
+                raise ValueError("ordinary logical intent may split at midnight only once")
+            return
+        if len(runs) != 2 or any(len(run) > 2 for run in runs):
+            raise ValueError("logical intent must be ordinary or one two-phase cycle")
+        phases = {(run[0].owner, run[0].direction) for run in runs}
+        if phases != {
+            (SlotOwner.FULL_SOC_CYCLING, SlotDirection.DISCHARGE),
+            (SlotOwner.CHEAP_CHARGING, SlotDirection.CHARGE),
+        }:
+            raise ValueError("cycle intent must pair full-SOC discharge with cheap charge")
 
     @property
     def start(self) -> datetime:

@@ -23,7 +23,6 @@ from custom_components.house_battery_control.model import (
 from custom_components.house_battery_control.planner import (
     AdjustedRateInterval,
     BONUS_CHARGE_LEASE_DURATION,
-    CYCLE_RECHARGE_ARM_LEAD,
     CheapClassification,
     CheapWindow,
     CheapWindowComponent,
@@ -1059,24 +1058,29 @@ def test_common_reserve_quantizer_rejects_incompatible_or_out_of_range() -> None
 async def test_build_plan_cycle_deadline_is_fixed_and_requires_recharge_time(hass) -> None:
     started = await _build(hass, cheap=True, soc="100")
     assert started.cycle_deadline == NOW + timedelta(minutes=10)
+    assert started.intent is not None
+    assert [(segment.direction, segment.start, segment.end) for segment in started.intent.segments] == [
+        (SlotDirection.DISCHARGE, NOW, NOW + timedelta(minutes=10)),
+        (SlotDirection.CHARGE, NOW + timedelta(minutes=10), NOW + timedelta(minutes=20)),
+    ]
     continued = await _build(
         hass, cheap=True, soc="80", state=CycleState.CYCLE_DISCHARGING,
         deadline=started.cycle_deadline,
     )
     assert continued.action is StrategyAction.CYCLE_DISCHARGE
-    assert continued.intent.end == started.cycle_deadline  # type: ignore[union-attr]
-    too_short = await _build(hass, cheap=True, soc="100", window_minutes=15)
+    assert continued.intent == started.intent
+    too_short = await _build(hass, cheap=True, soc="100", window_minutes=19)
     assert too_short.action is StrategyAction.IDLE
     assert too_short.intent is None
-    rounding_short = await _build(hass, cheap=True, soc="100", window_minutes=22)
-    assert rounding_short.action is StrategyAction.IDLE
-    exact_fit = await _build(hass, cheap=True, soc="100", window_minutes=23)
+    exact_fit = await _build(hass, cheap=True, soc="100", window_minutes=20)
     assert exact_fit.action is StrategyAction.CYCLE_DISCHARGE
 
 
 @pytest.mark.asyncio
-async def test_cycle_recharge_uses_fresh_stable_start_not_historical_cheap_start(hass) -> None:
-    started = await _build(hass, cheap=True, soc="100", device_timestamp=NOW)
+async def test_cycle_pair_rolls_at_each_boundary_and_keeps_the_next_phase_armed(hass) -> None:
+    started = await _build(
+        hass, cheap=True, soc="100", device_timestamp=NOW, window_minutes=55,
+    )
     assert started.action is StrategyAction.CYCLE_DISCHARGE
     assert started.cycle_observation_gate == NOW
     assert started.cycle_deadline is not None
@@ -1091,21 +1095,20 @@ async def test_cycle_recharge_uses_fresh_stable_start_not_historical_cheap_start
         cycle_observation_gate=started.cycle_observation_gate,
         device_timestamp=transition_now,
         now=transition_now,
+        window_minutes=55,
     )
 
     assert recharge.action is StrategyAction.CYCLE_RECHARGE
     assert recharge.next_cycle_state is CycleState.CYCLE_RECHARGING
     assert recharge.intent is not None
-    expected_start = NOW + timedelta(minutes=13)
-    assert recharge.intent.start == expected_start
-    assert recharge.intent.start >= transition_now + CYCLE_RECHARGE_ARM_LEAD
-    assert recharge.intent.start != NOW  # the ordinary standard-cheap phase start
-    assert recharge.intent.end == expected_start + timedelta(minutes=10)
-    assert recharge.cycle_deadline == recharge.intent.end
+    assert [(segment.direction, segment.start, segment.end) for segment in recharge.intent.segments] == [
+        (SlotDirection.CHARGE, NOW + timedelta(minutes=10), NOW + timedelta(minutes=20)),
+        (SlotDirection.DISCHARGE, NOW + timedelta(minutes=20), NOW + timedelta(minutes=30)),
+    ]
+    assert recharge.cycle_deadline == NOW + timedelta(minutes=20)
 
-    # Replanning while Solis writes are in progress retains the exact native
-    # interval and optimistically arms recharge despite the pre-cycle 100%
-    # sample still being the newest device observation.
+    # Replanning during the phase retains the exact pair, even if the latest
+    # device sample still reports 100%.
     heartbeat = await _build(
         hass,
         cheap=True,
@@ -1115,23 +1118,64 @@ async def test_cycle_recharge_uses_fresh_stable_start_not_historical_cheap_start
         cycle_observation_gate=started.cycle_observation_gate,
         device_timestamp=started.cycle_observation_gate,
         now=transition_now + timedelta(seconds=30),
+        window_minutes=55,
     )
     assert heartbeat.action is StrategyAction.CYCLE_RECHARGE
     assert heartbeat.intent == recharge.intent
 
-    fresh_full = await _build(
+    next_discharge_now = recharge.cycle_deadline + timedelta(seconds=5)
+    next_discharge = await _build(
         hass,
         cheap=True,
         soc="100",
         state=CycleState.CYCLE_RECHARGING,
         deadline=recharge.cycle_deadline,
         cycle_observation_gate=started.cycle_observation_gate,
-        device_timestamp=transition_now + timedelta(minutes=1),
-        now=transition_now + timedelta(minutes=1),
+        device_timestamp=next_discharge_now,
+        now=next_discharge_now,
+        window_minutes=55,
     )
-    assert fresh_full.action is StrategyAction.IDLE
-    assert fresh_full.next_cycle_state is CycleState.STOPPING
-    assert fresh_full.intent is None
+    assert next_discharge.action is StrategyAction.CYCLE_DISCHARGE
+    assert next_discharge.next_cycle_state is CycleState.CYCLE_DISCHARGING
+    assert next_discharge.intent is not None
+    assert [(segment.direction, segment.start, segment.end) for segment in next_discharge.intent.segments] == [
+        (SlotDirection.DISCHARGE, NOW + timedelta(minutes=20), NOW + timedelta(minutes=30)),
+        (SlotDirection.CHARGE, NOW + timedelta(minutes=30), NOW + timedelta(minutes=40)),
+    ]
+    assert next_discharge.cycle_deadline == NOW + timedelta(minutes=30)
+
+
+@pytest.mark.asyncio
+async def test_cycle_finishes_with_recharge_when_no_complete_following_cycle_fits(hass) -> None:
+    started = await _build(hass, cheap=True, soc="100", window_minutes=25)
+    assert started.cycle_deadline == NOW + timedelta(minutes=10)
+
+    recharge = await _build(
+        hass,
+        cheap=True,
+        soc="98",
+        state=CycleState.CYCLE_DISCHARGING,
+        deadline=started.cycle_deadline,
+        now=NOW + timedelta(minutes=10, seconds=5),
+        window_minutes=25,
+    )
+    assert recharge.action is StrategyAction.CYCLE_RECHARGE
+    assert recharge.intent is not None
+    assert [segment.direction for segment in recharge.intent.segments] == [SlotDirection.CHARGE]
+    assert recharge.intent.end == NOW + timedelta(minutes=20)
+
+    finished = await _build(
+        hass,
+        cheap=True,
+        soc="100",
+        state=CycleState.CYCLE_RECHARGING,
+        deadline=recharge.cycle_deadline,
+        now=NOW + timedelta(minutes=20, seconds=5),
+        window_minutes=25,
+    )
+    assert finished.action is StrategyAction.IDLE
+    assert finished.next_cycle_state is CycleState.STOPPING
+    assert finished.intent is None
 
 
 @pytest.mark.asyncio

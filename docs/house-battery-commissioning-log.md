@@ -453,3 +453,25 @@ Peak Shaving allowance; one 274 W transient was recorded. Fresh initial Solis
 telemetry reported battery power `-36 W`. This accepts the primary T0049
 load-following correction. A later active reserve-export occurrence must still
 prove its native target remains the dynamic reserve rather than 10%.
+
+## 2026-08-31 full-SOC cycle diagnosis and local rolling-pair implementation
+
+The overnight sequential controller again discharged successfully but failed
+to recharge. Static charging first reached 100% SOC. Cycle discharge then ran
+for 10 minutes at approximately 4.4 kW and reduced SOC to 98%. The controller
+subsequently armed repeated fresh 10-minute recharge intervals with Feed-In
+Priority, Allow Grid Charging on and Grid Peak Shaving off, but battery and
+site power showed no material charging.
+
+The earlier paired experiment was recovered from `/config/t0047-evidence/` and
+found to have exited before sampling because its runner referenced an unset
+`label` variable. Its sample file contains zero records, so it did not reject
+paired native operation.
+
+T0047 now implements the narrow rolling schedule locally: discharge/recharge,
+then recharge/discharge, then discharge/recharge. The active half is retained
+at each boundary while only the expired direction is rolled forward. All
+intervals are adjacent and half-open; recharge is enabled before discharge;
+and no discharge is pre-armed unless its following recharge also fits inside
+the trusted cheap window. Local component tests pass. Deployment and physical
+proof remain pending, and no live control was written for this change.

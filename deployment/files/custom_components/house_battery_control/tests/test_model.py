@@ -1,6 +1,6 @@
 """Behavior tests for the shared house-battery value model."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -94,6 +94,21 @@ def test_logical_intent_accepts_adjacent_same_direction_segments() -> None:
     )
     logical = LogicalIntent((first, second))
     assert (logical.start, logical.end) == (first.start, second.end)
+
+
+def test_logical_intent_accepts_only_the_narrow_adjacent_cycle_pair() -> None:
+    discharge = intent(
+        owner=SlotOwner.FULL_SOC_CYCLING,
+        direction=SlotDirection.DISCHARGE,
+        target_soc=Decimal("20"),
+    )
+    charge = intent(
+        start=discharge.end,
+        end=discharge.end + timedelta(hours=1),
+        expiry=discharge.end + timedelta(hours=1),
+    )
+    pair = LogicalIntent((discharge, charge))
+    assert pair.segments == (discharge, charge)
 
 
 def test_logical_intent_rejects_overlap_or_mixed_direction() -> None:

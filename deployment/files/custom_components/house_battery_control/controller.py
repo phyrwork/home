@@ -36,8 +36,8 @@ from .solis import (
     SolisState,
     WriteOutcome,
     WriteResult,
+    allocate_intent,
     read_state,
-    split_intent,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -313,24 +313,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             raise ValueError("valid plan has no reserve SOC")
         self._last_plan = plan
 
-        # A proven discharge has ended and recharge must retain one fixed,
-        # actionable native interval while the reconciler stops the old
-        # direction and arms the replacement.  A below-target recharge may
-        # similarly roll to one new bounded interval after its prior expiry.
-        if (
-            plan.next_cycle_state is CycleState.CYCLE_RECHARGING
-            and (
-                self._cycle_state is CycleState.CYCLE_DISCHARGING
-                or (
-                    self._cycle_state is CycleState.CYCLE_RECHARGING
-                    and plan.cycle_deadline != self._cycle_deadline
-                )
-            )
-        ):
-            self._cycle_state = plan.next_cycle_state
-            self._cycle_deadline = plan.cycle_deadline
-            self._cycle_observation_gate = plan.cycle_observation_gate
-
         fingerprint = _bonus_fingerprint(plan, now)
         preserve_standard_cheap_slot = _preserve_standard_cheap_slot(plan, now)
         if self._bonus_charge_keys and self._bonus_lease_fingerprint != fingerprint:
@@ -436,14 +418,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 if soc is None or target is None:
                     continue
                 if direction.key.direction is SlotDirection.CHARGE and soc >= target:
-                    waiting_for_post_cycle_sample = (
-                        self._cycle_state is CycleState.CYCLE_RECHARGING
-                        and self._cycle_observation_gate is not None
-                        and telemetry is not None
-                        and _instant(telemetry.device_timestamp)
-                        <= _instant(self._cycle_observation_gate)
-                    )
-                    if not waiting_for_post_cycle_sample:
+                    if not self._is_planned_cycle_charge(direction.key):
                         self._add_stop(direction.key, now, monotonic)
                 if direction.key.direction is SlotDirection.DISCHARGE:
                     boundary = target
@@ -451,6 +426,31 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                         boundary += RESERVE_SOC_UNCERTAINTY_PERCENT
                     if soc <= boundary:
                         self._add_stop(direction.key, now, monotonic)
+
+    def _is_planned_cycle_charge(self, key: SlotKey) -> bool:
+        plan = self._last_plan
+        if (
+            plan is None
+            or plan.action not in {
+                StrategyAction.CYCLE_DISCHARGE,
+                StrategyAction.CYCLE_RECHARGE,
+            }
+            or plan.intent is None
+        ):
+            return False
+        try:
+            return any(
+                allocated_key == key
+                and segment.direction is SlotDirection.CHARGE
+                for allocated_key, segment in allocate_intent(
+                    self.config.solis,
+                    plan.intent,
+                    timezone=self._zone,
+                    midnight_end=self.config.solis.midnight_end,
+                )
+            )
+        except ValueError:
+            return False
 
     def _bonus_dispatch_is_off(self) -> bool:
         """Return true only for an explicitly reported dispatch ``off``."""
@@ -752,13 +752,13 @@ class Controller(DataUpdateCoordinator[Snapshot]):
     ) -> None:
         if change.target is not True or intent is None:
             return
-        split = split_intent(
+        allocated = allocate_intent(
+            self.config.solis,
             intent,
             timezone=self._zone,
             midnight_end=self.config.solis.midnight_end,
         )
-        allocation = self.config.solis.allocation(split.segments[0].owner)
-        for key, segment in zip(allocation, split.segments):
+        for key, segment in allocated:
             if self.config.solis.direction(key).enable_entity_id == change.entity_id:
                 self._used_slots.add(key)
                 self._owned_expiry[key] = segment.expiry
@@ -786,13 +786,15 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             or plan.charge_lease_deadline is None
         ):
             return
-        split = split_intent(
+        allocated = allocate_intent(
+            self.config.solis,
             plan.intent,
             timezone=self._zone,
             midnight_end=self.config.solis.midnight_end,
         )
-        allocation = self.config.solis.allocation(SlotOwner.CHEAP_CHARGING)
-        for key, segment in zip(allocation, split.segments):
+        for key, segment in allocated:
+            if segment.owner is not SlotOwner.CHEAP_CHARGING:
+                continue
             direction = observation.direction(key)
             if direction.enabled is True and direction.owner is SlotOwner.CHEAP_CHARGING:
                 self._bonus_charge_keys.add(key)

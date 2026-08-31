@@ -580,6 +580,28 @@ def split_intent(intent: LogicalIntent, *, timezone: tzinfo, midnight_end: str) 
     return LogicalIntent(tuple(result))
 
 
+def allocate_intent(
+    config: SolisConfig,
+    intent: LogicalIntent,
+    *,
+    timezone: tzinfo,
+    midnight_end: str,
+) -> tuple[tuple[SlotKey, SlotIntent], ...]:
+    """Allocate each native segment within its narrowly commissioned owner."""
+
+    split = split_intent(intent, timezone=timezone, midnight_end=midnight_end)
+    used: dict[SlotOwner, int] = {}
+    result: list[tuple[SlotKey, SlotIntent]] = []
+    for segment in split.segments:
+        index = used.get(segment.owner, 0)
+        allocation = config.allocation(segment.owner)
+        if index >= len(allocation):
+            raise ValueError(f"not enough Solis slots allocated to {segment.owner.value}")
+        result.append((allocation[index], segment))
+        used[segment.owner] = index + 1
+    return tuple(result)
+
+
 def _parse_schedule(value: object) -> NativeSchedule | None:
     if not isinstance(value, str) or (match := _TIME_PATTERN.fullmatch(value)) is None:
         return None
@@ -817,11 +839,30 @@ class SolisAdapter:
                 (config.time_entity_id, item.time_text, None),
                 (config.current_entity_id, item.segment.current, direction.current),
                 (config.target_soc_entity_id, item.segment.target_soc, direction.target_soc),
-                (config.enable_entity_id, True, None),
             ):
                 change = self._change(state, entity_id, target, capability)
                 if change is not None:
                     return change
+
+        # Configure the complete desired schedule before committing either
+        # direction. For a cycle pair the recharge is enabled first, so a
+        # delayed or interrupted reconciliation cannot leave an unpaired
+        # discharge armed.
+        for item in sorted(
+            native,
+            key=lambda candidate: candidate.key.direction is SlotDirection.DISCHARGE,
+        ):
+            direction = state.direction(item.key)
+            if direction.enabled:
+                continue
+            change = self._change(
+                state,
+                self.config.direction(item.key).enable_entity_id,
+                True,
+                None,
+            )
+            if change is not None:
+                return change
 
         peak_change = self._change(
             state,
@@ -1066,11 +1107,22 @@ class SolisAdapter:
             ]
             if len(exact) == 1 or any(item.key == canonical.key for item in exact):
                 allocation = (exact[0].key,) if len(exact) == 1 else (canonical.key,)
+            return tuple(
+                _NativeIntent(allocation[index], segment, *_encode_schedule(
+                    segment, timezone=self.timezone, midnight_end=self.config.midnight_end
+                ))
+                for index, segment in enumerate(split.segments)
+            )
         return tuple(
-            _NativeIntent(allocation[index], segment, *_encode_schedule(
+            _NativeIntent(key, segment, *_encode_schedule(
                 segment, timezone=self.timezone, midnight_end=self.config.midnight_end
             ))
-            for index, segment in enumerate(split.segments)
+            for key, segment in allocate_intent(
+                self.config,
+                intent,
+                timezone=self.timezone,
+                midnight_end=self.config.midnight_end,
+            )
         )
 
     def _change(
@@ -1440,5 +1492,5 @@ __all__ = [
     "SlotKey", "SolisAdapter", "SolisChange", "SolisConfig", "SolisDirectionState",
     "SolisIssue", "SolisPersistentState", "SolisSlotState", "SolisState",
     "SolisTelemetry", "WriteOutcome", "WriteResult", "config_from_mapping",
-    "read_state", "split_intent",
+    "allocate_intent", "read_state", "split_intent",
 ]

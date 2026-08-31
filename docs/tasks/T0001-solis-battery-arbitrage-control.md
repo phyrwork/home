@@ -106,19 +106,27 @@ The absolute `MINIMUM_SOC_PERCENT` stop is independent of planner availability.
 
 At full SOC during a profitable cheap interval:
 
-1. stop and confirm charge off;
-2. discharge for the configured duty duration, bounded by the reserve floor and
-   cheap interval;
-3. stop and confirm discharge off;
-4. charge back toward full; and
-5. repeat only if enough cheap time remains to discharge and recharge.
+1. configure an adjacent discharge/recharge pair using the configured duty
+   duration for each half;
+2. enable recharge first and discharge last;
+3. let the inverter clock hand over at the half-open boundary;
+4. retain the active half while rolling the expired direction into the next
+   adjacent half; and
+5. pre-arm a discharge only when its complete following recharge fits inside
+   the same trusted cheap interval.
+
+The final cycle phase is always recharge. Cycle phase is transient RAM state;
+restart derives a fresh action from current external state.
 
 There is no pre-discharge mode.
 
 ## Schedule and direction invariants
 
-- There is at most one desired direction.
-- Direction changes are stop, confirm off, then start the other direction.
+- There is at most one desired direction except for the two adjacent,
+  non-overlapping directions of a full-SOC cycle pair.
+- An incompatible direction is stopped and confirmed off before replacement.
+  Within a cycle pair, the next direction is already armed and the inverter
+  clock performs the boundary handover.
 - Runtime instants are aware UTC; native schedule values are inverter-local
   `HH:MM` wall-clock values.
 - Intervals are half-open `[start, end)`: adjacency is valid and overlap is not.

@@ -26,7 +26,6 @@ MAXIMUM_SOURCE_FUTURE_SKEW = timedelta(minutes=2)
 OCTOPUS_EXPORT_SOURCE_MAX_AGE = timedelta(hours=26)
 OCTOPUS_RATE_SOURCE_MAX_AGE = timedelta(hours=26)
 BONUS_CHARGE_LEASE_DURATION = timedelta(minutes=15)
-CYCLE_RECHARGE_ARM_LEAD = timedelta(minutes=2)
 OCTOPUS_RATE_UNIT = "GBP/kWh"
 # Solis reports whole-percent SOC. Reserve export must clear the one-percent
 # reporting uncertainty before it can be physically actionable.
@@ -1104,7 +1103,6 @@ class _StrategyFacts:
     reserve_discharge: SlotIntent | None
     cycle_discharge: SlotIntent | None
     cycle_recharge: SlotIntent | None
-    recharge_duration: timedelta
     cycle_duration: timedelta
     cycle_state: CycleState
     cycle_deadline: datetime | None
@@ -1115,7 +1113,7 @@ class _StrategyFacts:
 @dataclass(frozen=True, slots=True)
 class _Choice:
     action: StrategyAction
-    intent: SlotIntent | None
+    intent: LogicalIntent | None
     cycle_state: CycleState
     cycle_deadline: datetime | None
     cycle_observation_gate: datetime | None
@@ -1312,9 +1310,6 @@ async def build_plan(
                 )
             cycle_start = now_based_start
             cycle_end = min(cycle_start + cycle_duration, current_window.end)
-            if cycle_deadline is not None:
-                cycle_end = min(cycle_deadline, current_window.end)
-                cycle_start = cycle_end - cycle_duration
             if cycle_end > cycle_start:
                 cycle_intent = _intent(
                     SlotOwner.FULL_SOC_CYCLING,
@@ -1325,35 +1320,15 @@ async def build_plan(
                     max(control_reserve_soc, cycle_slot_state.target_soc.minimum),
                     cycle_end,
                 )
-
-            recharge_start: datetime | None = None
-            if cycle_state is CycleState.CYCLE_DISCHARGING and cycle_deadline is not None:
-                if _instant(now) >= _instant(cycle_deadline):
-                    recharge_start = _minute_ceil(now + CYCLE_RECHARGE_ARM_LEAD)
-            elif cycle_state is CycleState.CYCLE_RECHARGING and cycle_deadline is not None:
-                fresh_after_cycle = (
-                    cycle_observation_gate is None
-                    or _instant(telemetry.device_timestamp) > _instant(cycle_observation_gate)
+                cycle_recharge_intent = _intent(
+                    SlotOwner.CHEAP_CHARGING,
+                    SlotDirection.CHARGE,
+                    cycle_start,
+                    cycle_end,
+                    charge_state.current.maximum,
+                    min(Decimal(FULL_SOC_PERCENT), charge_state.target_soc.maximum),
+                    cycle_end,
                 )
-                if _instant(now) < _instant(cycle_deadline):
-                    recharge_start = cycle_deadline - cycle_duration
-                elif (
-                    telemetry.state_of_charge_percent < Decimal(FULL_SOC_PERCENT)
-                    or not fresh_after_cycle
-                ):
-                    recharge_start = _minute_ceil(now + CYCLE_RECHARGE_ARM_LEAD)
-            if recharge_start is not None:
-                recharge_end = recharge_start + cycle_duration
-                if _instant(recharge_end) <= _instant(current_window.end):
-                    cycle_recharge_intent = _intent(
-                        SlotOwner.CHEAP_CHARGING,
-                        SlotDirection.CHARGE,
-                        recharge_start,
-                        recharge_end,
-                        charge_state.current.maximum,
-                        min(Decimal(FULL_SOC_PERCENT), charge_state.target_soc.maximum),
-                        recharge_end,
-                    )
 
         reserve_intent: SlotIntent | None = None
         if (
@@ -1370,11 +1345,6 @@ async def build_plan(
                 reserve_end,
             )
 
-        # Minute-ceiling a post-discharge start can consume almost one extra
-        # minute.  Refuse the discharge unless the complete recharge remains
-        # inside the same cheap authority even at that boundary.
-        recharge = CYCLE_RECHARGE_ARM_LEAD + cycle_duration + timedelta(minutes=1)
-
         choice = _select(
             _StrategyFacts(
                 now=now,
@@ -1385,7 +1355,6 @@ async def build_plan(
                 reserve_discharge=reserve_intent,
                 cycle_discharge=cycle_intent,
                 cycle_recharge=cycle_recharge_intent,
-                recharge_duration=recharge,
                 cycle_duration=cycle_duration,
                 cycle_state=cycle_state,
                 cycle_deadline=cycle_deadline,
@@ -1393,10 +1362,9 @@ async def build_plan(
                 device_timestamp=telemetry.device_timestamp,
             )
         )
-        logical = None if choice.intent is None else LogicalIntent((choice.intent,))
         return Plan(
             action=choice.action,
-            intent=logical,
+            intent=choice.intent,
             next_cycle_state=choice.cycle_state,
             cycle_deadline=choice.cycle_deadline,
             cycle_observation_gate=choice.cycle_observation_gate,
@@ -1445,7 +1413,7 @@ def _select(facts: _StrategyFacts) -> _Choice:
         if not cheap and facts.reserve_discharge is not None and _reserve_export_allowed(facts.soc_percent, target):
             return _Choice(
                 StrategyAction.RESERVE_DISCHARGE,
-                _safe_intent(facts.reserve_discharge, target),
+                _logical(_safe_intent(facts.reserve_discharge, target)),
                 CycleState.RESERVE_DISCHARGING,
                 None,
                 gate,
@@ -1454,71 +1422,114 @@ def _select(facts: _StrategyFacts) -> _Choice:
 
     if facts.cycle_state is CycleState.CHARGING:
         if cheap and facts.cheap_charge is not None and facts.soc_percent < Decimal(FULL_SOC_PERCENT):
-            return _Choice(StrategyAction.CHEAP_CHARGE, facts.cheap_charge, CycleState.CHARGING, None, gate)
+            return _Choice(
+                StrategyAction.CHEAP_CHARGE,
+                _logical(facts.cheap_charge),
+                CycleState.CHARGING,
+                None,
+                gate,
+            )
         return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline, gate)
 
     if facts.cycle_state is CycleState.CYCLE_DISCHARGING:
-        if _cycle_can_continue(facts):
-            assert facts.cycle_discharge is not None and facts.cheap_window is not None
-            deadline = min(
-                facts.cycle_deadline or facts.cycle_discharge.end,
-                facts.cycle_discharge.end,
-                facts.cheap_window.end,
-            )
-            bounded = replace(
-                facts.cycle_discharge,
-                end=deadline,
-                expiry=min(facts.cycle_discharge.expiry, deadline),
-            )
-            return _Choice(
-                StrategyAction.CYCLE_DISCHARGE,
-                _safe_intent(bounded, facts.reserve_soc_percent),
-                CycleState.CYCLE_DISCHARGING,
-                deadline,
-                gate,
-            )
-        if cheap and facts.cycle_recharge is not None:
-            return _Choice(
-                StrategyAction.CYCLE_RECHARGE,
-                facts.cycle_recharge,
-                CycleState.CYCLE_RECHARGING,
-                facts.cycle_recharge.end,
-                gate,
-            )
-        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline, gate)
+        deadline = facts.cycle_deadline
+        if cheap and deadline is not None and facts.cheap_window is not None:
+            phase_start = deadline - facts.cycle_duration
+            target = _effective_reserve(facts.reserve_soc_percent, facts.cycle_discharge)
+            if _instant(facts.now) < _instant(deadline) and facts.soc_percent > target:
+                schedule = _cycle_schedule(facts, CycleState.CYCLE_DISCHARGING, phase_start)
+                if schedule is not None:
+                    return _Choice(
+                        StrategyAction.CYCLE_DISCHARGE,
+                        schedule,
+                        CycleState.CYCLE_DISCHARGING,
+                        deadline,
+                        gate,
+                    )
+            recharge_start = deadline
+            recharge_deadline = recharge_start + facts.cycle_duration
+            if _instant(facts.now) < _instant(recharge_deadline):
+                schedule = _cycle_schedule(
+                    facts,
+                    CycleState.CYCLE_RECHARGING,
+                    recharge_start,
+                    include_next=_cycle_after_recharge_fits(facts, recharge_start),
+                )
+                if schedule is not None:
+                    return _Choice(
+                        StrategyAction.CYCLE_RECHARGE,
+                        schedule,
+                        CycleState.CYCLE_RECHARGING,
+                        recharge_deadline,
+                        gate,
+                    )
+        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, deadline, gate)
 
     if facts.cycle_state is CycleState.CYCLE_RECHARGING:
-        fresh_after_cycle = gate is None or _instant(facts.device_timestamp) > _instant(gate)
-        if (
-            cheap
-            and facts.cycle_recharge is not None
-            and (facts.soc_percent < Decimal(FULL_SOC_PERCENT) or not fresh_after_cycle)
-        ):
-            return _Choice(
-                StrategyAction.CYCLE_RECHARGE,
-                facts.cycle_recharge,
-                CycleState.CYCLE_RECHARGING,
-                facts.cycle_recharge.end,
-                gate,
-            )
-        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline, gate)
+        deadline = facts.cycle_deadline
+        if cheap and deadline is not None and facts.cheap_window is not None:
+            phase_start = deadline - facts.cycle_duration
+            if _instant(facts.now) < _instant(deadline):
+                schedule = _cycle_schedule(
+                    facts,
+                    CycleState.CYCLE_RECHARGING,
+                    phase_start,
+                    include_next=_cycle_after_recharge_fits(facts, phase_start),
+                )
+                if schedule is not None:
+                    return _Choice(
+                        StrategyAction.CYCLE_RECHARGE,
+                        schedule,
+                        CycleState.CYCLE_RECHARGING,
+                        deadline,
+                        gate,
+                    )
+            discharge_start = deadline
+            discharge_deadline = discharge_start + facts.cycle_duration
+            if _instant(facts.now) < _instant(discharge_deadline):
+                schedule = _cycle_schedule(
+                    facts,
+                    CycleState.CYCLE_DISCHARGING,
+                    discharge_start,
+                )
+                if schedule is not None:
+                    return _Choice(
+                        StrategyAction.CYCLE_DISCHARGE,
+                        schedule,
+                        CycleState.CYCLE_DISCHARGING,
+                        discharge_deadline,
+                        facts.device_timestamp,
+                    )
+        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, deadline, gate)
 
     if cheap and facts.cheap_charge is not None and facts.soc_percent < Decimal(FULL_SOC_PERCENT):
-        return _Choice(StrategyAction.CHEAP_CHARGE, facts.cheap_charge, CycleState.CHARGING, None, gate)
+        return _Choice(
+            StrategyAction.CHEAP_CHARGE,
+            _logical(facts.cheap_charge),
+            CycleState.CHARGING,
+            None,
+            gate,
+        )
     if _cycle_can_start(facts):
         assert facts.cycle_discharge is not None
-        return _Choice(
-            StrategyAction.CYCLE_DISCHARGE,
-            _safe_intent(facts.cycle_discharge, facts.reserve_soc_percent),
+        schedule = _cycle_schedule(
+            facts,
             CycleState.CYCLE_DISCHARGING,
-            facts.cycle_discharge.end,
-            facts.device_timestamp,
+            facts.cycle_discharge.start,
         )
+        if schedule is not None:
+            return _Choice(
+                StrategyAction.CYCLE_DISCHARGE,
+                schedule,
+                CycleState.CYCLE_DISCHARGING,
+                facts.cycle_discharge.start + facts.cycle_duration,
+                facts.device_timestamp,
+            )
     target = _effective_reserve(facts.reserve_soc_percent, facts.reserve_discharge)
     if not cheap and facts.reserve_discharge is not None and _reserve_export_allowed(facts.soc_percent, target):
         return _Choice(
             StrategyAction.RESERVE_DISCHARGE,
-            _safe_intent(facts.reserve_discharge, target),
+            _logical(_safe_intent(facts.reserve_discharge, target)),
             CycleState.RESERVE_DISCHARGING,
             None,
             gate,
@@ -1683,9 +1694,68 @@ def _safe_intent(intent: SlotIntent, minimum_soc: Decimal) -> SlotIntent:
     return intent if intent.target_soc >= minimum_soc else replace(intent, target_soc=minimum_soc)
 
 
+def _logical(*segments: SlotIntent) -> LogicalIntent:
+    return LogicalIntent(tuple(segments))
+
+
+def _cycle_schedule(
+    facts: _StrategyFacts,
+    phase: CycleState,
+    start: datetime,
+    *,
+    include_next: bool = True,
+) -> LogicalIntent | None:
+    """Return the current cycle phase and, when safe, its adjacent successor."""
+
+    if facts.cheap_window is None:
+        return None
+    if phase is CycleState.CYCLE_DISCHARGING:
+        current_template = facts.cycle_discharge
+        next_template = facts.cycle_recharge
+    elif phase is CycleState.CYCLE_RECHARGING:
+        current_template = facts.cycle_recharge
+        next_template = facts.cycle_discharge
+    else:
+        raise ValueError("cycle schedule requires a cycle phase")
+    if current_template is None or (include_next and next_template is None):
+        return None
+
+    end = start + facts.cycle_duration
+    if _instant(end) > _instant(facts.cheap_window.end):
+        return None
+    current = replace(current_template, start=start, end=end, expiry=end)
+    if current.direction is SlotDirection.DISCHARGE:
+        current = _safe_intent(current, facts.reserve_soc_percent)
+    if not include_next:
+        return _logical(current)
+
+    next_end = end + facts.cycle_duration
+    if _instant(next_end) > _instant(facts.cheap_window.end):
+        return None
+    assert next_template is not None
+    following = replace(next_template, start=end, end=next_end, expiry=next_end)
+    if following.direction is SlotDirection.DISCHARGE:
+        following = _safe_intent(following, facts.reserve_soc_percent)
+    return _logical(current, following)
+
+
+def _cycle_after_recharge_fits(facts: _StrategyFacts, recharge_start: datetime) -> bool:
+    """Only pre-arm another discharge when its following recharge can fit."""
+
+    return (
+        facts.cheap_window is not None
+        and _instant(recharge_start + 3 * facts.cycle_duration)
+        <= _instant(facts.cheap_window.end)
+    )
+
+
 def _cycle_can_start(facts: _StrategyFacts) -> bool:
     intent = facts.cycle_discharge
-    if not _window_active(facts.cheap_window, facts.now) or intent is None or facts.cheap_charge is None:
+    if (
+        not _window_active(facts.cheap_window, facts.now)
+        or intent is None
+        or facts.cycle_recharge is None
+    ):
         return False
     if (
         facts.cycle_observation_gate is not None
@@ -1695,18 +1765,7 @@ def _cycle_can_start(facts: _StrategyFacts) -> bool:
     if facts.soc_percent < Decimal(FULL_SOC_PERCENT) or not intent.start <= facts.now < intent.end:
         return False
     assert facts.cheap_window is not None
-    return facts.cheap_window.end - facts.now >= facts.cycle_duration + facts.recharge_duration
-
-
-def _cycle_can_continue(facts: _StrategyFacts) -> bool:
-    intent = facts.cycle_discharge
-    if not _window_active(facts.cheap_window, facts.now) or intent is None:
-        return False
-    assert facts.cheap_window is not None
-    deadline = min(facts.cycle_deadline or intent.end, intent.end, facts.cheap_window.end)
-    if facts.now >= deadline or facts.soc_percent <= max(Decimal(MINIMUM_SOC_PERCENT), intent.target_soc):
-        return False
-    return facts.cheap_window.end - facts.now >= deadline - facts.now + facts.recharge_duration
+    return _instant(intent.start + 2 * facts.cycle_duration) <= _instant(facts.cheap_window.end)
 
 
 def _intent(
@@ -1947,7 +2006,7 @@ def _slot_start(now: datetime, window_start: datetime) -> datetime:
 
 
 __all__ = [
-    "AdjustedRateInterval", "BONUS_CHARGE_LEASE_DURATION", "CYCLE_RECHARGE_ARM_LEAD",
+    "AdjustedRateInterval", "BONUS_CHARGE_LEASE_DURATION",
     "CheapClassification", "CheapWindow",
     "CheapWindowComponent", "CheapWindowResult", "CoverageStatus",
     "DispatchSourceObservation", "EnergyInterval", "ExportRateInterval",

@@ -103,6 +103,30 @@ def intent(
     ),))
 
 
+def cycle_pair(start: datetime, *, recharge_first: bool = False) -> LogicalIntent:
+    middle = start + timedelta(minutes=10)
+    end = middle + timedelta(minutes=10)
+    discharge = SlotIntent(
+        SlotOwner.FULL_SOC_CYCLING,
+        SlotDirection.DISCHARGE,
+        start if not recharge_first else middle,
+        middle if not recharge_first else end,
+        Decimal("100"),
+        Decimal("20"),
+        middle if not recharge_first else end,
+    )
+    charge = SlotIntent(
+        SlotOwner.CHEAP_CHARGING,
+        SlotDirection.CHARGE,
+        middle if not recharge_first else start,
+        end if not recharge_first else middle,
+        Decimal("100"),
+        Decimal("100"),
+        end if not recharge_first else middle,
+    )
+    return LogicalIntent((charge, discharge) if recharge_first else (discharge, charge))
+
+
 def revise(states: dict[str, object], change: SolisChange) -> None:
     item = states[change.entity_id]
     assert isinstance(item, dict)
@@ -245,6 +269,103 @@ def test_split_midnight_encodes_configured_boundary(
         assert times == [expected_first, "00:00-01:00"]
         final = read_state(local_states, parsed, now=NOW)
         assert adapter.intent_matches(final, desired, battery_reserve_soc_percent=Decimal("10"), peak_shaving=False)
+
+
+def test_adjacent_cycle_pair_arms_both_directions_and_rolls_without_charge_conflict() -> None:
+    parsed, states = fixture()
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    first = cycle_pair(NOW)
+    changes = advance(adapter, states, first)
+
+    discharge_key = parsed.allocation(SlotOwner.FULL_SOC_CYCLING)[0]
+    charge_key = parsed.allocation(SlotOwner.CHEAP_CHARGING)[0]
+    assert {change.entity_id for change in changes if change.target is True} >= {
+        parsed.direction(discharge_key).enable_entity_id,
+        parsed.direction(charge_key).enable_entity_id,
+    }
+    enable_order = [
+        change.entity_id
+        for change in changes
+        if change.entity_id in {
+            parsed.direction(discharge_key).enable_entity_id,
+            parsed.direction(charge_key).enable_entity_id,
+        }
+    ]
+    assert enable_order == [
+        parsed.direction(charge_key).enable_entity_id,
+        parsed.direction(discharge_key).enable_entity_id,
+    ]
+    observed = read_state(states, parsed, now=NOW)
+    assert adapter.intent_matches(
+        observed,
+        first,
+        battery_reserve_soc_percent=Decimal("10"),
+        peak_shaving=False,
+    )
+
+    rolled = cycle_pair(NOW + timedelta(minutes=10), recharge_first=True)
+    assert adapter.conflicting_enabled_keys(observed, rolled) == (discharge_key,)
+
+    discharge_enable = parsed.direction(discharge_key).enable_entity_id
+    states[discharge_enable]["state"] = "off"  # type: ignore[index]
+    states[discharge_enable]["last_updated"] = NOW + timedelta(seconds=1)  # type: ignore[index]
+    rolled_changes = advance(adapter, states, rolled)
+    assert all(
+        change.target is not False or change.entity_id == parsed.persistent.grid_peak_shaving_entity_id
+        for change in rolled_changes
+    )
+    assert parsed.direction(charge_key).enable_entity_id not in {
+        change.entity_id for change in rolled_changes
+    }
+    final = read_state(states, parsed, now=NOW)
+    assert adapter.intent_matches(
+        final,
+        rolled,
+        battery_reserve_soc_percent=Decimal("10"),
+        peak_shaving=False,
+    )
+
+
+def test_cycle_pair_uses_owner_allocations_when_one_phase_crosses_midnight() -> None:
+    parsed, states = fixture()
+    start = datetime(2026, 12, 1, 23, 55, tzinfo=LONDON)
+    middle = start + timedelta(minutes=10)
+    end = middle + timedelta(minutes=10)
+    desired = LogicalIntent((
+        SlotIntent(
+            SlotOwner.FULL_SOC_CYCLING,
+            SlotDirection.DISCHARGE,
+            start,
+            middle,
+            Decimal("100"),
+            Decimal("20"),
+            middle,
+        ),
+        SlotIntent(
+            SlotOwner.CHEAP_CHARGING,
+            SlotDirection.CHARGE,
+            middle,
+            end,
+            Decimal("100"),
+            Decimal("100"),
+            end,
+        ),
+    ))
+    adapter = SolisAdapter(states, parsed, timezone=LONDON)
+    changes = advance(adapter, states, desired)
+
+    times = {
+        change.entity_id: change.target
+        for change in changes
+        if change.entity_id.startswith("text.")
+    }
+    first_discharge, second_discharge = parsed.allocation(SlotOwner.FULL_SOC_CYCLING)
+    charge = parsed.allocation(SlotOwner.CHEAP_CHARGING)[0]
+    assert times == {
+        parsed.direction(first_discharge).time_entity_id: "23:55-23:59",
+        parsed.direction(second_discharge).time_entity_id: "00:00-00:05",
+        parsed.direction(charge).time_entity_id: "00:05-00:15",
+    }
 
 
 def test_2359_representation_keeps_explicit_native_one_minute_gap() -> None:
