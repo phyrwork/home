@@ -475,3 +475,58 @@ intervals are adjacent and half-open; recharge is enabled before discharge;
 and no discharge is pre-armed unless its following recharge also fits inside
 the trusted cheap window. Local component tests pass. Deployment and physical
 proof remain pending, and no live control was written for this change.
+
+## 2026-09-01 rolling-cycle and active-charge proof
+
+Recorder evidence from the first deployed rolling-pair night showed that the
+cycle scheduler and native configuration mostly worked. The reliable one-minute
+Octopus whole-site demand sensor recorded:
+
+- approximately 3.7 kW export during the first `03:10-03:20 UTC` cycle
+  discharge;
+- approximately 0.24 kW import, with no forced charge, during the first
+  `03:20-03:30 UTC` recharge;
+- approximately 4.2 kW export during the next discharge;
+- approximately 5.9 kW import during the next recharge; and
+- matching approximately 4.2 kW export / 5.9 kW import steps for the following
+  two discharge/recharge pairs.
+
+The first recharge was not late API programming. Its `04:20-04:30`
+inverter-local charge slot was configured at `03:10:21 UTC` and enabled at
+`03:10:23 UTC`, almost ten minutes before its boundary. Feed-In Priority,
+Allow Grid Charging, 100 A current, 100% target SOC and Peak Shaving off all
+matched the later successful pairs. Other slot directions were neutral before
+the first pair. The distinguishing observation was headroom: SOC was reported
+at 99% during the failed first recharge and 98% by its end, whereas the first
+successful recharge followed the next discharge to 96%. The exact inverter or
+BMS recharge acceptance threshold near full SOC is not yet proven; 99% did not
+charge and 96% did.
+
+A separate live standard-cheap test proved that a charge interval whose start
+was already in the past becomes physically effective. Charge slot 1 was enabled
+at `17:48:53 UTC` for `18:48-19:00` inverter-local time, with Feed-In Priority,
+Allow Grid Charging on, 100 A, 100% target and Peak Shaving off. Octopus demand
+was 7.948 kW at `17:48`, 7.947 kW at `17:49`, and 13.506 kW at `17:50`, then
+remained around 13.5 kW. This proves an inverter-sized charge step within about
+67 seconds of Home Assistant readback despite stale Solis telemetry. The slot
+turned off at `18:00:01 UTC`; the `18:01` demand sample was -3.025 kW, proving
+the native end boundary also took effect.
+
+An off reserve-discharge direction retained a stale `07:58-23:30`, 100 A
+schedule across a Home Assistant restart. It was neutralised and later briefly
+reintroduced during the live test. Charging had already started before the
+first neutralisation, and reintroducing the disabled overlap after charging had
+started did not stop it. It was restored to `00:00-00:00`, 0 A at the end of
+the experiment; after the cheap boundary the healthy controller legitimately
+reused it for reserve discharge. This stale configuration is therefore not
+evidence for the missed first rolling recharge and does not justify a broad
+all-slot write sweep.
+
+At `2026-09-01 18:38:26 UTC`, the live cycle duty helper was changed from 10
+minutes to 15 minutes. Home Assistant read back `15.0 min`; controller health
+remained `healthy` and its action remained `RESERVE_FOLLOW`. The longer first
+discharge should create more headroom before the paired recharge while keeping
+each native direction bounded to 15 minutes if a cheap period ends unexpectedly.
+The next acceptance observation is a complete discharge/recharge pair starting
+from 100% SOC during a trusted cheap interval, with both physical directions
+confirmed from the Octopus whole-site demand sensor.
