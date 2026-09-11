@@ -118,8 +118,10 @@ def test_bonus_fingerprint_ignores_now_clipping_but_binds_source_boundary() -> N
     )
 
 
+@pytest.mark.parametrize("dispatch_state", ["on", "off"])
 async def test_bonus_heartbeat_does_not_manufacture_stop_debt(
     hass: HomeAssistant,
+    dispatch_state: str,
 ) -> None:
     controller = Controller(hass, config())
     solis = adapter(controller)
@@ -173,11 +175,16 @@ async def test_bonus_heartbeat_does_not_manufacture_stop_debt(
     controller._bonus_charge_keys.add(key)
     controller._charge_lease_deadline = first.charge_lease_deadline
     controller._bonus_lease_fingerprint = _bonus_fingerprint(first, NOW)
+    hass.states.async_set(
+        controller.config.tariff.import_rates_entity_id, "available",
+        {"dispatch_source_entity_id": "binary_sensor.dispatch"},
+    )
+    hass.states.async_set("binary_sensor.dispatch", dispatch_state)
 
     with (
         patch(
             "custom_components.house_battery_control.controller.read_state",
-            return_value=observation(),
+            return_value=observation(enabled=key, time_state="12:00-12:15", target_state="100"),
         ),
         patch(
             "custom_components.house_battery_control.controller.build_plan",
@@ -848,7 +855,7 @@ async def test_fresh_controller_reconstructs_ephemeral_bonus_lease_and_expires_i
     solis.stop.assert_awaited_once()
 
 
-async def test_explicit_dispatch_off_is_withdrawal_but_zero_ev_power_is_not(
+async def test_withdrawn_bonus_rate_stops_charge_even_while_dispatch_is_on(
     hass: HomeAssistant,
 ) -> None:
     controller = Controller(hass, config())
@@ -860,11 +867,18 @@ async def test_explicit_dispatch_off_is_withdrawal_but_zero_ev_power_is_not(
         "available",
         {"dispatch_source_entity_id": "binary_sensor.dispatch"},
     )
-    hass.states.async_set("binary_sensor.dispatch", "off")
-    assert controller._bonus_dispatch_is_off()
-    with patch(
-        "custom_components.house_battery_control.controller.read_state",
-        return_value=observation(enabled=key),
+    hass.states.async_set("binary_sensor.dispatch", "on")
+    controller._bonus_lease_fingerprint = ("previously-authorized-bonus-rate",)
+    with (
+        patch(
+            "custom_components.house_battery_control.controller.read_state",
+            return_value=observation(enabled=key),
+        ),
+        patch(
+            "custom_components.house_battery_control.controller.build_plan",
+            AsyncMock(return_value=replace(plan(), current_cheap_window=None, intent=None)),
+        ),
+        patch.object(Controller, "_now", return_value=NOW),
     ):
         await controller._reconcile()
     solis.stop.assert_awaited_once()

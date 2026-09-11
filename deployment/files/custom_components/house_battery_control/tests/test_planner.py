@@ -678,6 +678,7 @@ async def _build(
     coverage: CoverageStatus = CoverageStatus.COMPLETE,
     reserve_energy: Decimal = Decimal("5"),
     bonus: bool = False,
+    dispatch_state: str = "on",
     charge_lease_deadline: datetime | None = None,
     cycle_target_step: str | None = None,
     battery_reserve_step: str | None = None,
@@ -700,7 +701,7 @@ async def _build(
         ("0.30", CheapClassification.NOT_CHEAP, False),
     )
     if bonus:
-        hass.states.async_set(DISPATCH_SOURCE, "on")
+        hass.states.async_set(DISPATCH_SOURCE, dispatch_state)
     exports = export_rates_override or _export()
     windows = (
         _result(
@@ -849,6 +850,15 @@ async def test_battery_reserve_capability_does_not_quantize_slot_target(hass) ->
     assert result.control_reserve_soc_percent == Decimal("17")
     assert result.intent is not None
     assert result.intent.segments[0].target_soc == Decimal("17")
+
+
+@pytest.mark.asyncio
+async def test_adjusted_bonus_rate_authorizes_charge_after_dispatch_turns_off(hass) -> None:
+    result = await _build(hass, cheap=True, bonus=True, dispatch_state="off")
+    assert result.issue is None
+    assert result.action is StrategyAction.CHEAP_CHARGE
+    assert result.intent is not None
+    assert result.intent.end == NOW + BONUS_CHARGE_LEASE_DURATION
 
 
 @pytest.mark.asyncio

@@ -567,3 +567,19 @@ binary sensor was off. The retained direct-dispatch gate rejected the interval
 with `dispatch source is not on`. Dispatch state and adjusted tariff intervals
 have different semantics, so this veto is too restrictive. The gate was not
 changed in this deployment; its correction remains outstanding.
+
+### Bonus-rate correction prepared; deployment deferred
+
+The deployed controller was committed as `726c7fc`. Version 0.2.1 removes both
+the planner's direct-dispatch start veto and the controller's direct-dispatch
+stop path. Validated adjusted tariff intervals now remain authoritative after
+the EV dispatch turns off. Existing provenance, profitability, tariff-change
+reconciliation and bounded bonus lease checks remain in place.
+
+Regression tests reproduced both failures before the fix. The focused battery
+suite passes 172 tests afterward, including continued charging with dispatch
+off and stopping after tariff withdrawal while dispatch remains on. This fix
+is **not deployed**: the user requested batching further deployments so the
+static off-peak overnight commissioning run remains undisturbed. Live HA still
+runs the 0.2.0 code from `726c7fc`; deploying 0.2.1 and verifying a bonus interval
+remain pending.

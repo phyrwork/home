@@ -1186,14 +1186,10 @@ async def build_plan(
             None,
         )
 
-        # A bonus interval is authoritative only while the configured
-        # dispatch source is directly on.  The fused entity remains the
-        # dependency that wakes this controller when the source changes;
-        # last_reported is deliberately not used as a heartbeat deadline.
-        if _window_has_bonus_at(current_window, now):
-            dispatch_state = _state(hass, dispatch_source.source)
-            if dispatch_state.state != "on":
-                raise ValueError("dispatch source is not on")
+        # Validated adjusted rates authorize bonus charging. The EV dispatch
+        # can end before the adjusted tariff interval does, so its binary
+        # state must not veto that rate. Provenance and bounded lease checks
+        # still apply; a changed tariff is reconciled by the controller.
 
         next_standard_cheap = _next_standard_cheap_start(import_rates, now)
         reserve_end = next_standard_cheap if next_standard_cheap is not None else horizon_end

@@ -256,13 +256,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             )
             return
 
-        if self._bonus_dispatch_is_off():
-            for key in self._bonus_charge_keys:
-                self._add_stop(key, now, monotonic)
-            if debt := self._due_stop(monotonic):
-                await self._attempt_stop(debt, observation, now, monotonic)
-            return
-
         self._planning_state = planning_observation(observation, self._planning_state, self.config.solis)
         if not self.solis.control_issues(observation):
             self._last_controls_read_at = observation.controls_reported_at
@@ -482,17 +475,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             )
         except ValueError:
             return False
-
-    def _bonus_dispatch_is_off(self) -> bool:
-        """Return true only for an explicitly reported dispatch ``off``."""
-
-        if not self._bonus_charge_keys:
-            return False
-        state = self.hass.states.get(self.config.tariff.import_rates_entity_id)
-        attributes = getattr(state, "attributes", {})
-        source_id = attributes.get("dispatch_source_entity_id")
-        source = self.hass.states.get(source_id) if isinstance(source_id, str) else None
-        return getattr(source, "state", None) == "off"
 
     def _retire_proven_stops(self, observation: SolisState) -> None:
         for key, debt in tuple(self._stop_debts.items()):
