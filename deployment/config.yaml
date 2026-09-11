@@ -194,7 +194,7 @@
         component_name: Octopus Energy
         component_full_name: BottlecapDave/HomeAssistant-OctopusEnergy
         component_domain: octopus_energy
-        component_version: "v18.3.3"
+        component_version: "v19.0.1"
 
     - role: custom_component
       vars:
@@ -216,14 +216,14 @@
         component_name: Pirate Weather
         component_full_name: Pirate-Weather/pirate-weather-ha
         component_domain: pirateweather
-        component_version: "v1.8.9"
+        component_version: "v1.9.2"
 
     - role: custom_component
       vars:
         component_name: ZHA Toolkit
         component_full_name: mdeweerd/zha-toolkit
         component_domain: zha_toolkit
-        component_version: "v1.1.38"
+        component_version: "v1.2.2"
 
     - role: custom_component
       vars:
@@ -237,21 +237,21 @@
         component_name: Waste Collection Schedule
         component_full_name: mampfes/hacs_waste_collection_schedule
         component_domain: waste_collection_schedule
-        component_version: "v2.25.0"
+        component_version: "v2.32.0"
 
     - role: custom_component
       vars:
         component_name: NissanConnect
         component_full_name: dan-r/HomeAssistant-NissanConnect
         component_domain: nissan_connect
-        component_version: "v0.7.5"
+        component_version: "v0.8.2"
 
     - role: custom_component
       vars:
         component_name: Versatile Thermostat
         component_full_name: jmcollin78/versatile_thermostat
         component_domain: versatile_thermostat
-        component_version: "10.0.1"
+        component_version: "10.2.0"
 
   tasks:
     - name: create zigpy ota directory
