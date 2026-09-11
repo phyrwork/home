@@ -1,8 +1,8 @@
 - id: house_battery_stale_heartbeat_sentinel
   alias: "House battery stale heartbeat sentinel"
   description: >-
-    Select Self-Use only when the controller heartbeat remains stale after the
-    Home Assistant startup grace period.
+    Notify when the controller heartbeat is stale after the startup grace
+    period. Never change inverter settings. Dismiss the notice on recovery.
   mode: single
   max_exceeded: silent
   trigger:
@@ -12,17 +12,6 @@
     - platform: time_pattern
       minutes: "/1"
       id: every_minute
-  condition:
-    - condition: or
-      conditions:
-        - condition: trigger
-          id: startup_grace
-        - condition: template
-          value_template: >-
-            {% set heartbeat = as_timestamp(states('sensor.house_battery_control_heartbeat'), default=none) %}
-            {{ heartbeat is none
-               or (as_timestamp(now()) - heartbeat) > 180
-               or (heartbeat - as_timestamp(now())) > 60 }}
   action:
     - choose:
         - conditions:
@@ -31,17 +20,24 @@
           sequence:
             - delay:
                 minutes: 10
-    - condition: template
-      value_template: >-
-        {% set heartbeat = as_timestamp(states('sensor.house_battery_control_heartbeat'), default=none) %}
-        {{ heartbeat is none
-           or (as_timestamp(now()) - heartbeat) > 180
-           or (heartbeat - as_timestamp(now())) > 60 }}
-    - condition: template
-      value_template: >-
-        {{ states('select.garage_inverter_control_storage_mode') != 'Self-Use' }}
-    - service: select.select_option
-      target:
-        entity_id: select.garage_inverter_control_storage_mode
-      data:
-        option: Self-Use
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >-
+                {% set heartbeat = as_timestamp(states('sensor.house_battery_control_heartbeat'), default=none) %}
+                {{ heartbeat is none
+                   or (as_timestamp(now()) - heartbeat) > 180
+                   or (heartbeat - as_timestamp(now())) > 60 }}
+          sequence:
+            - service: persistent_notification.create
+              data:
+                notification_id: house_battery_stale_heartbeat
+                title: House battery controller is not responding
+                message: >-
+                  The controller heartbeat is stale. Native inverter schedules
+                  may remain armed and repeat daily. Check the controller and
+                  its pending slot cleanup before assuming schedules have stopped.
+      default:
+        - service: persistent_notification.dismiss
+          data:
+            notification_id: house_battery_stale_heartbeat

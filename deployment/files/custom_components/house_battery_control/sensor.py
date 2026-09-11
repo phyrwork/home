@@ -42,6 +42,18 @@ class _SnapshotSensor(CoordinatorEntity[Controller], SensorEntity):
     def available(self) -> bool:
         return super().available and self.coordinator.data is not None
 
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data
+        if data is None:
+            return None
+        return {
+            "telemetry_timestamp": None if data.telemetry_timestamp is None else data.telemetry_timestamp.isoformat(),
+            "telemetry_age_seconds": None if data.telemetry_timestamp is None else max(0, (data.heartbeat_at - data.telemetry_timestamp).total_seconds()),
+            "telemetry_stale": data.telemetry_stale,
+            "schedule_confirmed_at": None if data.schedule_confirmed_at is None else data.schedule_confirmed_at.isoformat(),
+        }
+
 
 class HeartbeatSensor(_SnapshotSensor):
     _attr_name = "House Battery Control Heartbeat"
@@ -58,10 +70,11 @@ class HeartbeatSensor(_SnapshotSensor):
         if data is None:
             return None
         return {
+            **super().extra_state_attributes,
             "last_healthy_at": None if data.last_healthy_at is None else data.last_healthy_at.isoformat(),
             "last_error": data.last_error,
             "degraded_since": None if data.degraded_since is None else data.degraded_since.isoformat(),
-            "fail_safe_since": None if data.fail_safe_since is None else data.fail_safe_since.isoformat(),
+            "last_controls_read_at": None if data.last_controls_read_at is None else data.last_controls_read_at.isoformat(),
         }
 
 
@@ -90,6 +103,7 @@ class ActionSensor(_SnapshotSensor):
         if data is None:
             return None
         return {
+            **super().extra_state_attributes,
             "reason": data.reason,
             "cycle_state": data.cycle_state.value,
             "cycle_deadline": None if data.cycle_deadline is None else data.cycle_deadline.isoformat(),
@@ -161,6 +175,7 @@ class ReserveTargetSensor(_ReserveEnergySensor):
         if data is None:
             return None
         return {
+            **super().extra_state_attributes,
             "control_reserve_soc_percent": _float(data.control_reserve_soc_percent),
             "control_reserve_energy_kwh": _float(data.control_reserve_energy_kwh),
         }
@@ -211,6 +226,7 @@ class ReserveBalanceSensor(_ReserveEnergySensor):
         if data is None:
             return None
         return {
+            **super().extra_state_attributes,
             "control_reserve_soc_percent": _float(data.control_reserve_soc_percent),
             "control_reserve_energy_kwh": _float(data.control_reserve_energy_kwh),
             "control_reserve_balance_kwh": _float(data.control_reserve_balance_kwh),

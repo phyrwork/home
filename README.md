@@ -4,6 +4,8 @@ My Home Assistant deployment.
 
 ## Features
 
+House battery behavior and commissioning requirements: [native TOU control](docs/house-battery-control.md).
+
 ### Bindicator
 
 Daily at 4pm, query upcoming refuse collections using local council service API and

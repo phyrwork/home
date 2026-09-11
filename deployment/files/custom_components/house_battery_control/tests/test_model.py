@@ -74,7 +74,6 @@ def test_enums_retain_the_runtime_surface() -> None:
     assert set(ControllerHealth) == {
         ControllerHealth.HEALTHY,
         ControllerHealth.DEGRADED,
-        ControllerHealth.FAIL_SAFE,
     }
     assert set(SlotOwner) == {
         SlotOwner.CHEAP_CHARGING,

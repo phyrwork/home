@@ -1,5 +1,8 @@
 # House Battery Control — Working Notes
 
+> Historical design/evidence. The current runtime contract is [native TOU schedule control](../docs/house-battery-control.md), updated 11 September 2026. Earlier Self-Use fallbacks and peak-shaving handovers are superseded.
+
+
 Updated: 2026-07-04
 
 ## Goal

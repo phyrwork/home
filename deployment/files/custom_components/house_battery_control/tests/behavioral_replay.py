@@ -282,14 +282,14 @@ def _reconcile(
             observed,
             plan.intent,
             battery_reserve_soc_percent=Decimal("10"),
-            peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
+
         )
         if change is None:
             assert adapter.intent_matches(
                 observed,
                 plan.intent,
                 battery_reserve_soc_percent=Decimal("10"),
-                peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
+
             )
             return tuple(operations)
         revise(states, change)

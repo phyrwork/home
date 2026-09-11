@@ -1000,7 +1000,7 @@ async def test_reserve_export_uses_one_percent_soc_uncertainty_band(hass) -> Non
     assert at_boundary.reserve_energy_kwh == Decimal("5.4649418")
     assert at_boundary.control_reserve_soc_percent == Decimal("17")
     assert at_boundary.control_reserve_energy_kwh == Decimal("5.466112")
-    assert at_boundary.action is StrategyAction.RESERVE_FOLLOW
+    assert at_boundary.action is StrategyAction.IDLE
     assert at_boundary.intent is None
     assert above_boundary.action is StrategyAction.RESERVE_DISCHARGE
     assert above_boundary.intent is not None

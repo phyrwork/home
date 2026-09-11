@@ -60,7 +60,7 @@ def snapshot() -> Snapshot:
         battery_power_kw=Decimal("-0.2"),
         last_healthy_at=NOW,
         degraded_since=NOW - timedelta(minutes=2),
-        fail_safe_since=NOW - timedelta(minutes=1),
+        telemetry_timestamp=NOW - timedelta(minutes=1),
         pending_operation="stop slot 2 discharge",
         attempt=3,
         next_retry_at=NOW + timedelta(seconds=60),
@@ -104,7 +104,7 @@ def test_sensors_report_disabled_snapshot(hass: HomeAssistant) -> None:
     assert action.extra_state_attributes["next_retry_at"] == (NOW + timedelta(seconds=60)).isoformat()
     heartbeat = HeartbeatSensor(instance)
     assert heartbeat.extra_state_attributes["degraded_since"] == (NOW - timedelta(minutes=2)).isoformat()
-    assert heartbeat.extra_state_attributes["fail_safe_since"] == (NOW - timedelta(minutes=1)).isoformat()
+    assert heartbeat.extra_state_attributes["telemetry_timestamp"] == (NOW - timedelta(minutes=1)).isoformat()
     assert ReserveSensor(instance).native_value == 10.0
 
     energy = BatteryEnergySensor(instance)
@@ -117,15 +117,15 @@ def test_sensors_report_disabled_snapshot(hass: HomeAssistant) -> None:
     assert reserve_usable.native_value == 9.130318
     assert reserve_forecast.native_value == 7.130318
     assert reserve_balance.native_value == 5.338802
-    assert reserve_target.extra_state_attributes == {
+    assert reserve_target.extra_state_attributes.items() >= {
         "control_reserve_soc_percent": 17.0,
         "control_reserve_energy_kwh": 5.466112,
-    }
-    assert reserve_balance.extra_state_attributes == {
+    }.items()
+    assert reserve_balance.extra_state_attributes.items() >= {
         "control_reserve_soc_percent": 17.0,
         "control_reserve_energy_kwh": 5.466112,
         "control_reserve_balance_kwh": 12.218368,
-    }
+    }.items()
     assert [
         sensor.unique_id
         for sensor in (

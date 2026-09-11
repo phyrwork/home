@@ -25,7 +25,6 @@ from .model import (
     MINIMUM_SOC_PERCENT,
     SlotDirection,
     SlotOwner,
-    StorageMode,
     StrategyAction,
 )
 from .planner import RESERVE_SOC_UNCERTAINTY_PERCENT, Plan, build_plan
@@ -38,6 +37,8 @@ from .solis import (
     WriteResult,
     allocate_intent,
     read_state,
+    telemetry_is_fresh,
+    planning_observation,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ BACKSTOP_INTERVAL = timedelta(minutes=1)
 # another 30 seconds in its final request. Keep one outer bound with room for
 # the adapter's 15-second readback, below the three-minute crash sentinel.
 WRITE_DEADLINE = timedelta(seconds=80)
-IMPORTANT_STOP_FAILSAFE_TIMEOUT = timedelta(minutes=15)
+SHUTDOWN_TIMEOUT = timedelta(seconds=30)
 START_RETRY_DELAYS = (timedelta(0), timedelta(seconds=15), timedelta(seconds=60))
 MAXIMUM_RETRY_DELAY = timedelta(seconds=60)
 AMBIGUOUS_OUTCOMES = frozenset(
@@ -83,7 +84,10 @@ class Snapshot:
     last_error: str | None = None
     actuation_message: str | None = None
     degraded_since: datetime | None = None
-    fail_safe_since: datetime | None = None
+    telemetry_timestamp: datetime | None = None
+    telemetry_stale: bool = True
+    last_controls_read_at: datetime | None = None
+    schedule_confirmed_at: datetime | None = None
     pending_operation: str | None = None
     attempt: int | None = None
     next_retry_at: datetime | None = None
@@ -96,9 +100,6 @@ class StopDebt:
     next_attempt: float
     next_retry_at: datetime
     ambiguous: bool = False
-    first_seen: float = 0.0
-    fail_safe_deadline: float = 0.0
-    peak_shaving_handover_attempted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +109,6 @@ class StartRetry:
     attempt: int
     next_attempt: float
     next_retry_at: datetime
-    suppressed: bool = False
 
 
 class Controller(DataUpdateCoordinator[Snapshot]):
@@ -132,13 +132,11 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         self._last_plan: Plan | None = None
         self._last_healthy_at: datetime | None = None
         self._degraded_since: datetime | None = None
-        self._fail_safe_since: datetime | None = None
-        self._fail_safe_latched = False
-        self._mode_attempt = 0
-        self._mode_next_attempt = 0.0
-        self._mode_next_retry_at: datetime | None = None
+        self._planning_state: SolisState | None = None
+        self._last_controls_read_at: datetime | None = None
+        self._schedule_confirmed_at: datetime | None = None
+        self._confirmed_plan: Plan | None = None
         self._stop_debts: dict[SlotKey, StopDebt] = {}
-        self._used_slots: set[SlotKey] = set()
         self._owned_expiry: dict[SlotKey, datetime] = {}
         self._start_retry: StartRetry | None = None
         self._dirty = False
@@ -206,17 +204,15 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 except Exception as exc:
                     _LOGGER.exception("House battery reconciliation invariant failed")
                     now = self._now()
-                    self._latch_fail_safe(now)
                     self._publish(
                         now,
-                        ControllerHealth.FAIL_SAFE,
+                        ControllerHealth.DEGRADED,
                         None,
                         "hard controller invariant failed",
                         None,
                         last_error=f"{type(exc).__name__}: {exc}",
-                        pending_operation="select Self-Use",
                     )
-                    self._dirty = True
+                    self._dirty = False
                 self._schedule_wakeup()
         finally:
             self._worker_task = None
@@ -224,25 +220,12 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 self.trigger()
 
     async def _reconcile(self) -> None:
+        await self.solis.refresh_pending(deadline=self._monotonic() + WRITE_DEADLINE.total_seconds())
         now = self._now()
         monotonic = self._monotonic()
         observation = read_state(self.hass, self.config.solis, now=now)
         self._discover_unconditional_stops(observation, now, monotonic)
         self._retire_proven_stops(observation)
-
-        if (
-            not self._fail_safe_latched
-            and any(
-                debt.fail_safe_deadline > 0
-                and monotonic >= debt.fail_safe_deadline
-                for debt in self._stop_debts.values()
-            )
-        ):
-            self._latch_fail_safe(now)
-
-        if self._fail_safe_latched:
-            await self._reconcile_fail_safe(observation, now, monotonic)
-            return
 
         if debt := self._due_stop(monotonic):
             await self._attempt_stop(debt, observation, now, monotonic)
@@ -280,20 +263,14 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 await self._attempt_stop(debt, observation, now, monotonic)
             return
 
-        if observation.health is not ControllerHealth.HEALTHY:
-            self._degrade(
-                now,
-                None,
-                "Solis telemetry or controls are temporarily unavailable",
-                observation,
-                last_error=_issues_text(observation),
-            )
-            return
-
+        self._planning_state = planning_observation(observation, self._planning_state, self.config.solis)
+        if not self.solis.control_issues(observation):
+            self._last_controls_read_at = observation.controls_reported_at
+        fresh_soc = telemetry_is_fresh(observation, self.config.solis)
         plan = await build_plan(
             self.hass,
             self.config,
-            observation,
+            self._planning_state,
             now=now,
             cycle_state=self._cycle_state,
             cycle_deadline=self._cycle_deadline,
@@ -311,6 +288,8 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             return
         if plan.reserve_soc_percent is None:
             raise ValueError("valid plan has no reserve SOC")
+        if not fresh_soc:
+            plan = self._retain_armed_schedule(plan, now)
         self._last_plan = plan
 
         fingerprint = _bonus_fingerprint(plan, now)
@@ -320,6 +299,16 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 self._add_stop(key, now, monotonic)
             if debt := self._due_stop(monotonic):
                 await self._attempt_stop(debt, observation, now, monotonic)
+            return
+
+        if control_issues := self.solis.control_issues(observation):
+            self._degrade(now, plan, "inverter reads unavailable; retaining tariff schedule",
+                          observation, last_error="; ".join(issue.message for issue in control_issues))
+            return
+
+        if not self.solis.prerequisites_match(observation, self.config.battery.minimum_soc_percent):
+            self._degrade(now, plan, "commissioned settings require correction", observation,
+                          last_error="Expected Feed-In Priority, Allow Grid Charging and Battery Reserve on, reserve at 10%")
             return
 
         for key in self.solis.conflicting_enabled_keys(
@@ -348,7 +337,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             observation,
             plan.intent,
             battery_reserve_soc_percent=self.config.battery.minimum_soc_percent,
-            peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
             preserve_standard_cheap_slot=preserve_standard_cheap_slot,
         )
         if change is not None:
@@ -363,7 +351,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             observation,
             plan.intent,
             battery_reserve_soc_percent=self.config.battery.minimum_soc_percent,
-            peak_shaving=plan.action is StrategyAction.RESERVE_FOLLOW,
             preserve_standard_cheap_slot=preserve_standard_cheap_slot,
         ):
             self._start_retry = None
@@ -376,15 +363,23 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             return
 
         self._reconstruct_bonus_lease(plan, observation, fingerprint)
+        self._owned_expiry.update(self.solis.intent_expiries(
+            observation, plan.intent, preserve_standard_cheap_slot=preserve_standard_cheap_slot
+        ))
         self._start_retry = None
         self._cycle_state = plan.next_cycle_state
         self._cycle_deadline = plan.cycle_deadline
         self._cycle_observation_gate = plan.cycle_observation_gate
         if plan.action is StrategyAction.CHEAP_CHARGE and plan.charge_lease_deadline is not None:
             self._charge_lease_deadline = plan.charge_lease_deadline
-        if await self._housekeep_one(observation, plan, now, monotonic):
+        self._confirmed_plan = plan
+        self._schedule_confirmed_at = now
+        if fresh_soc:
+            self._last_healthy_at = now
+        else:
+            self._degrade(now, plan, "schedule confirmed; telemetry is stale", observation,
+                          last_error=_issues_text(observation))
             return
-        self._last_healthy_at = now
         self._publish(
             now,
             ControllerHealth.HEALTHY,
@@ -393,6 +388,42 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             observation,
         )
 
+    def _retain_armed_schedule(self, plan: Plan, now: datetime) -> Plan:
+        """Retain authorized discharge legs without making new SOC decisions."""
+        confirmed = self._confirmed_plan
+        segments = () if plan.intent is None else plan.intent.segments
+        previous = () if confirmed is None or confirmed.intent is None else confirmed.intent.segments
+        cheap = plan.current_cheap_window
+        retained = tuple(
+            segment for segment in previous
+            if _instant(segment.expiry) > _instant(now)
+            and (
+                (segment.owner is SlotOwner.RESERVE_EXPORT and cheap is None)
+                or (segment.owner is not SlotOwner.RESERVE_EXPORT and cheap is not None
+                    and _instant(segment.end) <= _instant(cheap.end))
+            )
+        )
+        # A confirmed cycle pair hands over on the inverter clock. Do not
+        # replace its armed recharge with a newly calculated immediate slot.
+        if confirmed is not None and confirmed.action in (
+            StrategyAction.CYCLE_DISCHARGE, StrategyAction.CYCLE_RECHARGE
+        ) and retained:
+            active = next((s for s in retained if _instant(s.start) <= _instant(now) < _instant(s.end)), retained[0])
+            discharge = active.direction is SlotDirection.DISCHARGE
+            return replace(plan, intent=LogicalIntent(retained),
+                           action=StrategyAction.CYCLE_DISCHARGE if discharge else StrategyAction.CYCLE_RECHARGE,
+                           next_cycle_state=CycleState.CYCLE_DISCHARGING if discharge else CycleState.CYCLE_RECHARGING,
+                           cycle_deadline=active.end)
+        charge = tuple(s for s in segments if s.direction is SlotDirection.CHARGE)
+        discharge = tuple(s for s in retained if s.direction is SlotDirection.DISCHARGE)
+        kept = charge if charge else discharge
+        return replace(plan, intent=LogicalIntent(kept) if kept else None,
+                       action=StrategyAction.CHEAP_CHARGE if charge else (
+                           StrategyAction.RESERVE_DISCHARGE if discharge else StrategyAction.IDLE),
+                       next_cycle_state=CycleState.CHARGING if charge else (
+                           CycleState.RESERVE_DISCHARGING if discharge else CycleState.IDLE),
+                       cycle_deadline=None)
+
     def _discover_unconditional_stops(
         self,
         observation: SolisState,
@@ -400,20 +431,20 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         monotonic: float,
     ) -> None:
         telemetry = observation.telemetry
-        soc = None if telemetry is None else telemetry.state_of_charge_percent
+        soc = telemetry.state_of_charge_percent if telemetry_is_fresh(observation, self.config.solis) else None
+        for key, expiry in self._owned_expiry.items():
+            if _instant(now) >= _instant(expiry):
+                self._add_stop(key, now, monotonic)
         for slot in observation.slots:
             for direction in (slot.charge, slot.discharge):
                 if direction.enabled is not True:
                     continue
-                expiry = self._owned_expiry.get(direction.key)
-                if expiry is not None and _instant(now) >= _instant(expiry):
-                    self._add_stop(direction.key, now, monotonic)
                 if (
                     soc is not None
                     and direction.key.direction is SlotDirection.DISCHARGE
                     and soc <= Decimal(MINIMUM_SOC_PERCENT)
                 ):
-                    self._add_stop(direction.key, now, monotonic, bypass_peak_handover=True)
+                    self._add_stop(direction.key, now, monotonic)
                 target = None if direction.target_soc is None else direction.target_soc.current_value
                 if soc is None or target is None:
                     continue
@@ -479,32 +510,10 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             self._charge_lease_deadline = None
             self._bonus_lease_fingerprint = None
 
-    def _add_stop(
-        self,
-        key: SlotKey,
-        now: datetime,
-        monotonic: float,
-        *,
-        bypass_peak_handover: bool = False,
-    ) -> None:
+    def _add_stop(self, key: SlotKey, now: datetime, monotonic: float) -> None:
         self.config.solis.direction(key)
         if key not in self._stop_debts:
-            self._stop_debts[key] = StopDebt(
-                key,
-                0,
-                monotonic,
-                now,
-                first_seen=monotonic,
-                fail_safe_deadline=(
-                    monotonic + IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds()
-                ),
-                peak_shaving_handover_attempted=bypass_peak_handover,
-            )
-        elif bypass_peak_handover and not self._stop_debts[key].peak_shaving_handover_attempted:
-            self._stop_debts[key] = replace(
-                self._stop_debts[key],
-                peak_shaving_handover_attempted=True,
-            )
+            self._stop_debts[key] = StopDebt(key, 0, monotonic, now)
 
     def _due_stop(self, monotonic: float) -> StopDebt | None:
         due = [debt for debt in self._stop_debts.values() if debt.next_attempt <= monotonic]
@@ -517,13 +526,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         now: datetime,
         monotonic: float,
     ) -> None:
-        if (
-            not self._fail_safe_latched
-            and debt.fail_safe_deadline > 0
-            and monotonic >= debt.fail_safe_deadline
-        ):
-            self._latch_fail_safe(now)
-            self._dirty = True
         if debt.next_attempt > monotonic:
             self._degrade(
                 now,
@@ -539,43 +541,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         if direction.enabled is False and not debt.ambiguous:
             self._stop_debts.pop(debt.key, None)
             self._dirty = True
-            return
-        # Forced-slot exits perform at most one ephemeral Peak Shaving-on
-        # attempt during this controller lifetime for the active debt. A
-        # restart may repeat it; no restart marker or persistence is needed.
-        # A failed/unknown attempt is not a prerequisite for the next due
-        # pass, so the stop cannot be held hostage by this optional handover.
-        if (
-            not debt.peak_shaving_handover_attempted
-            and not self._fail_safe_latched
-            and direction.owner is not None
-            and not (
-                observation.telemetry is not None
-                and observation.telemetry.state_of_charge_percent <= Decimal(MINIMUM_SOC_PERCENT)
-            )
-            and observation.grid_peak_shaving in (None, False)
-        ):
-            debt = replace(debt, peak_shaving_handover_attempted=True)
-            self._stop_debts[debt.key] = debt
-            if (
-                observation.grid_peak_shaving is False
-                and observation.revision(self.config.solis.persistent.grid_peak_shaving_entity_id) is not None
-            ):
-                try:
-                    await self.solis.set_peak_shaving(
-                        True,
-                        deadline=self._monotonic() + WRITE_DEADLINE.total_seconds(),
-                    )
-                except asyncio.CancelledError:
-                    self._dirty = True
-                    raise
-            self._dirty = True
-            self._degrade(
-                now,
-                self._last_plan,
-                "Peak Shaving handover attempted before important slot stop",
-                observation,
-            )
             return
         self._degrade(
             now,
@@ -675,16 +640,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         if retry is None or retry.generation != generation:
             retry = StartRetry(generation, monotonic, 0, monotonic, now)
             self._start_retry = retry
-        if retry.suppressed:
-            self._degrade(
-                now,
-                plan,
-                "best-effort start is suppressed for this unchanged generation",
-                observation,
-                pending_operation=f"start {change.entity_id}",
-                attempt=retry.attempt,
-            )
-            return
         if retry.next_attempt > monotonic:
             self._degrade(
                 now,
@@ -696,17 +651,17 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 next_retry_at=retry.next_retry_at,
             )
             return
+        # Record dated authority before dispatch: even a timed-out enable may
+        # have reached the inverter and must be cleaned up at its expiry.
+        self._remember_slot_attempt(
+            change, plan.intent, charge_lease_deadline=plan.charge_lease_deadline,
+            bonus_fingerprint=_bonus_fingerprint(plan, now),
+        )
         result = await self.solis.apply(
             change,
             deadline=self._monotonic() + WRITE_DEADLINE.total_seconds(),
         )
         if result.success:
-            self._remember_enabled_slot(
-                change,
-                plan.intent,
-                charge_lease_deadline=plan.charge_lease_deadline,
-                bonus_fingerprint=_bonus_fingerprint(plan, now),
-            )
             self._start_retry = None
             self._dirty = True
             self._degrade(
@@ -718,18 +673,13 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             )
             return
         attempt = retry.attempt + 1
-        if attempt >= len(START_RETRY_DELAYS):
-            self._start_retry = replace(retry, attempt=attempt, suppressed=True)
-            next_retry_at = None
+        if attempt < len(START_RETRY_DELAYS):
+            next_attempt = max(monotonic, retry.origin + START_RETRY_DELAYS[attempt].total_seconds())
         else:
-            next_attempt = retry.origin + START_RETRY_DELAYS[attempt].total_seconds()
-            next_retry_at = now + timedelta(seconds=max(0.0, next_attempt - monotonic))
-            self._start_retry = replace(
-                retry,
-                attempt=attempt,
-                next_attempt=next_attempt,
-                next_retry_at=next_retry_at,
-            )
+            next_attempt = monotonic + MAXIMUM_RETRY_DELAY.total_seconds()
+        next_retry_at = now + timedelta(seconds=max(0.0, next_attempt - monotonic))
+        self._start_retry = replace(retry, attempt=attempt, next_attempt=next_attempt,
+                                    next_retry_at=next_retry_at)
         self._degrade(
             now,
             plan,
@@ -742,7 +692,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             next_retry_at=next_retry_at,
         )
 
-    def _remember_enabled_slot(
+    def _remember_slot_attempt(
         self,
         change: SolisChange,
         intent: LogicalIntent | None,
@@ -760,7 +710,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         )
         for key, segment in allocated:
             if self.config.solis.direction(key).enable_entity_id == change.entity_id:
-                self._used_slots.add(key)
                 self._owned_expiry[key] = segment.expiry
                 if (
                     charge_lease_deadline is not None
@@ -802,107 +751,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         if self._bonus_charge_keys:
             self._charge_lease_deadline = plan.charge_lease_deadline
             self._bonus_lease_fingerprint = fingerprint
-
-    async def _housekeep_one(
-        self,
-        observation: SolisState,
-        plan: Plan,
-        now: datetime,
-        monotonic: float,
-    ) -> bool:
-        del monotonic
-        for key in sorted(self._used_slots, key=lambda item: (item.physical_slot, item.direction.value)):
-            if key in self._stop_debts:
-                continue
-            change = self.solis.next_housekeeping_change(observation, key)
-            if change is None:
-                if observation.direction(key).enabled is False:
-                    self._used_slots.discard(key)
-                continue
-            result = await self.solis.apply(
-                change,
-                deadline=self._monotonic() + WRITE_DEADLINE.total_seconds(),
-            )
-            if result.success:
-                self._dirty = True
-            self._last_healthy_at = now
-            self._publish(
-                now,
-                ControllerHealth.HEALTHY,
-                plan,
-                "best-effort used-slot housekeeping",
-                observation,
-                last_error=None if result.success else result.message,
-                actuation=result,
-                pending_operation=f"housekeep slot {key.physical_slot} {key.direction.value}",
-            )
-            return True
-        return False
-
-    async def _reconcile_fail_safe(
-        self,
-        observation: SolisState,
-        now: datetime,
-        monotonic: float,
-    ) -> None:
-        # Important stops make progress independently of mode read/write
-        # reliability. Shutdown alone requires strict Self-Use-first ordering.
-        if debt := self._due_stop(monotonic):
-            await self._attempt_stop(debt, observation, now, monotonic)
-            return
-        mode = None if observation.persistent is None else observation.persistent.storage_mode
-        if mode != StorageMode.SELF_USE.value:
-            if monotonic < self._mode_next_attempt:
-                self._publish(
-                    now,
-                    ControllerHealth.FAIL_SAFE,
-                    None,
-                    "latched fail-safe is awaiting Self-Use retry",
-                    observation,
-                    pending_operation="select Self-Use",
-                    attempt=self._mode_attempt,
-                    next_retry_at=self._mode_next_retry_at,
-                )
-                return
-            result = await self.solis.set_mode(
-                StorageMode.SELF_USE,
-                deadline=self._monotonic() + WRITE_DEADLINE.total_seconds(),
-            )
-            if result.success:
-                self._mode_attempt = 0
-                self._mode_next_attempt = monotonic
-                self._mode_next_retry_at = None
-                self._dirty = True
-            else:
-                delay = _stop_retry_delay(self._mode_attempt)
-                self._mode_attempt += 1
-                self._mode_next_attempt = monotonic + delay.total_seconds()
-                self._mode_next_retry_at = now + delay
-            self._publish(
-                now,
-                ControllerHealth.FAIL_SAFE,
-                None,
-                "latched fail-safe is selecting Self-Use",
-                observation,
-                last_error=None if result.success else result.message,
-                actuation=result,
-                pending_operation="select Self-Use",
-                attempt=self._mode_attempt,
-                next_retry_at=self._mode_next_retry_at,
-            )
-            return
-
-        debt = min(self._stop_debts.values(), key=lambda item: item.next_attempt) if self._stop_debts else None
-        self._publish(
-            now,
-            ControllerHealth.FAIL_SAFE,
-            None,
-            "latched mode-only Self-Use fail-safe",
-            observation,
-            pending_operation=None if debt is None else _stop_text(debt.key),
-            attempt=None if debt is None else debt.attempt,
-            next_retry_at=None if debt is None else debt.next_retry_at,
-        )
 
     def _start_generation(
         self,
@@ -963,14 +811,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
     ) -> None:
         if self._degraded_since is None:
             self._degraded_since = now
-        health = ControllerHealth.FAIL_SAFE if self._fail_safe_latched else ControllerHealth.DEGRADED
-        self._publish(now, health, plan, reason, observation, **kwargs)
-
-    def _latch_fail_safe(self, now: datetime) -> None:
-        if not self._fail_safe_latched:
-            self._fail_safe_latched = True
-            self._fail_safe_since = now
-            self._start_retry = None
+        self._publish(now, ControllerHealth.DEGRADED, plan, reason, observation, **kwargs)
 
     def _publish(
         self,
@@ -986,12 +827,17 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         attempt: int | None = None,
         next_retry_at: datetime | None = None,
     ) -> None:
-        if health is ControllerHealth.HEALTHY and not self._fail_safe_latched:
+        if health is ControllerHealth.HEALTHY:
             self._degraded_since = None
-        telemetry = None if observation is None else observation.telemetry
-        actual = None if plan is None else plan.battery_energy_kwh
-        if actual is None:
-            actual = _actual_energy(self.config, telemetry)
+        fresh = observation is not None and telemetry_is_fresh(observation, self.config.solis)
+        telemetry = observation.telemetry if fresh else (
+            None if self._planning_state is None else self._planning_state.telemetry
+        )
+        if plan is None or plan.issue is not None:
+            plan = self._last_plan
+        actual = _actual_energy(self.config, telemetry)
+        if actual is None and plan is not None:
+            actual = plan.battery_energy_kwh
         snapshot = Snapshot(
             heartbeat_at=now,
             health=health,
@@ -1003,10 +849,10 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             reserve_soc_percent=None if plan is None else plan.reserve_soc_percent,
             battery_energy_kwh=actual,
             reserve_target_energy_kwh=None if plan is None else plan.reserve_energy_kwh,
-            reserve_balance_kwh=None if plan is None else plan.reserve_balance_kwh,
+            reserve_balance_kwh=None if plan is None or actual is None or plan.reserve_energy_kwh is None else actual - plan.reserve_energy_kwh,
             control_reserve_soc_percent=None if plan is None else plan.control_reserve_soc_percent,
             control_reserve_energy_kwh=None if plan is None else plan.control_reserve_energy_kwh,
-            control_reserve_balance_kwh=None if plan is None else plan.control_reserve_balance_kwh,
+            control_reserve_balance_kwh=None if plan is None or actual is None or plan.control_reserve_energy_kwh is None else actual - plan.control_reserve_energy_kwh,
             state_of_charge_percent=None if telemetry is None else telemetry.state_of_charge_percent,
             battery_power_kw=None if telemetry is None else telemetry.battery_power_kw,
             current_cheap_window=_window_text(None if plan is None else plan.current_cheap_window),
@@ -1015,7 +861,10 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             last_error=last_error,
             actuation_message=None if actuation is None else actuation.message,
             degraded_since=self._degraded_since,
-            fail_safe_since=self._fail_safe_since,
+            telemetry_timestamp=None if telemetry is None else telemetry.device_timestamp,
+            telemetry_stale=not fresh,
+            last_controls_read_at=self._last_controls_read_at,
+            schedule_confirmed_at=self._schedule_confirmed_at,
             pending_operation=pending_operation,
             attempt=attempt,
             next_retry_at=next_retry_at,
@@ -1044,13 +893,8 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 candidates.append(plan.cycle_deadline)
         for debt in self._stop_debts.values():
             candidates.append(now + timedelta(seconds=max(0.0, debt.next_attempt - monotonic)))
-            fail_safe_deadline = getattr(debt, "fail_safe_deadline", 0.0)
-            if fail_safe_deadline > monotonic:
-                candidates.append(now + timedelta(seconds=fail_safe_deadline - monotonic))
-        if self._start_retry is not None and not self._start_retry.suppressed:
+        if self._start_retry is not None:
             candidates.append(now + timedelta(seconds=max(0.0, self._start_retry.next_attempt - monotonic)))
-        if self._mode_next_retry_at is not None:
-            candidates.append(self._mode_next_retry_at)
         future = [_instant(candidate) for candidate in candidates if _instant(candidate) > _instant(now)]
         wake_at = min(future) if future else now + timedelta(milliseconds=100)
         self._unsub_wakeup = async_track_point_in_utc_time(
@@ -1083,7 +927,6 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             solis.persistent.inverter_time_entity_id,
             solis.protection.battery_reserve_entity_id,
             solis.protection.battery_reserve_soc_entity_id,
-            solis.persistent.grid_peak_shaving_entity_id,
             solis.capability.battery_max_charge_current_entity_id,
             solis.capability.battery_max_discharge_current_entity_id,
         ]
@@ -1116,158 +959,52 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         if self._unsub_wakeup is not None:
             self._unsub_wakeup()
             self._unsub_wakeup = None
-        worker = self._worker_task
-        if worker is not None and worker is not asyncio.current_task():
-            worker.cancel()
-            try:
-                await worker
-            except asyncio.CancelledError:
-                pass
-        now = self._now()
-        current_health = ControllerHealth.FAIL_SAFE if self._fail_safe_latched else ControllerHealth.DEGRADED
-        self._publish(
-            now,
-            current_health,
-            None,
-            "controller is shutting down",
-            None,
-            pending_operation="select Self-Use",
-        )
-        await self._shutdown_controls()
-        await self.async_shutdown()
+        deadline = self._monotonic() + SHUTDOWN_TIMEOUT.total_seconds()
+        try:
+            worker = self._worker_task
+            if worker is not None and worker is not asyncio.current_task():
+                worker.cancel()
+                done, _ = await asyncio.wait((worker,), timeout=max(0, deadline - self._monotonic()))
+                if not done:
+                    raise TimeoutError
+                if not worker.cancelled():
+                    worker.result()
+            async with asyncio.timeout_at(deadline):
+                await self._shutdown_controls()
+        except TimeoutError:
+            _LOGGER.error("Battery slot cleanup exceeded %s; native schedules may remain armed",
+                          SHUTDOWN_TIMEOUT)
+            self._degrade(self._now(), None, "shutdown cleanup incomplete", None,
+                          last_error="native slots may remain armed and repeat daily")
+        finally:
+            await self.async_shutdown()
 
     async def _shutdown_controls(self) -> None:
-        attempt = 0
+        """Best-effort slot-only cleanup within the caller's total budget."""
+        deadline = self._monotonic() + SHUTDOWN_TIMEOUT.total_seconds()
         while True:
+            await self.solis.refresh_pending(deadline=deadline)
             now = self._now()
             observation = read_state(self.hass, self.config.solis, now=now)
-            self._publish_shutdown(
-                now,
-                observation,
-                pending_operation="select Self-Use",
-                attempt=attempt,
-            )
-            mode = None if observation.persistent is None else observation.persistent.storage_mode
-            if mode == StorageMode.SELF_USE.value:
-                break
-            result = await self.solis.set_mode(
-                StorageMode.SELF_USE,
-                deadline=self._monotonic() + WRITE_DEADLINE.total_seconds(),
-            )
-            if result.success:
-                attempt = 0
-                continue
-            self._publish_shutdown(
-                self._now(),
-                observation,
-                pending_operation="select Self-Use",
-                attempt=attempt + 1,
-                last_error=result.message,
-            )
-            await asyncio.sleep(_stop_retry_delay(attempt).total_seconds())
-            attempt += 1
-
-        shutdown_debt = dict(self._stop_debts)
-        attempt = 0
-        while True:
-            now = self._now()
-            observation = read_state(self.hass, self.config.solis, now=now)
-            self._publish_shutdown(
-                now,
-                observation,
-                pending_operation="reread all slot enables",
-                attempt=attempt,
-            )
-            directions = tuple(
-                direction
-                for slot in observation.slots
-                for direction in (slot.charge, slot.discharge)
-            )
+            directions = [direction for slot in observation.slots
+                          for direction in (slot.charge, slot.discharge)]
+            self._retire_proven_stops(observation)
             for direction in directions:
-                if direction.enabled is True and direction.key not in shutdown_debt:
-                    first_seen = self._monotonic()
-                    shutdown_debt[direction.key] = StopDebt(
-                        direction.key,
-                        0,
-                        first_seen,
-                        self._now(),
-                        first_seen=first_seen,
-                        fail_safe_deadline=(
-                            first_seen + IMPORTANT_STOP_FAILSAFE_TIMEOUT.total_seconds()
-                        ),
-                    )
-            for key, debt in tuple(shutdown_debt.items()):
-                enabled = observation.direction(key).enabled
-                if enabled is False and not debt.ambiguous:
-                    shutdown_debt.pop(key, None)
-            unknown = any(direction.enabled is None for direction in directions)
-            if not shutdown_debt and not unknown and all(direction.enabled is False for direction in directions):
+                if direction.enabled is True:
+                    self._add_stop(direction.key, now, self._monotonic())
+            if not self._stop_debts and all(d.enabled is False for d in directions):
                 return
-            debt = next(
-                (
-                    item
-                    for item in sorted(
-                        shutdown_debt.values(),
-                        key=lambda value: (value.key.physical_slot, value.key.direction.value),
-                    )
-                    if observation.direction(item.key).enabled is not None
-                ),
-                None,
-            )
-            if debt is None:
-                await asyncio.sleep(_stop_retry_delay(attempt).total_seconds())
-                attempt += 1
-                continue
-            self._publish_shutdown(
-                self._now(),
-                observation,
-                pending_operation=_stop_text(debt.key),
-                attempt=debt.attempt,
-            )
-            try:
-                result = await self.solis.stop(
-                    debt.key,
-                    deadline=self._monotonic() + WRITE_DEADLINE.total_seconds(),
-                    force=debt.ambiguous,
-                )
-            except asyncio.CancelledError:
-                shutdown_debt[debt.key] = replace(debt, ambiguous=True)
-                raise
-            if result.success:
-                shutdown_debt.pop(debt.key, None)
-                attempt = 0
-                continue
-            shutdown_debt[debt.key] = replace(
-                debt,
-                attempt=debt.attempt + 1,
-                ambiguous=debt.ambiguous or result.outcome in AMBIGUOUS_OUTCOMES,
-            )
-            await asyncio.sleep(_stop_retry_delay(debt.attempt).total_seconds())
-
-    def _publish_shutdown(
-        self,
-        now: datetime,
-        observation: SolisState,
-        *,
-        pending_operation: str,
-        attempt: int,
-        last_error: str | None = None,
-    ) -> None:
-        health = (
-            ControllerHealth.FAIL_SAFE
-            if self._fail_safe_latched
-            else ControllerHealth.DEGRADED
-        )
-        self._publish(
-            now,
-            health,
-            None,
-            "controller is shutting down",
-            observation,
-            last_error=last_error,
-            pending_operation=pending_operation,
-            attempt=attempt,
-        )
+            self._degrade(now, None, "controller is shutting down", observation,
+                          pending_operation="confirm managed slots disabled")
+            for key, debt in tuple(self._stop_debts.items()):
+                if observation.direction(key).enabled is None:
+                    continue
+                result = await self.solis.stop(key, deadline=deadline, force=debt.ambiguous)
+                if result.success:
+                    self._stop_debts.pop(key, None)
+                else:
+                    self._stop_debts[key] = replace(debt, ambiguous=True)
+            await asyncio.sleep(1)
 
 
 def _stop_retry_delay(attempt: int) -> timedelta:
@@ -1351,8 +1088,7 @@ def _instant(value: datetime) -> datetime:
 
 def _plan_reason(plan: Plan) -> str:
     return {
-        StrategyAction.IDLE: "no eligible strategy action",
-        StrategyAction.RESERVE_FOLLOW: "follow house load at the quantized reserve",
+        StrategyAction.IDLE: "normal inverter load following; no forced slot",
         StrategyAction.CHEAP_CHARGE: "charge during trusted cheap window",
         StrategyAction.RESERVE_DISCHARGE: "export toward dynamic reserve",
         StrategyAction.CYCLE_DISCHARGE: "create profitable full-SOC headroom",
@@ -1371,7 +1107,7 @@ def _stop_text(key: SlotKey) -> str:
 __all__ = [
     "BACKSTOP_INTERVAL",
     "Controller",
-    "IMPORTANT_STOP_FAILSAFE_TIMEOUT",
+    "SHUTDOWN_TIMEOUT",
     "Snapshot",
     "START_RETRY_DELAYS",
     "StopDebt",

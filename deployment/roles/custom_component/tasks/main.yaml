@@ -135,6 +135,40 @@
   when: component_overlay_dir is defined
   notify: restart ha
 
+- name: Allow slow SolisCloud telemetry responses
+  block:
+    # hultenvp/solis-sensor v4.0.1: discovery abandons valid inverters when
+    # SolisCloud takes longer than 10 seconds. Recheck this patch on upgrades.
+    - name: Inspect Solis client before applying the timeout patch
+      ansible.builtin.stat:
+        path: "{{ ha_custom_components_dir }}/solis/soliscloud_api.py"
+        checksum_algorithm: sha256
+      register: solis_timeout_source
+
+    - name: Require the reviewed original or patched Solis client
+      ansible.builtin.assert:
+        that:
+          - >-
+            solis_timeout_source.stat.checksum | default('') in
+            ['582c5a9841ed069067ab81468e6b9f0fe476050a4bc27677752158a03095d1db',
+             '8cc95bb74c7acbd99e4e27c0ce619def9691d65f303de661d2f0d1347c8c5834']
+        fail_msg: Review the Solis telemetry timeout patch against the installed client before deploying.
+
+    - name: Increase legacy Solis API request timeout
+      ansible.builtin.replace:
+        path: "{{ ha_custom_components_dir }}/solis/soliscloud_api.py"
+        regexp: 'async with async_timeout\.timeout\(10\):'
+        replace: 'async with async_timeout.timeout(45):'
+      register: solis_timeout_patch
+      notify: restart ha
+
+    - name: Validate Home Assistant after Solis timeout patch
+      ansible.builtin.command: ha core check
+      changed_when: false
+      when: solis_timeout_patch.changed
+  when: component_domain == 'solis'
+  tags: solis_telemetry_timeout
+
 - name: Install latest release sensor
   template:
     src: "{{ playbook_dir }}/templates/rest/hacs_latest_release.yaml.j2"

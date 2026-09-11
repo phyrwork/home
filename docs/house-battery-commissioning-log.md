@@ -1,5 +1,8 @@
 # House battery commissioning log
 
+> Historical design/evidence. The current runtime contract is [native TOU schedule control](house-battery-control.md), updated 11 September 2026. Earlier Self-Use fallbacks and peak-shaving handovers are superseded.
+
+
 This is the chronological evidence log for live Solis battery-control
 experiments. Record the exact controls, authoritative readback and physical
 power-flow outcome for every experiment. Home Assistant state alone is not
@@ -530,3 +533,37 @@ each native direction bounded to 15 minutes if a cheap period ends unexpectedly.
 The next acceptance observation is a complete discharge/recharge pair starting
 from 100% SOC during a trusted cheap interval, with both physical directions
 confirmed from the Octopus whole-site demand sensor.
+
+## 11 September 2026: simplified controller deployment
+
+The native-slot controller contract is now documented in
+[house-battery-control.md](house-battery-control.md). The Solis TOU experiment
+remains preserved in stash `15c0b2f0ebb94436f72a661664a48410b4803b54` and is
+absent from the running HA instance.
+
+Merged main commit `eb6ef8a` (managed integration pins and the Octopus export
+template correction) while preserving the controller implementation. The full
+Ansible deployment completed with 198 successful tasks, 48 changes and no
+failures. All six updated component source markers were verified, including
+Octopus v19.0.1; ten deployed battery runtime/configuration files matched local
+SHA-256 checksums. The focused controller, evidence, watchdog and timeout-patch
+suite passed all 170 tests. Unchanged EV test failures were separately reproduced
+on the pre-merge main baseline.
+
+Octopus rates recovered after restart. At 23:30:12 BST, controller health was
+healthy, action CHEAP_CHARGE, and the native schedule was confirmed through HA.
+The notification-only watchdog was enabled at 23:30:31 BST. Direct inverter
+reads after activation showed storage mode 112, actual peak shaving 0, global
+reserve 10%, enables bitmap 3, SOC 12%, battery voltage 52.9 V and charging
+current 94.7 A (approximately 5.0 kW). Whole-site demand rose from 122 W at
+23:30 to 5,915 W at 23:31. This confirms physical charging, not just optimistic
+HA entity state. Overnight observation through 06:00 BST on 12 September is
+still required to verify reaching full SOC and a complete discharge/recharge
+cycle; neither is claimed here.
+
+Known bonus-rate issue discovered during startup: the 23:00–23:30 import
+interval reported 6.9p/kWh and BONUS_CHEAP while the intelligent dispatch
+binary sensor was off. The retained direct-dispatch gate rejected the interval
+with `dispatch source is not on`. Dispatch state and adjusted tariff intervals
+have different semantics, so this veto is too restrictive. The gate was not
+changed in this deployment; its correction remains outstanding.

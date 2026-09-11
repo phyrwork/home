@@ -19,12 +19,10 @@ class _TextEnum(str, Enum):
 class ControllerHealth(_TextEnum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
-    FAIL_SAFE = "fail_safe"
 
 
 class StrategyAction(_TextEnum):
     IDLE = "IDLE"
-    RESERVE_FOLLOW = "RESERVE_FOLLOW"
     CHEAP_CHARGE = "CHEAP_CHARGE"
     RESERVE_DISCHARGE = "RESERVE_DISCHARGE"
     CYCLE_DISCHARGE = "CYCLE_DISCHARGE"

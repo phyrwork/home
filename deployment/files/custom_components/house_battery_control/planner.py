@@ -1237,8 +1237,6 @@ async def build_plan(
             reserve.reserve_energy_kwh * Decimal(FULL_SOC_PERCENT) / config.battery.capacity_kwh,
         )
         telemetry = solis_state.telemetry
-        if telemetry.state_of_charge_percent < Decimal(MINIMUM_SOC_PERCENT):
-            raise ValueError("battery SOC is below the absolute safety floor")
         charge_state = solis_state.slots[0].charge
         cycle_slot_state = solis_state.slots[0].discharge
         reserve_slot_state = solis_state.slots[1].discharge
@@ -1401,7 +1399,7 @@ def _select(facts: _StrategyFacts) -> _Choice:
     gate = facts.cycle_observation_gate
     if facts.cycle_state is CycleState.STOPPING:
         return _Choice(
-            StrategyAction.IDLE if cheap else StrategyAction.RESERVE_FOLLOW,
+            StrategyAction.IDLE,
             None,
             CycleState.IDLE,
             None,
@@ -1536,9 +1534,8 @@ def _select(facts: _StrategyFacts) -> _Choice:
         )
     if cheap:
         return _Choice(StrategyAction.IDLE, None, CycleState.IDLE, None, gate)
-    # Normal load following is an active policy: Feed-In Priority with
-    # Battery Reserve and Peak Shaving enabled, and no native slot.
-    return _Choice(StrategyAction.RESERVE_FOLLOW, None, CycleState.IDLE, None, gate)
+    # The commissioned inverter follows house demand without a forced slot.
+    return _Choice(StrategyAction.IDLE, None, CycleState.IDLE, None, gate)
 
 
 def _window_active(window: CheapWindow | None, now: datetime) -> bool:
