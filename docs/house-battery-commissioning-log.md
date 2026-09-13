@@ -583,3 +583,34 @@ is **not deployed**: the user requested batching further deployments so the
 static off-peak overnight commissioning run remains undisturbed. Live HA still
 runs the 0.2.0 code from `726c7fc`; deploying 0.2.1 and verifying a bonus interval
 remain pending.
+
+### Overnight observation outcome, 12 September 2026
+
+The read-only observer ended at 06:00 BST; the scheduled follow-up was paused
+after its final review. No inverter settings or deployed files were changed
+during monitoring. The bonus-rate fix remains deferred.
+
+Starting from 12% SOC, the battery reached a maximum reported 94% during the
+standard cheap window. Repeated device samples showed approximately 4.5–5.1 kW
+charging. Native slots and physical charging were observed before and after
+local midnight; the known 23:59–00:00 gap was not continuously sampled.
+
+At 05:30 BST, HA showed the charge slot disabled and no enabled direction.
+At 05:33 BST, reserve discharge was enabled for 05:30–23:30 with a 23% target,
+matching the forecast reserve. A device sample timestamped 05:32:03 BST showed
+approximately 4.94 kW discharge, independently supporting the direction change.
+This is surplus export after charging, not a full-SOC discharge/recharge cycle.
+
+The 117 polls after native-slot capture was added had no observer read errors
+or gaps over 301 seconds. Device telemetry sometimes lagged: the largest
+observed device-sample age in those polls was approximately 19 minutes, within
+the existing 30-minute threshold. The final observation at 05:57:09 BST showed
+a healthy controller in RESERVE_DISCHARGE, no pending error, and a latest
+device sample from 05:47:02 BST reporting 90% SOC and approximately 4.95 kW
+discharge. Those final physical values were about ten minutes old.
+
+Charging, midnight rollover, end-of-window charge-slot cleanup and subsequent
+reserve export were verified. Reaching 100% and completing a full-SOC
+discharge/recharge pair remain unverified; overnight commissioning is therefore
+partial. Evidence is retained in `/tmp/house-battery-overnight-20260911.jsonl`
+and `/tmp/house-battery-overnight-20260911.md` on the observing computer.
