@@ -6,4 +6,8 @@ source: sensor.{{ ("current_export_electricity_" ~ electricity_meter_serial_numb
 unique_id: {{ ("current_accumulative_consumption_export_electricity_" ~ electricity_meter_serial_number ~ "_" ~ electricity_meter_mpan_export) | lower }}
 unit_prefix: k
 round: 2
-method: trapezoidal
+# Hold the last observed power until the next reading. This avoids attributing
+# a new export level to the preceding interval when export starts.
+method: left
+max_sub_interval:
+  minutes: 1
