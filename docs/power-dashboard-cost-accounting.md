@@ -36,7 +36,7 @@ grid demand (positive import). Assume 95% inverter efficiency in each direction:
 | Ledger | Power integrated for energy | Monetary rate integrated for cost |
 | --- | --- | --- |
 | Avoided household import | AC discharge − battery export | avoided-import power × import price |
-| Arbitrage | battery export − AC charge | battery export × export price − AC charge × import price |
+| Arbitrage | battery export only | battery export × export price − AC charge × import price |
 
 Powers are in W, so monetary rates divide by 1,000 to obtain GBP/h. Price changes
 update cost-rate templates independently of power changes. Negative tariff prices
@@ -44,8 +44,7 @@ remain signed. Invalid source readings make rate sensors unavailable rather than
 silently substituting a zero price.
 
 All charging expenditure is assigned to arbitrage; avoided-import value is gross.
-Adding both cost totals gives the combined estimated benefit. Arbitrage energy is
-a signed net balance and can be negative; it is not a saved-energy counter. There
+Adding both cost totals gives the combined estimated benefit. Arbitrage energy counts exported battery energy only and never subtracts charging. There
 is no FIFO/matched-cycle cost allocation or valuation of initial/stored inventory.
 Charging is valued at import price even when solar supplies it. Battery export
 attribution is marginal alongside solar, rather than measured energy provenance.
@@ -58,10 +57,10 @@ Internal battery losses are already reflected in the measured DC flows.
 - `sensor.electricity_total_net_cost_excluding_ev` (derived cumulative balance)
 - `sensor.house_battery_total_avoided_import_energy`
 - `sensor.house_battery_total_avoided_import_cost`
-- `sensor.house_battery_total_arbitrage_energy`
+- `sensor.house_battery_total_arbitrage_export_energy`
 - `sensor.house_battery_total_arbitrage_cost`
 
-The four battery totals share two power templates, keeping energy attribution
+The four battery totals share power templates, keeping energy attribution
 separate from tariff valuation. The Power dashboard is HA storage-managed; its
 cards are updated through the Lovelace API rather than deployed YAML.
 
@@ -73,8 +72,9 @@ The petrol source is [Tesco's published feed](https://www.tesco.com/fuel_prices/
 
 Deployment verification: full Ansible run completed with no failed tasks; all eight
 calculation tests passed. The live dashboard shows all seven totals. During the
-first charging interval, avoided import stayed zero while arbitrage energy and
-cost decreased consistently with the import tariff. The non-EV balance reconciled
+initial charging interval, the original net arbitrage energy and cost decreased
+with charging. The energy definition was subsequently corrected to export-only;
+charging now changes arbitrage cost but adds no arbitrage energy. The non-EV balance reconciled
 with the cumulative feed and EV costs. No recorder backfill was performed.
 
 Final display labels (sensor names and entity IDs unchanged):
@@ -84,3 +84,14 @@ Final display labels (sensor names and entity IDs unchanged):
   **Arbitrage Saving**.
 - EV Battery: **Total Cost**, plus **Fuel Basis** with **Equivalent Rate**,
   **Pump Price**, and **Updated**.
+
+Export-only correction: the Arbitrage Energy card uses a fresh integral identity
+so it starts at zero without inheriting the retired net-energy counter
+`sensor.house_battery_total_arbitrage_energy`. That old history is not rewritten.
+Avoided import and signed arbitrage cost remain unchanged. Tests cover charge-only,
+household-only discharge, mixed household/export discharge and PV-only export.
+
+Live export-only verification passed: during charging, Arbitrage Energy stayed at
+0 kWh and Arbitrage Saving decreased, with both avoided-import totals at zero.
+All nine calculation tests passed. Activation used a one-time Core restart; no
+new deployment restart rule was added. The retired net-energy entity is disabled.

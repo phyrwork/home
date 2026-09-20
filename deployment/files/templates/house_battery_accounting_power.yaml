@@ -4,10 +4,24 @@
 # the measured charging and discharging flows; do not subtract them again.
 # Attribute min(AC discharge, net grid export) to battery export. Remaining
 # discharge avoids household imports. This is marginal attribution alongside PV.
-# Arbitrage power is signed: battery export minus ALL AC charging input. Avoided
-# import power plus arbitrage power equals net AC battery output. An arbitrage
-# energy integral is therefore a net balance, not "energy saved", and can decrease.
+# The arbitrage ENERGY counter integrates battery export only (nonnegative).
+# Signed arbitrage power is retained solely for COST: exports minus AC charging.
+# Avoided import plus export power equals total AC discharge; avoided import plus
+# signed arbitrage power equals net AC battery output.
 sensor:
+  - name: House Battery Arbitrage Export Power
+    unique_id: house_battery_arbitrage_export_power
+    device_class: power
+    state_class: measurement
+    unit_of_measurement: W
+    availability: >-
+      {{ is_number(states('sensor.garage_inverter_telemetry_garage_inverter_battery_power'))
+         and is_number(states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand')) }}
+    state: >-
+      {% set battery = states('sensor.garage_inverter_telemetry_garage_inverter_battery_power') | float(0) %}
+      {% set grid = states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand') | float(0) %}
+      {% set discharge = ([-battery, 0] | max) * 0.95 %}
+      {{ ([discharge, ([-grid, 0] | max)] | min) | round(6) }}
   - name: House Battery Avoided Import Power
     unique_id: house_battery_avoided_import_power
     device_class: power

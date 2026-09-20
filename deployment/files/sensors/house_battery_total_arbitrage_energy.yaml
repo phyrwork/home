@@ -1,8 +1,9 @@
-# Signed net energy balance: must retain state_class total, not total_increasing.
+# Export-only counter; new identity starts at zero without inheriting the retired
+# net-energy counter's negative balance. Cost accounting remains bidirectional.
 platform: integration
-name: House Battery Total Arbitrage Energy
-unique_id: house_battery_total_arbitrage_energy
-source: sensor.house_battery_arbitrage_power
+name: House Battery Total Arbitrage Export Energy
+unique_id: house_battery_total_arbitrage_export_energy
+source: sensor.house_battery_arbitrage_export_power
 unit_prefix: k
 unit_time: h
 method: left

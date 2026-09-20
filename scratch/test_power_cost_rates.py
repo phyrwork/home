@@ -72,6 +72,16 @@ class CostRatesTest(unittest.TestCase):
             expected = -battery / .95 if battery >= 0 else -battery * .95
             self.assertAlmostEqual(home + arb, expected, places=5)
 
+    def test_export_energy_excludes_charging_and_household_discharge(self):
+        for battery, grid, exported in [(4750, 7000, 0), (-5000, 2000, 0),
+                                         (-5000, -3000, 3000), (-5000, -6000, 4750),
+                                         (0, -2000, 0)]:
+            args = dict(battery=battery, grid=grid)
+            export = self.render('house_battery_arbitrage_export_power', **args)
+            home = self.render('house_battery_avoided_import_power', **args)
+            self.assertEqual(export, exported)
+            self.assertAlmostEqual(home + export, max(-battery, 0) * .95)
+
     def test_missing_data_is_not_a_zero_price(self):
         self.assertIsNone(self.render('ev_charging_cost_rate', buy='unavailable'))
         self.assertIsNone(self.render('house_battery_arbitrage_cost_rate', battery='unknown'))
