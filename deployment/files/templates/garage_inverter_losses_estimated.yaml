@@ -1,0 +1,33 @@
+# Estimated AC/DC conversion losses, accumulated in kWh at the Solis inverter.
+# C and D are lifetime energy entering/leaving the battery's DC terminals.
+# Charge: AC input = C / eta_charge, so conversion loss = C*(1/eta_charge-1).
+# Discharge: AC output = D * eta_discharge, so conversion loss = D*(1-eta_discharge).
+# Assume 95% in each direction, matching house_battery_control.yaml. These are
+# provisional operating efficiencies, NOT the inverter's PV peak efficiency.
+# Keep these constants and that controller's assumptions aligned when revising.
+# Internal LiFePO4 losses are deliberately excluded: Energy's household balance
+# already subtracts DC charge and adds DC discharge. Including cell losses here
+# would over-allocate household consumption. No separate standby estimate added.
+# Source counters have 1 kWh resolution, so this estimate advances in steps.
+# Do not change coefficients without rebuilding historical statistics, otherwise
+# revaluing the lifetime total would appear as energy consumed (or a reset).
+# Model background: docs/equipment/conversion-efficiency-audit-2026-09-20.md
+sensor:
+  - name: Garage inverter losses (estimated)
+    unique_id: garage_inverter_losses_estimated
+    device_class: energy
+    state_class: total_increasing
+    unit_of_measurement: kWh
+    availability: >-
+      {{ is_number(states('sensor.garage_inverter_telemetry_garage_inverter_total_energy_charged'))
+         and is_number(states('sensor.garage_inverter_telemetry_garage_inverter_total_energy_discharged')) }}
+    state: >-
+      {% set charged = states('sensor.garage_inverter_telemetry_garage_inverter_total_energy_charged') | float(0) %}
+      {% set discharged = states('sensor.garage_inverter_telemetry_garage_inverter_total_energy_discharged') | float(0) %}
+      {% set eta_charge = 0.95 %}
+      {% set eta_discharge = 0.95 %}
+      {{ (charged * (1 / eta_charge - 1) + discharged * (1 - eta_discharge)) | round(6) }}
+    attributes:
+      charge_conversion_efficiency: 0.95
+      discharge_conversion_efficiency: 0.95
+      model: "DC charge * (1/0.95 - 1) + DC discharge * (1 - 0.95); excludes internal battery losses and separate standby estimates"

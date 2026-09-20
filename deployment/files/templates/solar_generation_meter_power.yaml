@@ -8,7 +8,8 @@ sensor:
       {% set raw = states('sensor.solar_generation_meter_power_raw') | float(0) %}
       {% set max_w = states('input_number.solar_installed_size') | float(0) %}
       {% if max_w > 0 %}
-        {{ [raw, max_w] | min | round(0) }}
+        {# Allow 100 W headroom above the installed rating: 2.5 kW for 2.4 kWp. #}
+        {{ [[raw, 0] | max, max_w + 100] | min | round(0) }}
       {% else %}
         {{ raw | round(0) }}
       {% endif %}

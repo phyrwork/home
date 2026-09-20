@@ -532,7 +532,7 @@
       notify: reload core config
       loop:
         - name: connors_desk_socket_energy
-          source: sensor.connors_desk_socket_power
+          source: sensor.connor_s_desk_socket_power
         - name: kettle_socket_energy
           source: sensor.kettle_socket_power
         - name: dishwasher_socket_energy
