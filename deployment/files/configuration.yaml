@@ -3,6 +3,9 @@ default_config:
 
 # Customize entity attributes not supported by certain platforms (e.g. integration).
 homeassistant:
+  customize:
+    sensor.lawn_irrigation_volume_total:
+      device_class: water
   customize_glob:
     "sensor.*_socket_energy":
       device_class: energy

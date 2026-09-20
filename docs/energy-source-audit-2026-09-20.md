@@ -97,3 +97,7 @@ SSH reauthorization succeeded and HA restarted successfully. Grid, export, solar
 The Energy API reports 19 September export of **35.550135 kWh / £4.266016** and 20 September export of **35.371394 kWh / £4.244567**. New recorder intervals at 19:45 and 19:50 UTC continued from repaired cumulative sums without a jump: export **2291.634212 kWh**, compensation **£276.787065**, while preserving the running integral state of **2369.44 kWh**.
 
 All **14,446** demand-matched reconstructed power rows were checked against `max(-demand, 0)`: **zero mismatches**. Deployed configuration confirms `method: left` and a one-minute maximum subinterval. Database integrity and both reconstruction behavior tests passed. The only remaining Energy validation findings are the previously unavailable coffee-machine plug and irrigation's missing water device class.
+
+### Water-sensor follow-up
+
+After committing the export repair as `f9676c9`, added a persistent `homeassistant.customize` entry declaring `sensor.lawn_irrigation_volume_total` as `device_class: water`. Reloaded core customization and refreshed the entity without restarting HA. Its value remained **13.92 m³**, with `state_class: total`, and Energy water-source validation now passes. The original configuration is backed up on HA as `/config/configuration.yaml.before-water-class-20260920`. The coffee-machine plug remains the unrelated outstanding availability issue.
