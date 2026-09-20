@@ -1,0 +1,9 @@
+platform: integration
+name: EV Charging Total Cost
+unique_id: ev_charging_total_cost
+source: sensor.ev_charging_cost_rate
+unit_time: h
+method: left
+round: 6
+max_sub_interval:
+  minutes: 1

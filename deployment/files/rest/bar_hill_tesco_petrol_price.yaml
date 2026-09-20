@@ -8,6 +8,8 @@ sensor:
   - name: Bar Hill Tesco Petrol Price
     unique_id: bar_hill_tesco_petrol_price
     unit_of_measurement: GBP/L
+    json_attributes:
+      - last_updated
     value_template: >-
       {% set station = value_json.stations
         | selectattr('postcode', 'equalto', 'CB23 8EL')

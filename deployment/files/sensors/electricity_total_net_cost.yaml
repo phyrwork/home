@@ -1,0 +1,9 @@
+platform: integration
+name: Electricity Total Net Cost
+unique_id: electricity_total_net_cost
+source: sensor.electricity_net_cost_rate
+unit_time: h
+method: left
+round: 6
+max_sub_interval:
+  minutes: 1

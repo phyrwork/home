@@ -1,0 +1,72 @@
+# Instantaneous monetary rates in GBP/h. Integration sensors accumulate GBP
+# from deployment onward; no historical reconstruction or backfill is intended.
+# EV charging is valued at grid import price, regardless of its actual source.
+# Feed cost is net import expenditure minus export revenue, excluding standing
+# charges. Signed tariff prices remain signed (negative prices are valid).
+sensor:
+  # Derived from the two cumulative integrals so all three displayed totals
+  # reconcile exactly. This inherits their deployment-time start, without backfill.
+  - name: Electricity Total Net Cost Excluding EV
+    unique_id: electricity_total_net_cost_excluding_ev
+    device_class: monetary
+    state_class: total
+    unit_of_measurement: GBP
+    availability: >-
+      {{ is_number(states('sensor.electricity_total_net_cost'))
+         and is_number(states('sensor.ev_charging_total_cost')) }}
+    state: >-
+      {{ ((states('sensor.electricity_total_net_cost') | float(0))
+          - (states('sensor.ev_charging_total_cost') | float(0))) | round(6) }}
+  - name: EV Charging Cost Rate
+    unique_id: ev_charging_cost_rate
+    unit_of_measurement: GBP/h
+    state_class: measurement
+    availability: >-
+      {{ is_number(states('sensor.ev_charger_energy_meter_power'))
+         and is_number(states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate')) }}
+    state: >-
+      {% set power = states('sensor.ev_charger_energy_meter_power') | float(0) %}
+      {% set price = states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate') | float(0) %}
+      {{ ([power, 0] | max * price / 1000) | round(8) }}
+  - name: Electricity Net Cost Rate
+    unique_id: electricity_net_cost_rate
+    unit_of_measurement: GBP/h
+    state_class: measurement
+    availability: >-
+      {{ is_number(states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand'))
+         and is_number(states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate'))
+         and is_number(states('sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate')) }}
+    state: >-
+      {% set grid = states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand') | float(0) %}
+      {% set buy = states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate') | float(0) %}
+      {% set sell = states('sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate') | float(0) %}
+      {{ ((([grid, 0] | max) * buy - ([-grid, 0] | max) * sell) / 1000) | round(8) }}
+
+  # Cost rates use the separately derived AC power ledgers. All charging is
+  # valued at import price, even solar-funded charging. All charging expenditure
+  # belongs to arbitrage; avoided-import value is gross. Their sum is the combined
+  # estimated benefit. Stored/opening battery inventory has no separate valuation.
+  - name: House Battery Avoided Import Cost Rate
+    unique_id: house_battery_avoided_import_cost_rate
+    unit_of_measurement: GBP/h
+    state_class: measurement
+    availability: >-
+      {{ is_number(states('sensor.house_battery_avoided_import_power'))
+         and is_number(states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate')) }}
+    state: >-
+      {% set power = states('sensor.house_battery_avoided_import_power') | float(0) %}
+      {% set buy = states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate') | float(0) %}
+      {{ (power * buy / 1000) | round(8) }}
+  - name: House Battery Arbitrage Cost Rate
+    unique_id: house_battery_arbitrage_cost_rate
+    unit_of_measurement: GBP/h
+    state_class: measurement
+    availability: >-
+      {{ is_number(states('sensor.house_battery_arbitrage_power'))
+         and is_number(states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate'))
+         and is_number(states('sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate')) }}
+    state: >-
+      {% set power = states('sensor.house_battery_arbitrage_power') | float(0) %}
+      {% set buy = states('sensor.octopus_energy_electricity_21l4421345_2700007165105_current_rate') | float(0) %}
+      {% set sell = states('sensor.octopus_energy_electricity_21l4421345_2700009249389_export_current_rate') | float(0) %}
+      {{ (power * (sell if power >= 0 else buy) / 1000) | round(8) }}
