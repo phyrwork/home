@@ -29,7 +29,7 @@ Solar daily totals are supported by [ESPHome’s total daily energy sensor](http
 
 ## Live power sources
 
-- Battery originally selected `…battery_power_inverted`, an unavailable restored helper whose prior statistics ended on 27 August. It now selects the actual Solis `…battery_power` directly. **Positive means discharge; negative means charging**, as confirmed by Connor. No inversion is applied.
+- Battery originally selected `…battery_power_inverted`, an unavailable restored helper whose prior statistics ended on 27 August. It now selects the actual Solis `…battery_power` directly, following the stated positive-discharge convention. **The subsequent browser audit below contradicts that sign assumption; it must be checked against SOC and charge/discharge history before treating this selection as correct.** No inversion is currently applied.
 - Grid now selects `sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand`: W, power, measurement, positive import / negative export, updated approximately every minute.
 - Solar now selects `sensor.solar_generation_meter_power`: W, power, measurement. These grid and solar power inputs were previously absent from Energy preferences.
 - The existing export-power sensor retains its name and formula `max(-current_demand, 0)`. It now also declares `state_class: measurement`. Its source availability is respected.
@@ -101,3 +101,49 @@ All **14,446** demand-matched reconstructed power rows were checked against `max
 ### Water-sensor follow-up
 
 After committing the export repair as `f9676c9`, added a persistent `homeassistant.customize` entry declaring `sensor.lawn_irrigation_volume_total` as `device_class: water`. Reloaded core customization and refreshed the entity without restarting HA. Its value remained **13.92 m³**, with `state_class: total`, and Energy water-source validation now passes. The original configuration is backed up on HA as `/config/configuration.yaml.before-water-class-20260920`. The coffee-machine plug remains the unrelated outstanding availability issue.
+
+## Browser chart audit after water commit `4455e2d`
+
+Opened the built-in Energy dashboard in the internal browser and inspected Summary, Electricity, Gas, Water, and Now on 20 September. No new live configuration or statistics changes were made during this inspection: 1Password sign-in timed out and SSH signing failed, so independent history verification and correction remain pending reauthorization.
+
+### Power chart sign mismatch
+
+The user's Tuesday 02:12 tooltip shows battery +4.53 kW, grid +5.28 kW, and home consumption 9.81 kW. At 08:52 it shows solar +0.770 kW, battery −4.952 kW, grid −4.917 kW. HA's [installed power-chart implementation](https://github.com/home-assistant/frontend/blob/20260826.4/src/panels/lovelace/cards/energy/power-sources-graph-data.ts) sums signed solar, battery and grid and clamps negative consumption to zero. It therefore needs positive battery discharge and negative charging.
+
+Inverting the battery values would yield plausible household loads of **0.75 kW** and **0.805 kW**, respectively; the current configuration instead gives 9.81 kW and a negative sum clipped to zero. The Now page reproduces the inflated charging peaks and clipped household power. The battery controller's existing `battery_power_sign: positive_means_charging` setting corroborates the inversion hypothesis. Still verify rising SOC/charged-counter against positive raw power, and falling SOC/discharged-counter against negative raw power before applying it. My earlier selection accepted the stated sign convention without resolving this contradictory controller setting.
+
+If confirmed, use Energy's `power_config: {stat_rate_inverted: sensor.garage_inverter_telemetry_garage_inverter_battery_power}` so HA manages the inversion helper. Do not simply select a stale `_inverted` helper as a direct source. The raw source's recorded sign is not corrupt; assess the generated helper's historical coverage separately before promising that old charts are repaired.
+
+### Other cards and their limits
+
+| Cards inspected | Observation / accounting |
+|---|---|
+| Electricity usage, energy distribution, totals | 71.14 kWh imported + 12.33 solar + 34 discharged − 35.37 exported − 34 charged = **48.10 kWh home use**. This aggregate identity balances; these cards use energy counters, not the incorrectly signed power source. It does not independently certify meter accuracy. |
+| Grid energy balance / net-import gauge | **71.14 − 35.37 = 35.77 kWh**. Gross imports and exports include legitimate battery arbitrage. |
+| Costs | **£5.53 import − £4.24 export = £1.29** electricity; gas £0.93; combined £2.22. Battery charging is not billed again as a separate source. |
+| Solar production | **12.33 kWh**, from the daily energy sensor; independent of battery power sign. |
+| Individual devices / detail | EV charger dominates, roughly 30 kWh. These are breakdowns of home consumption, not extra loads added to the home total. Negative untracked intervals appear in the detail graph; coarse 1 kWh battery counters and asynchronous measurements can cause interval mismatch. Exact contributing intervals still need numeric verification. Coffee-machine data remains unavailable. |
+| Energy-flow Sankey | Shows both grid and battery on the source and destination sides because each can receive and supply energy over the selected day. Repeated labels are expected. Flow destinations use the allocation assumptions described above, not measured energy provenance. |
+| Self-consumed solar gauge | **13%**; uses interval allocation and an in-period battery provenance estimate. Export-heavy operation plus coarse counters makes this less robust than solar production or net grid totals. |
+| Self-sufficiency gauge | **0%** is explained by the installed frontend's formula `100 * (1 - min(1, gross_grid_import / home_consumption))`. It includes imported energy later re-exported in the numerator. This is a limitation for arbitrage, not evidence of absent solar contribution. [Source](https://github.com/home-assistant/frontend/blob/20260826.4/src/panels/lovelace/cards/energy/hui-energy-self-sufficiency-gauge-card.ts). |
+| Low-carbon gauge / distribution | **85% / 60.5 kWh**. The gauge uses estimated fossil grid energy over gross imports plus non-exported solar; it does not track the carbon provenance of battery re-exports. [Source](https://github.com/home-assistant/frontend/blob/20260826.4/src/panels/lovelace/cards/energy/hui-energy-carbon-consumed-gauge-card.ts). |
+| Gas consumption / totals | Consistently **7.88 kWh / £0.93**. Independent of electricity flow accounting. |
+| Water flow | No data for the selected day. The classified irrigation cumulative value has stayed at 13.92 m³; classification alone does not create water usage. |
+
+Card roles checked against [HA Energy card documentation](https://www.home-assistant.io/dashboards/energy/). Outstanding work: authenticate, prove battery sign from synchronized history, apply the appropriate power configuration, inspect inverted-history coverage, and refresh/verify the power charts. Preserve the requested minute-derived export integration and its left method.
+
+### Battery sign confirmed after authentication retry
+
+Authentication succeeded. On 15 September, local 00:00–05:00 hourly mean raw battery power was +4.47 to +4.83 kW; the charged counter rose by 24 kWh, the discharged counter did not change, and mean SOC rose from 29.5% to 84.2%. During 06:00–11:00, raw power was −4.27 to −4.75 kW, charging remained zero, discharge increased by 21 kWh, and mean SOC fell from 84.4% to 31.0%. The sensor is unequivocally **positive charging / negative discharge**.
+
+Updated Energy's battery `power_config` to `stat_rate_inverted` referencing the original Solis power sensor. HA now manages `sensor.garage_inverter_telemetry_garage_inverter_battery_power_inverted`; initial verification showed raw −186 W and corrected +186 W. Battery energy counters, SOC, grid inputs and all costs were preserved.
+
+The managed helper had only 20 hourly statistics versus 714 for the original sensor. Prepared the one-off `scratch/repair_battery_power_statistics_20260920.py` to reconstruct both hourly and retained five-minute helper statistics from the original source. It creates a full recorder backup, copies timestamp/mean weight, negates mean, swaps and negates min/max, and verifies every reconstructed row. Original raw power history remains correctly recorded in its native sign convention.
+
+### Applied battery power repair and final verification
+
+The repair completed with **714 hourly** and **3,003 five-minute** rows and **zero mismatches**. Hourly source coverage starts 21 August 2026 18:00 UTC; five-minute source coverage starts 10 September 03:15 UTC. No history is claimed before the source coverage. Full 760.8 MB recorder backup: `/config/battery-power-repair-20260920/recorder-before.sqlite`; repair report: `/config/battery-power-repair-20260920/applied.json`. Both database integrity checks passed. HA was stopped for the offline repair and restarted automatically afterward.
+
+After restart, the API verified 12 historical hours of inverted mean/min/max against the source. Solis recovered with raw power **−191 W**, inverted power **+191 W**, SOC **18%**, charged energy **866 kWh**, and discharged energy **827 kWh**. The refreshed internal-browser Now view showed **319 W** household consumption, battery discharge feeding the home, historical charging below zero and discharge above zero. The large remaining household peaks coincide with the EV charging periods visible in the device-detail chart. Electricity energy totals and costs remained unchanged on reload.
+
+The battery sign and missing helper statistics are now repaired. The self-sufficiency/solar-provenance limitations and coarse-interval attribution caveats described above remain properties of the dashboard accounting; they are not repaired by changing power sign. The existing minute-derived export source and left integration method were preserved.
