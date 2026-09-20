@@ -1,0 +1,20 @@
+sensor:
+  name: Bar Hill Tesco Petrol Price
+  unique_id: bar_hill_tesco_petrol_price
+  command: "python3 /config/command_line/fuel_finder.py"
+  command_timeout: 90
+  scan_interval: 43200
+  unit_of_measurement: GBP/L
+  value_template: "{{ value_json.price }}"
+  json_attributes:
+    - last_updated
+    - price_submitted
+    - source
+    - fuel_type
+    - postcode
+    - station
+    - csv_generated_at
+    - last_successful_fetch
+    - last_attempt
+    - fetch_status
+    - fetch_error
