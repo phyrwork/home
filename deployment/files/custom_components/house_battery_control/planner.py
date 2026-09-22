@@ -10,6 +10,7 @@ from enum import Enum
 from math import gcd, lcm
 from typing import Any, Mapping, Sequence
 
+from .charge_authorization import ChargeAuthorization
 from .model import (
     CycleState,
     FULL_SOC_PERCENT,
@@ -1108,6 +1109,7 @@ class _StrategyFacts:
     cycle_deadline: datetime | None
     cycle_observation_gate: datetime | None
     device_timestamp: datetime
+    authorization: ChargeAuthorization
 
 
 @dataclass(frozen=True, slots=True)
@@ -1129,10 +1131,12 @@ async def build_plan(
     cycle_deadline: datetime | None,
     cycle_observation_gate: datetime | None = None,
     charge_lease_deadline: datetime | None = None,
+    authorization: ChargeAuthorization | None = None,
 ) -> Plan:
     """Read planning inputs and return one model-only UTC plan."""
 
     actual_energy = _actual_battery_energy(config, solis_state)
+    authorization = authorization or ChargeAuthorization(now)
     try:
         _aware(now, "now")
         if type(cycle_state) is not CycleState:
@@ -1186,10 +1190,8 @@ async def build_plan(
             None,
         )
 
-        # Validated adjusted rates authorize bonus charging. The EV dispatch
-        # can end before the adjusted tariff interval does, so its binary
-        # state must not veto that rate. Provenance and bounded lease checks
-        # still apply; a changed tariff is reconciled by the controller.
+        # Rates are economic opportunities. Household import permission is
+        # independently established by the settlement-period charge guard.
 
         next_standard_cheap = _next_standard_cheap_start(import_rates, now)
         reserve_end = next_standard_cheap if next_standard_cheap is not None else horizon_end
@@ -1292,7 +1294,12 @@ async def build_plan(
                 # A previously observed bonus lease is never extended by a
                 # re-plan, even if the source reclassifies the interval.
                 charge_end = _min_instant(charge_end, charge_lease_deadline)
-            if _instant(charge_end) > _instant(charge_start):
+            permission_end = authorization.authorized_until(max(charge_start, now))
+            if permission_end is not None:
+                charge_end = min(charge_end, permission_end)
+                if is_bonus:
+                    effective_charge_lease_deadline = charge_end
+            if permission_end is not None and charge_end > max(charge_start, now):
                 charge_intent = _intent(
                     SlotOwner.CHEAP_CHARGING,
                     SlotDirection.CHARGE,
@@ -1354,6 +1361,7 @@ async def build_plan(
                 cycle_deadline=cycle_deadline,
                 cycle_observation_gate=cycle_observation_gate,
                 device_timestamp=telemetry.device_timestamp,
+                authorization=authorization,
             )
         )
         return Plan(
@@ -1717,6 +1725,10 @@ def _cycle_schedule(
     if _instant(end) > _instant(facts.cheap_window.end):
         return None
     current = replace(current_template, start=start, end=end, expiry=end)
+    if current.direction is SlotDirection.CHARGE and not facts.authorization.charge_is_authorized(
+        max(current.start, facts.now), current.end
+    ):
+        return None
     if current.direction is SlotDirection.DISCHARGE:
         current = _safe_intent(current, facts.reserve_soc_percent)
     if not include_next:
@@ -1727,6 +1739,10 @@ def _cycle_schedule(
         return None
     assert next_template is not None
     following = replace(next_template, start=end, end=next_end, expiry=next_end)
+    if following.direction is SlotDirection.CHARGE and not facts.authorization.charge_is_authorized(
+        max(following.start, facts.now), following.end
+    ):
+        return None
     if following.direction is SlotDirection.DISCHARGE:
         following = _safe_intent(following, facts.reserve_soc_percent)
     return _logical(current, following)
@@ -1739,6 +1755,10 @@ def _cycle_after_recharge_fits(facts: _StrategyFacts, recharge_start: datetime) 
         facts.cheap_window is not None
         and _instant(recharge_start + 3 * facts.cycle_duration)
         <= _instant(facts.cheap_window.end)
+        and facts.authorization.charge_is_authorized(
+            recharge_start + 2 * facts.cycle_duration,
+            recharge_start + 3 * facts.cycle_duration,
+        )
     )
 
 

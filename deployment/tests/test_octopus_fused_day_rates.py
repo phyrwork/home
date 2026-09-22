@@ -181,11 +181,12 @@ def test_deployment_preflight_requires_exact_rate_event_and_control_entities() -
         "number.octopus_energy_{{ ev_charger_device_id }}_intelligent_charge_target",
         "binary_sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatching",
         "switch.octopus_energy_{{ ev_charger_device_id }}_intelligent_smart_charge",
+        "sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_state",
+        "sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatches_data_last_retrieved",
     )
     assert all(entity_id in config for entity_id in required)
     for obsolete in (
         "_rates_data_last_retrieved",
-        "_intelligent_dispatches_data_last_retrieved",
     ):
         assert obsolete not in config
     assert 'if entity.get("disabled_by") is None' in config

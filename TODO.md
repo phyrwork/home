@@ -1,5 +1,10 @@
 # TODO
 
+- [x] Implement and verify the [IOG settlement-period battery charging guard](docs/tasks/T0051-iog-settlement-charge-guard.md): 0.2.2 deployed, 224 tests passed, physical discharge confirmed.
+- [ ] Complete natural IOG guard commissioning: new qualifying smart charge, boundary renewal/expiry and overnight ordinary/cycle recharge; see [commissioning record](docs/house-battery-commissioning-log.md).
+      Scheduled bonus rates are not proof of qualifying EV charging in each
+      half-hour; cover ordinary charging and full-SOC cycle recharge.
+
 - [ ] Fix/rewrite covers solar management (close/open). The reopen logic in
       `deployment/files/automations/covers_solar_open.yaml` appears broken and
       likely never selects covers to reopen.

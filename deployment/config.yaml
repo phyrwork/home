@@ -5,7 +5,11 @@
 
   pre_tasks:
     - name: read home assistant api token
-      command: op read "op://jxs6qrivegu7ekpzkt27seurvy/fgvzkd432x4xsjq7f3vu4zippu/password"
+      command:
+        argv: >-
+          {{ ['cat', lookup('env', 'HA_API_TOKEN_FILE')]
+             if lookup('env', 'HA_API_TOKEN_FILE') else
+             ['op', 'read', 'op://jxs6qrivegu7ekpzkt27seurvy/fgvzkd432x4xsjq7f3vu4zippu/password'] }}
       delegate_to: localhost
       run_once: true
       register: ha_api_token_cmd
@@ -36,6 +40,8 @@
             "number.octopus_energy_{{ ev_charger_device_id }}_intelligent_charge_target",
             "binary_sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatching",
             "switch.octopus_energy_{{ ev_charger_device_id }}_intelligent_smart_charge",
+            "sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_state",
+            "sensor.octopus_energy_{{ ev_charger_device_id }}_intelligent_dispatches_data_last_retrieved",
         ]
         missing = [entity_id for entity_id in expected if entity_id not in entity_ids]
         if missing:

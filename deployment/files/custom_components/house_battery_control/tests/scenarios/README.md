@@ -26,3 +26,14 @@ To add an incident:
 Do not include credentials, entity-state dumps unrelated to the failure,
 economic-performance expectations or implementation-internal state. Add a new
 schema field only when a second accepted scenario actually needs it.
+
+`projections/iog_ev_finished_2026_09_22.yaml` preserves the observed 21:11 EV stop
+and a user-requested forward projection of idle power through 23:30. Future
+samples, successful retrievals and the full-SOC variant are explicitly synthetic.
+`test_iog_idle_projection.py` exercises each projected boundary in the production
+planner and real authorization model; all bonus cases must reject charge and
+overnight cases must allow it. Sequential tests also carry the latch and cycle
+state through the stop, boundary and overnight transition, checking native slot
+cleanup through the Solis adapter. Earlier source retrievals are explicitly
+synthetic, since that sensor was enabled after the EV stopped. Keep this
+projection schema separate from the existing rolling-cycle replay format.

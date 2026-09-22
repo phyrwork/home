@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Hashable
 
@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .config import Config, DOMAIN
+from .charge_authorization import ChargeAuthorization, ChargeGuard, settlement_start
 from .model import (
     ControllerHealth,
     CycleState,
@@ -91,6 +92,7 @@ class Snapshot:
     pending_operation: str | None = None
     attempt: int | None = None
     next_retry_at: datetime | None = None
+    charge_authorization: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +124,8 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             raise ValueError(f"Unknown Home Assistant timezone: {hass.config.time_zone}")
         self.solis = SolisAdapter(hass, config.solis, timezone=zone)
         self._zone = zone
+        self._charge_guard = ChargeGuard(self._now())
+        self._charge_authorization = ChargeAuthorization(self._now())
         self._cycle_state = CycleState.IDLE
         self._cycle_deadline: datetime | None = None
         self._cycle_observation_gate: datetime | None = None
@@ -220,8 +224,10 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 self.trigger()
 
     async def _reconcile(self) -> None:
+        self._observe_charge(self._now())
         await self.solis.refresh_pending(deadline=self._monotonic() + WRITE_DEADLINE.total_seconds())
         now = self._now()
+        self._observe_charge(now)
         monotonic = self._monotonic()
         observation = read_state(self.hass, self.config.solis, now=now)
         self._discover_unconditional_stops(observation, now, monotonic)
@@ -269,6 +275,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             cycle_deadline=self._cycle_deadline,
             cycle_observation_gate=self._cycle_observation_gate,
             charge_lease_deadline=self._charge_lease_deadline,
+            authorization=self._charge_authorization,
         )
         if plan.issue is not None:
             self._degrade(
@@ -283,6 +290,13 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             raise ValueError("valid plan has no reserve SOC")
         if not fresh_soc:
             plan = self._retain_armed_schedule(plan, now)
+        # Forecast calls may yield across a boundary. Retained schedules and
+        # stale-SOC cycle preservation must obey the same charging guard.
+        self._observe_charge(self._now())
+        if not self._intent_charge_authorized(plan.intent, self._now()):
+            plan = replace(plan, action=StrategyAction.IDLE, intent=None,
+                           next_cycle_state=CycleState.STOPPING, cycle_deadline=None,
+                           charge_lease_deadline=None)
         self._last_plan = plan
 
         fingerprint = _bonus_fingerprint(plan, now)
@@ -431,6 +445,9 @@ class Controller(DataUpdateCoordinator[Snapshot]):
         for slot in observation.slots:
             for direction in (slot.charge, slot.discharge):
                 if direction.enabled is not True:
+                    continue
+                if direction.key.direction is SlotDirection.CHARGE and not self._native_charge_authorized(direction.schedule, now):
+                    self._add_stop(direction.key, now, monotonic)
                     continue
                 if (
                     soc is not None
@@ -632,6 +649,14 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                 attempt=retry.attempt,
                 next_retry_at=retry.next_retry_at,
             )
+            return
+        # Never enable a prepared/retried pair using permission that expired
+        # during I/O. Native end times provide the cutoff if the service is slow.
+        checked_at = self._now()
+        self._observe_charge(checked_at)
+        if not self._intent_charge_authorized(plan.intent, checked_at):
+            self._start_retry = None
+            self._dirty = True
             return
         # Record dated authority before dispatch: even a timed-out enable may
         # have reached the inverter and must be cleaned up at its expiry.
@@ -845,6 +870,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             degraded_since=self._degraded_since,
             telemetry_timestamp=None if telemetry is None else telemetry.device_timestamp,
             telemetry_stale=not fresh,
+            charge_authorization=self._charge_guard.diagnostics(now),
             last_controls_read_at=self._last_controls_read_at,
             schedule_confirmed_at=self._schedule_confirmed_at,
             pending_operation=pending_operation,
@@ -861,7 +887,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             return
         now = self._now()
         monotonic = self._monotonic()
-        candidates = [_next_minute(now)]
+        candidates = [_next_minute(now), settlement_start(now) + timedelta(minutes=30)]
         candidates.extend(self._owned_expiry.values())
         plan = self._last_plan
         if plan is not None:
@@ -887,6 +913,9 @@ class Controller(DataUpdateCoordinator[Snapshot]):
 
     @callback
     def _source_changed(self, _event: Event) -> None:
+        # Capture a brief overlap even while the serialized writer is awaiting
+        # I/O. No service calls or planning in this synchronous observation.
+        self._observe_charge(self._now())
         self.trigger()
 
     @callback
@@ -897,6 +926,9 @@ class Controller(DataUpdateCoordinator[Snapshot]):
     def source_entity_ids(self) -> tuple[str, ...]:
         solis = self.config.solis
         entity_ids = [
+            self.config.charge_guard.ev_power_entity_id,
+            self.config.charge_guard.intelligent_state_entity_id,
+            self.config.charge_guard.dispatches_retrieved_entity_id,
             self.config.tariff.import_rates_entity_id,
             self.config.tariff.export_rates_entity_id,
             self.config.cycle_discharge_duration_entity_id,
@@ -923,6 +955,37 @@ class Controller(DataUpdateCoordinator[Snapshot]):
                     )
                 )
         return tuple(dict.fromkeys(entity_ids))
+
+    def _observe_charge(self, now: datetime) -> None:
+        self._charge_authorization = self._charge_guard.observe(self.hass, self.config.charge_guard, now)
+
+    def _intent_charge_authorized(self, intent: LogicalIntent | None, now: datetime) -> bool:
+        if intent is None:
+            return True
+        return all(
+            self._charge_authorization.charge_is_authorized(max(segment.start, now), segment.end)
+            for segment in intent.segments if segment.direction is SlotDirection.CHARGE
+        )
+
+    def _native_charge_authorized(self, schedule: object, now: datetime) -> bool:
+        """Check the remaining or next occurrence of an observed daily slot."""
+        if schedule is None or schedule.start_minute == schedule.end_minute:
+            return False
+        local_day = now.astimezone(self._zone).date()
+        occurrences = []
+        for offset in (-1, 0, 1):
+            midnight = datetime.combine(local_day + timedelta(days=offset), time(), self._zone)
+            start = midnight + timedelta(minutes=schedule.start_minute)
+            end = midnight + timedelta(minutes=schedule.end_minute)
+            if schedule.end_minute < schedule.start_minute:
+                end += timedelta(days=1)
+            start, end = _instant(start), _instant(end)
+            if end > _instant(now):
+                occurrences.append((max(start, _instant(now)), end))
+        if not occurrences:
+            return False
+        start, end = min(occurrences)
+        return self._charge_authorization.charge_is_authorized(start, end)
 
     async def async_stop(self) -> None:
         if self._stop_task is None:

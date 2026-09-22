@@ -180,7 +180,8 @@ async def test_ambiguous_enable_keeps_expiry_obligation(hass):
                       intent=intent(start=NOW, end=NOW + timedelta(minutes=10)))
     change = SimpleNamespace(entity_id=controller.config.solis.direction(key).enable_entity_id, target=True)
     writer.apply.return_value = WriteResult(change.entity_id, WriteOutcome.SERVICE_TIMEOUT, 'timeout')
-    await controller._attempt_start(change, 'generation', planned, observation(), NOW, 0)
+    with patch.object(Controller, '_now', return_value=NOW):
+        await controller._attempt_start(change, 'generation', planned, observation(), NOW, 0)
     assert controller._owned_expiry[key] == NOW + timedelta(minutes=10)
     controller._discover_unconditional_stops(stale(observation()), NOW + timedelta(minutes=10), 600)
     assert key in controller._stop_debts

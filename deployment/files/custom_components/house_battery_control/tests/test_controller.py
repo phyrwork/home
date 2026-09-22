@@ -13,6 +13,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.house_battery_control import config as integration_config
+from custom_components.house_battery_control.charge_authorization import ChargeAuthorization, QualifiedHalfHour, settlement_start
 from custom_components.house_battery_control.controller import (
     BACKSTOP_INTERVAL,
     Controller,
@@ -276,6 +277,7 @@ def plan(
 
 
 def adapter(controller: Controller, *, reconciled: bool = True) -> MagicMock:
+    authorize_fixture(controller)
     result = MagicMock()
     result.conflicting_enabled_keys.return_value = ()
     result.next_start_change.return_value = None
@@ -296,6 +298,14 @@ def adapter(controller: Controller, *, reconciled: bool = True) -> MagicMock:
     )
     controller.solis = result
     return result
+
+
+def authorize_fixture(controller: Controller) -> None:
+    """Existing reconciliation tests assume a qualified current bonus period."""
+    start = settlement_start(NOW)
+    controller._zone = UTC  # Fixture native time strings are expressed in UTC.
+    controller._charge_guard.qualified = QualifiedHalfHour(start, start + timedelta(minutes=30), NOW, NOW, NOW)
+    controller._charge_authorization = ChargeAuthorization(NOW, controller._charge_guard.qualified)
 
 
 async def test_dynamic_reserve_does_not_raise_load_following_floor(
@@ -375,18 +385,18 @@ async def test_start_retries_at_generation_offsets_then_each_minute_while_author
             SlotOwner.CHEAP_CHARGING,
             SlotDirection.CHARGE,
             NOW - timedelta(minutes=30),
-            NOW + timedelta(hours=4),
+            NOW + timedelta(minutes=15),
             Decimal("100"),
             Decimal("100"),
-            NOW + timedelta(hours=4),
+            NOW + timedelta(minutes=15),
         ),)),
         current_cheap_window=SimpleNamespace(components=(SimpleNamespace(
-            interval=SimpleNamespace(start=NOW - timedelta(minutes=30), end=NOW + timedelta(hours=4)),
+            interval=SimpleNamespace(start=NOW - timedelta(minutes=30), end=NOW + timedelta(minutes=15)),
             rate_interval=SimpleNamespace(classification=CheapClassification.STANDARD_CHEAP),
         ),)),
     )
     solis.next_start_change.return_value = SimpleNamespace(
-        entity_id="text.slot", target="12:00-16:00"
+        entity_id="text.slot", target="12:00-12:15"
     )
     solis.apply.return_value = WriteResult(
         "text.slot", WriteOutcome.SERVICE_ERROR, "cloud failed"
@@ -422,13 +432,13 @@ async def test_start_retries_at_generation_offsets_then_each_minute_while_author
     )
     assert controller._start_retry is not None
     assert controller._start_retry.next_retry_at == NOW + timedelta(seconds=240)
-    same_end = SimpleNamespace(entity_id="text.slot", target="13:00-16:00")
+    same_end = SimpleNamespace(entity_id="text.slot", target="12:01-12:15")
     assert controller._start_generation(
         stable_standard,
         same_end,
         preserve_standard_cheap_slot=True,
     ) == generation
-    changed_end = SimpleNamespace(entity_id="text.slot", target="13:00-17:00")
+    changed_end = SimpleNamespace(entity_id="text.slot", target="12:01-12:16")
     assert controller._start_generation(
         stable_standard,
         changed_end,
@@ -540,7 +550,7 @@ async def test_ambiguous_stop_debt_survives_optimistic_off_and_forces_proof(
     assert solis.stop.await_args_list[1].kwargs["force"] is True
 
 
-def test_recurring_native_schedule_does_not_infer_restart_expiry(
+def test_recurring_unqualified_native_schedule_is_stopped_on_restart(
     hass: HomeAssistant,
 ) -> None:
     controller = Controller(hass, config())
@@ -552,7 +562,8 @@ def test_recurring_native_schedule_does_not_infer_restart_expiry(
 
     controller._discover_unconditional_stops(invalid_policy, NOW, 0)
 
-    assert key not in controller._stop_debts
+    assert key in controller._stop_debts
+    assert key not in controller._owned_expiry
 
 
 async def test_stop_publishes_degraded_context_before_blocking_service(
@@ -984,8 +995,9 @@ def test_full_soc_does_not_cancel_a_planned_cycle_recharge(
     hass: HomeAssistant,
 ) -> None:
     controller = Controller(hass, config())
+    authorize_fixture(controller)
     charge = SlotKey(1, SlotDirection.CHARGE)
-    stale = observation(soc="100", enabled=charge, target_state="100")
+    stale = observation(soc="100", enabled=charge, target_state="100", time_state="12:00-12:20")
     assert stale.telemetry is not None
     controller._cycle_state = CycleState.CYCLE_RECHARGING
     controller._cycle_observation_gate = stale.telemetry.device_timestamp

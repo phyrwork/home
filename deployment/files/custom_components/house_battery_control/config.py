@@ -39,12 +39,20 @@ class SolarConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ChargeGuardConfig:
+    ev_power_entity_id: str
+    intelligent_state_entity_id: str
+    dispatches_retrieved_entity_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     battery: BatteryConfig
     tariff: TariffConfig
     solar: SolarConfig
     solis: SolisConfig
     cycle_discharge_duration_entity_id: str
+    charge_guard: ChargeGuardConfig
 
 
 def from_mapping(value: Mapping[str, Any]) -> Config:
@@ -57,6 +65,7 @@ def from_mapping(value: Mapping[str, Any]) -> Config:
             "solar",
             "solis",
             "cycle_discharge_duration_entity_id",
+            "charge_guard",
         },
         name="config",
     )
@@ -108,12 +117,17 @@ def from_mapping(value: Mapping[str, Any]) -> Config:
         "cycle_discharge_duration_entity_id",
         "input_number",
     )
+    guard = _mapping(source["charge_guard"], "charge_guard")
+    _keys(guard, {"ev_power_entity_id", "intelligent_state_entity_id", "dispatches_retrieved_entity_id"}, name="charge_guard")
     return Config(
         battery=battery_config,
         tariff=tariff_config,
         solar=SolarConfig(entry_id),
         solis=config_from_mapping(_mapping(source["solis"], "solis")),
         cycle_discharge_duration_entity_id=cycle_duration,
+        charge_guard=ChargeGuardConfig(**{
+            key: _entity(value, f"charge_guard.{key}", "sensor") for key, value in guard.items()
+        }),
     )
 
 

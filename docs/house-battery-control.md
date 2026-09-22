@@ -33,12 +33,22 @@ writer concurrently. `solis_tou` is not installed or deployed.
   bonus dispatch. Forecast PV offsets concurrent load but is not banked as
   future stored energy. Dynamic discharge targets round upward to common
   supported slot increments, with the existing 1% SOC uncertainty allowance.
-- Cheap import opportunities charge toward 100%. Existing tariff profitability,
-  provenance and bonus lease rules remain in effect. A validated adjusted
-  import-rate interval authorizes bonus charging even when the EV dispatch
-  binary sensor is off. Dispatch activity can end before that tariff interval;
-  it is not a separate start veto or stop signal. Tariff withdrawal and bounded
-  lease expiry still stop bonus charging.
+- Cheap import opportunities charge toward 100%. Prices and profitability are
+  separate from household charging permission. All charge/recharge intervals
+  must fit within guaranteed 23:30–05:30 Europe/London off-peak or the currently
+  qualified half-hour. A bonus period qualifies when smart-control state and EV
+  power above 50 W overlap with fresh evidence from that same period. Power uses
+  HA `last_reported` (maximum age two minutes); smart state uses the successful
+  Octopus dispatch retrieval timestamp (maximum age five minutes). Both must be
+  observed after controller startup. Charge Cap is assumed enabled.
+- Qualification survives the EV stopping, Boost starting or a subsequent source
+  failure until the half-hour ends. The next period requires new evidence.
+  Source changes and minute/boundary wakeups reevaluate the guard; no historical
+  latch is restored. Ordinary leases retain their shorter 15-minute/component
+  limits. Cycle recharge is gated independently of discharge. The controller
+  stops unauthorized native charge slots even when planning/telemetry is
+  unavailable and rechecks permission before enabling prepared schedules.
+  See [billing rules and evidence](intelligent-octopus-battery-charge-guard.md).
 - Surplus SOC supports forced export. Full-SOC cycling remains enabled in cheap
   periods, using the existing duration helper and adjacent discharge/recharge
   schedule. Recharge is armed before discharge; the inverter clock performs

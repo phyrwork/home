@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from custom_components.house_battery_control import config as integration_config
+from custom_components.house_battery_control.charge_authorization import ChargeAuthorization, QualifiedHalfHour, settlement_start
 from custom_components.house_battery_control.model import (
     ControllerHealth,
     CycleState,
@@ -688,6 +689,7 @@ async def _build(
     window_override: CheapWindow | None = None,
     import_rates_override: tuple[AdjustedRateInterval, ...] | None = None,
     export_rates_override: tuple[ExportRateInterval, ...] | None = None,
+    authorization=None,
 ):
     config = _config()
     for entity_id, value in (
@@ -749,6 +751,12 @@ async def _build(
                 observed_at=now,
             ),
             now=now,
+            # Existing economic/phase tests isolate the new authorization
+            # dependency. Guard and incident tests pass the real snapshot.
+            authorization=authorization if authorization is not None else SimpleNamespace(
+                authorized_until=lambda start: start + timedelta(days=1),
+                charge_is_authorized=lambda start, end: start < end,
+            ),
             cycle_state=state,
             cycle_deadline=deadline,
             cycle_observation_gate=cycle_observation_gate,
@@ -853,8 +861,10 @@ async def test_battery_reserve_capability_does_not_quantize_slot_target(hass) ->
 
 
 @pytest.mark.asyncio
-async def test_adjusted_bonus_rate_authorizes_charge_after_dispatch_turns_off(hass) -> None:
-    result = await _build(hass, cheap=True, bonus=True, dispatch_state="off")
+async def test_qualified_bonus_charge_survives_dispatch_turning_off(hass) -> None:
+    start = settlement_start(NOW)
+    permission = ChargeAuthorization(NOW, QualifiedHalfHour(start, start + timedelta(minutes=30), NOW, NOW, NOW))
+    result = await _build(hass, cheap=True, bonus=True, dispatch_state="off", authorization=permission)
     assert result.issue is None
     assert result.action is StrategyAction.CHEAP_CHARGE
     assert result.intent is not None
