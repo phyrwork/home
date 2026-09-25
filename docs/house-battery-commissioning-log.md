@@ -818,3 +818,13 @@ observations, gross import/export energy accounting and confirmation that cheap
 charging and subsequent load following behave normally. Do not interpret the
 import reduction as proof of reduced inverter overhead or extrapolate it into
 annual savings without measured operating hours and battery energy costs.
+
+
+### Later settled readings, 23:24–23:26 BST
+
+A subsequent read-only recorder check confirmed utility import of 28 W at
+23:24:07, 12 W at 23:25:07 and 18 W at 23:26:07 BST. Controller action remained
+`IDLE` at the latest check. No further calibration change was made. The last
+two readings are within the desired +/-25 W band; this demonstrates reaching
+the target, not sustained compliance across loads or a full night. They are
+additional observations, not part of the three-reading 31 W mean above.

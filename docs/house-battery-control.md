@@ -7,8 +7,8 @@ proved that this inverter supplies changing house demand in Feed-In Priority
 with actual Grid Peak Shaving off and no active TOU slots. A short
 [25 September calibration test](house-battery-commissioning-log.md#25-september-2026-export-calibration--30-w-to-0-w)
 reduced mean settled utility import from about 53 W to 31 W after Battery Saving
-had been disabled. Longer observation remains pending; the earlier export
-transient was not re-tested.
+had been disabled; later readings reached 12–18 W import. Longer observation
+remains pending; the earlier export transient was not re-tested.
 
 ## Fixed commissioning and ownership
 
