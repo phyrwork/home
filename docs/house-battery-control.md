@@ -49,7 +49,10 @@ writer concurrently. `solis_tou` is not installed or deployed.
   stops unauthorized native charge slots even when planning/telemetry is
   unavailable and rechecks permission before enabling prepared schedules.
   See [billing rules and evidence](intelligent-octopus-battery-charge-guard.md).
-- Surplus SOC supports forced export. Full-SOC cycling remains enabled in cheap
+- Action priority is eligible authorized charging, then export of surplus above
+  the control reserve, then idle. A cheap period never blocks surplus export.
+  Permission changes can preempt ordinary export or charging; direction changes
+  still require a confirmed stop. Full-SOC cycling remains enabled in cheap
   periods, using the existing duration helper and adjacent discharge/recharge
   schedule. Recharge is armed before discharge; the inverter clock performs
   their handover. Midnight splitting retains the commissioned 23:59 boundary

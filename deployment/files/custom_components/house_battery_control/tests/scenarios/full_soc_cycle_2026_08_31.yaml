@@ -109,8 +109,12 @@ steps:
     soc_percent: 100
     device_timestamp: "2026-08-31T00:40:00Z"
     expect:
-      action: IDLE
-      cycle_state: STOPPING
-      cycle_deadline: "2026-08-31T00:40:00Z"
+      # Once cycling no longer fits, export remaining surplus independently.
+      action: RESERVE_DISCHARGE
+      cycle_state: RESERVE_DISCHARGING
       stopped_directions: [charge]
-      segments: []
+      segments:
+        - owner: reserve_export
+          direction: discharge
+          start: "2026-08-31T00:40:00Z"
+          end: "2026-08-31T01:15:00Z"

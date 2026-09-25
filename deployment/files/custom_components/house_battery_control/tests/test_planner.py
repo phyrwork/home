@@ -1090,8 +1090,9 @@ async def test_build_plan_cycle_deadline_is_fixed_and_requires_recharge_time(has
     assert continued.action is StrategyAction.CYCLE_DISCHARGE
     assert continued.intent == started.intent
     too_short = await _build(hass, cheap=True, soc="100", window_minutes=19)
-    assert too_short.action is StrategyAction.IDLE
-    assert too_short.intent is None
+    assert too_short.action is StrategyAction.RESERVE_DISCHARGE
+    assert too_short.intent is not None
+    assert all(s.direction is SlotDirection.DISCHARGE for s in too_short.intent.segments)
     exact_fit = await _build(hass, cheap=True, soc="100", window_minutes=20)
     assert exact_fit.action is StrategyAction.CYCLE_DISCHARGE
 
@@ -1193,9 +1194,10 @@ async def test_cycle_finishes_with_recharge_when_no_complete_following_cycle_fit
         now=NOW + timedelta(minutes=20, seconds=5),
         window_minutes=25,
     )
-    assert finished.action is StrategyAction.IDLE
-    assert finished.next_cycle_state is CycleState.STOPPING
-    assert finished.intent is None
+    assert finished.action is StrategyAction.RESERVE_DISCHARGE
+    assert finished.next_cycle_state is CycleState.RESERVE_DISCHARGING
+    assert finished.intent is not None
+    assert all(s.direction is SlotDirection.DISCHARGE for s in finished.intent.segments)
 
 
 @pytest.mark.asyncio
@@ -1208,8 +1210,9 @@ async def test_cycle_repeat_requires_strictly_newer_device_observation(hass) -> 
         device_timestamp=NOW,
         now=NOW + timedelta(minutes=1),
     )
-    assert blocked.action is StrategyAction.IDLE
-    assert blocked.intent is None
+    assert blocked.action is StrategyAction.RESERVE_DISCHARGE
+    assert blocked.intent is not None
+    assert all(s.direction is SlotDirection.DISCHARGE for s in blocked.intent.segments)
 
     allowed = await _build(
         hass,

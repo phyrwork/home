@@ -391,7 +391,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             now,
             ControllerHealth.HEALTHY,
             plan,
-            _plan_reason(plan),
+            _plan_reason(plan, self._charge_guard.reason),
             observation,
         )
 
@@ -405,7 +405,7 @@ class Controller(DataUpdateCoordinator[Snapshot]):
             segment for segment in previous
             if _instant(segment.expiry) > _instant(now)
             and (
-                (segment.owner is SlotOwner.RESERVE_EXPORT and cheap is None)
+                segment.owner is SlotOwner.RESERVE_EXPORT
                 or (segment.owner is not SlotOwner.RESERVE_EXPORT and cheap is not None
                     and _instant(segment.end) <= _instant(cheap.end))
             )
@@ -1131,7 +1131,11 @@ def _instant(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _plan_reason(plan: Plan) -> str:
+def _plan_reason(plan: Plan, charge_reason: str | None = None) -> str:
+    if plan.action is StrategyAction.RESERVE_DISCHARGE:
+        if charge_reason in {"not_smart_control", "ev_not_charging", "waiting_for_current_period_evidence"}:
+            return f"exporting surplus; charging not authorized: {charge_reason}"
+        return "exporting surplus; no eligible charge"
     return {
         StrategyAction.IDLE: "normal inverter load following; no forced slot",
         StrategyAction.CHEAP_CHARGE: "charge during trusted cheap window",

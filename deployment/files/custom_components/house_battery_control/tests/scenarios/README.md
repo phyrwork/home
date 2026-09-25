@@ -37,3 +37,15 @@ state through the stop, boundary and overnight transition, checking native slot
 cleanup through the Solis adapter. Earlier source retrievals are explicitly
 synthetic, since that sensor was enabled after the EV stopped. Keep this
 projection schema separate from the existing rolling-cycle replay format.
+
+`incidents/idle_surplus_2026_09_23.yaml` reduces the recorder diagnostic snapshot
+captured during the idle-with-surplus investigation. `test_surplus_priority.py`
+replays the observed charge-guard inputs, SOC, cheap-window end and reserve
+through the production guard, planner and Solis adapter. Current prices, EV states and inverter values come from the adjacent recorder
+JSON captured on 2026-09-24. Future tariff intervals/provenance and capability
+metadata are representative fixtures because recorder omits those attributes.
+The reserve forecast is injected from the
+recorded result; this does not claim to replay raw forecast or tariff inputs.
+Additional transition cases are synthetic. The expected behaviour is surplus
+export despite the unqualified cheap period, with authorized charging taking
+priority when available.

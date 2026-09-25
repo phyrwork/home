@@ -142,7 +142,8 @@ async def test_charge_lease_clipped_to_half_hour_and_cycle_recharge_cannot_cross
     assert ordinary.charge_lease_deadline == ordinary.intent.end
     cycle = await _build(hass, cheap=True, bonus=True, soc="100", now=now, authorization=qualified(now))
     assert cycle.issue is None
-    assert cycle.intent is None
+    assert cycle.action is StrategyAction.RESERVE_DISCHARGE
+    assert all(s.direction is SlotDirection.DISCHARGE for s in cycle.intent.segments)
 
 
 @pytest.mark.asyncio

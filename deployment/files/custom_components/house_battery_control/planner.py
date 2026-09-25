@@ -1332,10 +1332,7 @@ async def build_plan(
                 )
 
         reserve_intent: SlotIntent | None = None
-        if (
-            current_window is None
-            and _reserve_export_allowed(telemetry.state_of_charge_percent, control_reserve_soc)
-        ):
+        if _reserve_export_allowed(telemetry.state_of_charge_percent, control_reserve_soc):
             reserve_intent = _intent(
                 SlotOwner.RESERVE_EXPORT,
                 SlotDirection.DISCHARGE,
@@ -1401,38 +1398,9 @@ async def build_plan(
 def _select(facts: _StrategyFacts) -> _Choice:
     cheap = _window_active(facts.cheap_window, facts.now)
     gate = facts.cycle_observation_gate
-    if facts.cycle_state is CycleState.STOPPING:
-        return _Choice(
-            StrategyAction.IDLE,
-            None,
-            CycleState.IDLE,
-            None,
-            gate,
-        )
-
-    if facts.cycle_state is CycleState.RESERVE_DISCHARGING:
-        target = _effective_reserve(facts.reserve_soc_percent, facts.reserve_discharge)
-        if not cheap and facts.reserve_discharge is not None and _reserve_export_allowed(facts.soc_percent, target):
-            return _Choice(
-                StrategyAction.RESERVE_DISCHARGE,
-                _logical(_safe_intent(facts.reserve_discharge, target)),
-                CycleState.RESERVE_DISCHARGING,
-                None,
-                gate,
-            )
-        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline, gate)
-
-    if facts.cycle_state is CycleState.CHARGING:
-        if cheap and facts.cheap_charge is not None and facts.soc_percent < Decimal(FULL_SOC_PERCENT):
-            return _Choice(
-                StrategyAction.CHEAP_CHARGE,
-                _logical(facts.cheap_charge),
-                CycleState.CHARGING,
-                None,
-                gate,
-            )
-        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, facts.cycle_deadline, gate)
-
+    # Continue a bounded full-SOC cycle while its recharge remains authorized.
+    # Ordinary charge/export selection is stateless: permission can change
+    # while either action is active. The controller confirms stops before starts.
     if facts.cycle_state is CycleState.CYCLE_DISCHARGING:
         deadline = facts.cycle_deadline
         if cheap and deadline is not None and facts.cheap_window is not None:
@@ -1465,7 +1433,6 @@ def _select(facts: _StrategyFacts) -> _Choice:
                         recharge_deadline,
                         gate,
                     )
-        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, deadline, gate)
 
     if facts.cycle_state is CycleState.CYCLE_RECHARGING:
         deadline = facts.cycle_deadline
@@ -1502,9 +1469,8 @@ def _select(facts: _StrategyFacts) -> _Choice:
                         discharge_deadline,
                         facts.device_timestamp,
                     )
-        return _Choice(StrategyAction.IDLE, None, CycleState.STOPPING, deadline, gate)
 
-    if cheap and facts.cheap_charge is not None and facts.soc_percent < Decimal(FULL_SOC_PERCENT):
+    if cheap and facts.cheap_charge is not None and facts.soc_percent < facts.cheap_charge.target_soc:
         return _Choice(
             StrategyAction.CHEAP_CHARGE,
             _logical(facts.cheap_charge),
@@ -1528,7 +1494,7 @@ def _select(facts: _StrategyFacts) -> _Choice:
                 facts.device_timestamp,
             )
     target = _effective_reserve(facts.reserve_soc_percent, facts.reserve_discharge)
-    if not cheap and facts.reserve_discharge is not None and _reserve_export_allowed(facts.soc_percent, target):
+    if facts.reserve_discharge is not None and _reserve_export_allowed(facts.soc_percent, target):
         return _Choice(
             StrategyAction.RESERVE_DISCHARGE,
             _logical(_safe_intent(facts.reserve_discharge, target)),
@@ -1536,8 +1502,6 @@ def _select(facts: _StrategyFacts) -> _Choice:
             None,
             gate,
         )
-    if cheap:
-        return _Choice(StrategyAction.IDLE, None, CycleState.IDLE, None, gate)
     # The commissioned inverter follows house demand without a forced slot.
     return _Choice(StrategyAction.IDLE, None, CycleState.IDLE, None, gate)
 

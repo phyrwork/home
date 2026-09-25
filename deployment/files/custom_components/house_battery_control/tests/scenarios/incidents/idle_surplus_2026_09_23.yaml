@@ -1,0 +1,29 @@
+id: idle_surplus_2026_09_23
+source: >-
+  Home Assistant recorder diagnostic read during the task at
+  2026-09-23T20:20:32.346516Z, supplemented with historical entity states
+  pulled via read-only SSH on 2026-09-24 (see adjacent states JSON).
+limitations: >-
+  Current tariff prices, EV states and inverter state values are recorded.
+  Recorder omits fused tariff arrays and capability metadata, so future tariff
+  intervals/provenance and inverter capabilities use representative fixtures.
+  Reserve is injected from the recorded calculation. EV last_reported is taken
+  from the controller diagnostic; this is a single observed snapshot, not an
+  observed sequence of subsequent transitions.
+at: '2026-09-23T20:20:32.346516+00:00'
+telemetry_timestamp: '2026-09-23T20:17:09.197000+00:00'
+soc_percent: 54
+battery_energy_kwh: 17.362944
+reserve_energy_kwh: 5.87038653496612
+control_reserve_soc_percent: 19
+control_reserve_energy_kwh: 6.109184
+control_reserve_balance_kwh: 11.25376
+cheap_window_end: '2026-09-23T21:30:00+01:00'
+ev_power_w: 2.6
+ev_power_reported_at: '2026-09-23T20:20:32.336781+00:00'
+intelligent_state: SMART_CONTROL_CAPABLE
+dispatches_retrieved_at: '2026-09-23T20:19:29+00:00'
+observed_action: IDLE
+observed_health: healthy
+charge_authorization_reason: not_smart_control
+expected_action: RESERVE_DISCHARGE
