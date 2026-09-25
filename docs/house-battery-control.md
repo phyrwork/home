@@ -4,13 +4,20 @@ This is the current runtime contract, superseding historical mode switching and
 peak-shaving handovers described in the commissioning log and task cards.
 The [11 September load-following test](solis-load-following-investigation-2026-09-11.md)
 proved that this inverter supplies changing house demand in Feed-In Priority
-with actual Grid Peak Shaving off and no active TOU slots. Residual grid import
-and an observed export transient remain characteristics of the inverter.
+with actual Grid Peak Shaving off and no active TOU slots. A short
+[25 September calibration test](house-battery-commissioning-log.md#25-september-2026-export-calibration--30-w-to-0-w)
+reduced mean settled utility import from about 53 W to 31 W after Battery Saving
+had been disabled. Longer observation remains pending; the earlier export
+transient was not re-tested.
 
 ## Fixed commissioning and ownership
 
 The S5-EH1P6K-L is commissioned in Feed-In Priority, with Allow Grid Charging on,
 Battery Reserve enabled at 10%, EMS disabled, and actual Grid Peak Shaving off.
+As of 25 September, Battery Saving is disabled (user reported) and Export
+Calibration is 0 W (HA confirmed with an observed physical import reduction).
+These are manual settings: the controller does not check or enforce them, and
+authoritative device readback and longer validation remain pending.
 Runtime writes are restricted to TOU time/current/target/enable entities in the
 legacy `solis_cloud_control` integration. The controller checks its readable
 commissioning prerequisites before new operations; it does not repair them.

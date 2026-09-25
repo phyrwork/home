@@ -614,3 +614,152 @@ reserve export were verified. Reaching 100% and completing a full-SOC
 discharge/recharge pair remain unverified; overnight commissioning is therefore
 partial. Evidence is retained in `/tmp/house-battery-overnight-20260911.jsonl`
 and `/tmp/house-battery-overnight-20260911.md` on the observing computer.
+
+## 23 September 2026: Battery Saving disabled — initial evidence
+
+**Status at preparation: user-reported change; see 25 September follow-up below.** Connor
+reported disabling Battery Saving in Solis control on 23 September. The exact
+change time and subsequent authoritative setting readback have not been
+captured. No agent control write was made. Do not yet add this change to the
+established findings or fixed commissioning requirements.
+
+### Purpose and controls
+
+Investigate persistent grid import during normal battery load following.
+[Solis describes Battery Saving](https://usservice.solisinverters.com/support/solutions/articles/73000670488-battery-energy-storage-export-power-settings-explained)
+as powering the inverter's own operating needs from the grid instead of the
+battery. This is distinct from Battery Reserve, the 10% SOC floor, and Export
+Calibration. The documentation describes the general feature; its exact effect
+on this S5-EH1P6K-L and recorded firmware `4D0051` remains to be demonstrated.
+
+The pre-change HA record showed Feed-In Priority, Battery Reserve enabled at
+10%, maximum discharge current 100 A and Export Calibration at -30 W. The
+commissioned configuration has EMS and actual Grid Peak Shaving disabled;
+the latter must be checked independently of the legacy HA peak-shaving switch.
+Battery Saving's prior state was not independently read. The only change
+reported for this investigation is disabling Battery Saving.
+
+### Pre-change evidence
+
+A read-only HA recorder analysis on 23 September selected 682 one-minute
+samples (11.37 hours) from the preceding seven days. Selection required:
+
+- Controller action `IDLE`.
+- Reported solar power below 1 W and EV charger power below 30 W.
+- Battery SOC above 15% and DC discharge strictly between 40 and 600 W.
+- Device telemetry timestamp no more than 15 minutes old and not in the future.
+- Numeric readings available for each selected power/SOC input.
+
+| Measurement | Median | Mean |
+| --- | ---: | ---: |
+| Octopus whole-site grid import | 129 W | 138.5 W |
+| Solis meter grid import (sign inverted from telemetry) | 119 W | 123.7 W |
+| Battery DC discharge (sign inverted from telemetry) | 202 W | 204.9 W |
+
+The 10th–90th percentile range of Octopus import was 126–134 W. Samples used
+the latest recorded value at each minute; cloud telemetry may repeat and is
+not synchronous with the utility meter. These are descriptive selected-period
+statistics, not a continuous seven-day energy total or calibrated efficiency
+measurement. The query output was recorded in the investigation conversation;
+a standalone raw-data export was not retained.
+
+The [11 September direct-register investigation](solis-load-following-investigation-2026-09-11.md)
+also found means of 165.4 W battery discharge, 45.8 W inverter AC output and
+119.2 W grid import over 17 passive samples. The apparent DC/AC difference
+suggests losses or internal consumption, but is not an independent measurement
+of inverter overhead. Persistent import and conversion loss must be evaluated
+separately.
+
+### Original verification plan (before the 25 September calibration change)
+
+- Record the change time if recoverable, current firmware and authoritative
+  Battery Saving readback, including when and how the setting was read.
+- Confirm Export Calibration remains -30 W and record other relevant controls.
+  Keep calibration and operating mode unchanged during the comparison so their
+  effects are not mixed with Battery Saving. Passive observation requires no
+  competing schedule writer or further control changes.
+- Capture fresh post-change intervals after dark with `IDLE`, no active forced
+  charge/discharge slot, no EV charging and SOC comfortably above reserve.
+  Compare similar house loads and repeat across more than one settled interval.
+  Record interval boundaries, sample ages and exclusions; omit the transition
+  while telemetry still describes the pre-change state.
+- Compare whole-site utility-meter import/export, Solis meter power and raw DC
+  battery discharge. Use synchronized AC-output readings where available; do
+  not substitute the fixed-95%-efficiency accounting template for measured AC
+  output. Check whether reduced import is accompanied by increased battery
+  discharge and whether sustained unwanted export appears.
+- Report the import reduction and any battery-discharge increase separately.
+  If energy/cost savings are estimated, use observed eligible operating hours,
+  actual tariffs and the cost of replacement battery energy/losses. Do not
+  extrapolate the nighttime 129 W baseline to 24 hours every day without evidence.
+
+### Result and documentation promotion
+
+Pending: setting readback; post-change observation periods; grid import/export
+and battery-power comparison; effect on operating overhead; commissioning
+decision. A lower grid reading alone does not prove improved efficiency.
+
+If reduced residual import is verified without disrupting normal operation,
+add Battery Saving disabled to the fixed commissioning section of
+[house-battery-control.md](house-battery-control.md), link this evidence and
+update its residual-import description with the measured result. Describe it
+as a manually commissioned setting unless a separate implementation adds a
+controller check. Do not claim the controller enforces it. If the effect is
+absent or inconclusive, retain that outcome here instead of promoting the
+setting as a proven fix.
+
+
+## 25 September 2026: Export Calibration -30 W to 0 W
+
+**Outcome: short-window physical import reduction observed; calibration left at
+0 W.** Battery Saving remains disabled per Connor's report. Its independent
+readback and a matched before/after test remain outstanding. Connor reported
+that disabling it reduced import by roughly 100 W, leaving around 50 W;
+this is consistent with the earlier 129 W median but is not a controlled
+measurement of the setting's individual contribution.
+
+At 23:20:25 BST (22:20:25 UTC), the authorized HA `number.set_value` service
+changed `number.garage_inverter_control_export_calibration` from -30 W to 0 W.
+The service completed and HA state read 0 W. No direct register readback was
+performed. Physical utility-meter response supports an actual effect, rather
+than relying only on optimistic HA state. No other inverter controls or
+controller schedules were changed by this experiment.
+
+The controller remained `IDLE` through the observation window. Recorded context
+was Feed-In Priority, SOC 19%, no solar and EV standby around 2.4 W. The baseline
+excludes the earlier restart/transition around 23:11 BST. The normal cheap-charge
+boundary is 23:30 BST; all readings below precede that boundary.
+
+| Utility-meter readings (BST) | Import W | Summary |
+| --- | --- | --- |
+| 23:12–23:20, nine updates | 55, 53, 47, 48, 53, 63, 55, 54, 48 | Median 53 W; mean 52.9 W |
+| 23:21–23:23, three updates | 32, 30, 31 | Median/mean 31 W |
+
+The first new reading fell 16 W (48 to 32 W); the window means differ by
+21.9 W. Repeated polling of each unchanged minute reading is not counted as an
+independent measurement. The result is close to, but does not yet meet, the
+user's desired settled grid-power band of +/-25 W. That is an investigation
+target, not a published manufacturer guarantee.
+
+HA battery telemetry changed from -280 W to -305 W (25 W more DC discharge).
+Connor separately observed an approximately 35 W increase. Solis meter telemetry
+changed from -47 W import to 0 W, while the utility meter still showed 30–32 W
+import. Device sample timestamps were 22:11:10.940 and 22:21:10.522 UTC; HA
+received them at 22:12:14 and 22:21:30 respectively. These sparse, asynchronous
+samples do not establish an exact power balance, meter offset or inverter loss.
+The cloud AC-output entity reported 0 W during battery discharge and was not
+used to calculate efficiency.
+
+Evidence: [selected HA history and observations](solis-protocol-fixtures/export-calibration-2026-09-25.json).
+The read-only observer finished at 23:23:55 BST. The API credential tempfile was
+removed after evidence capture. No additional calibration adjustment or return
+to -30 W was performed; there is no A/B/A repeat or long-duration validation.
+
+Current manual operating settings are Battery Saving disabled (user reported)
+and Export Calibration 0 W (HA confirmed, physical response observed). Retain
+both for further observation. The controller neither checks nor enforces these
+two settings. Remaining work is authoritative setting readback, longer matched
+observations, gross import/export energy accounting and confirmation that cheap
+charging and subsequent load following behave normally. Do not interpret the
+import reduction as proof of reduced inverter overhead or extrapolate it into
+annual savings without measured operating hours and battery energy costs.

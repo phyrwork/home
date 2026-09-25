@@ -1,0 +1,245 @@
+{
+  "change_utc": "2026-09-25T22:20:25.828853+00:00",
+  "setting_before_w": -30,
+  "setting_after_w": 0,
+  "readback_level": "HA state; physical utility-meter response observed; no direct register readback",
+  "history": [
+    [
+      {
+        "entity_id": "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand",
+        "state": "290.0",
+        "attributes": {},
+        "last_changed": "2026-09-25T22:12:00+00:00",
+        "last_updated": "2026-09-25T22:12:00+00:00"
+      },
+      {
+        "state": "55.0",
+        "last_changed": "2026-09-25T22:12:06.660515+00:00"
+      },
+      {
+        "state": "53.0",
+        "last_changed": "2026-09-25T22:13:06.683128+00:00"
+      },
+      {
+        "state": "47.0",
+        "last_changed": "2026-09-25T22:14:06.617658+00:00"
+      },
+      {
+        "state": "48.0",
+        "last_changed": "2026-09-25T22:15:06.763081+00:00"
+      },
+      {
+        "state": "53.0",
+        "last_changed": "2026-09-25T22:16:06.718040+00:00"
+      },
+      {
+        "state": "63.0",
+        "last_changed": "2026-09-25T22:17:06.706386+00:00"
+      },
+      {
+        "state": "55.0",
+        "last_changed": "2026-09-25T22:18:06.669033+00:00"
+      },
+      {
+        "state": "54.0",
+        "last_changed": "2026-09-25T22:19:06.772543+00:00"
+      },
+      {
+        "state": "48.0",
+        "last_changed": "2026-09-25T22:20:07.052279+00:00"
+      },
+      {
+        "state": "32.0",
+        "last_changed": "2026-09-25T22:21:07.616410+00:00"
+      },
+      {
+        "state": "30.0",
+        "last_changed": "2026-09-25T22:22:07.623074+00:00"
+      },
+      {
+        "state": "31.0",
+        "last_changed": "2026-09-25T22:23:07.938730+00:00"
+      }
+    ],
+    [
+      {
+        "entity_id": "sensor.house_battery_control_action",
+        "state": "IDLE",
+        "attributes": {},
+        "last_changed": "2026-09-25T22:12:00+00:00",
+        "last_updated": "2026-09-25T22:12:00+00:00"
+      }
+    ],
+    [
+      {
+        "entity_id": "sensor.garage_inverter_telemetry_garage_inverter_battery_power",
+        "state": "unknown",
+        "attributes": {},
+        "last_changed": "2026-09-25T22:12:00+00:00",
+        "last_updated": "2026-09-25T22:12:00+00:00"
+      },
+      {
+        "state": "-280.0",
+        "last_changed": "2026-09-25T22:12:14.290429+00:00"
+      },
+      {
+        "state": "-305.0",
+        "last_changed": "2026-09-25T22:21:30.075622+00:00"
+      }
+    ],
+    [
+      {
+        "entity_id": "sensor.garage_inverter_telemetry_garage_inverter_power_grid_total_power",
+        "state": "unknown",
+        "attributes": {},
+        "last_changed": "2026-09-25T22:12:00+00:00",
+        "last_updated": "2026-09-25T22:12:00+00:00"
+      },
+      {
+        "state": "-47.0",
+        "last_changed": "2026-09-25T22:12:14.307068+00:00"
+      },
+      {
+        "state": "0.0",
+        "last_changed": "2026-09-25T22:21:30.086617+00:00"
+      }
+    ],
+    [
+      {
+        "entity_id": "sensor.garage_inverter_telemetry_garage_inverter_timestamp_measurements_received",
+        "state": "unknown",
+        "attributes": {},
+        "last_changed": "2026-09-25T22:12:00+00:00",
+        "last_updated": "2026-09-25T22:12:00+00:00"
+      },
+      {
+        "state": "1790374270.94",
+        "last_changed": "2026-09-25T22:12:14.286294+00:00"
+      },
+      {
+        "state": "1790374870.522",
+        "last_changed": "2026-09-25T22:21:30.072458+00:00"
+      }
+    ],
+    [
+      {
+        "entity_id": "number.garage_inverter_control_export_calibration",
+        "state": "-30.0",
+        "attributes": {},
+        "last_changed": "2026-09-25T22:12:00+00:00",
+        "last_updated": "2026-09-25T22:12:00+00:00"
+      },
+      {
+        "state": "0.0",
+        "last_changed": "2026-09-25T22:20:25.894572+00:00"
+      }
+    ]
+  ],
+  "observations": [
+    {
+      "at": "2026-09-25T22:20:54.883662+00:00",
+      "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand": {
+        "state": "48.0",
+        "last_updated": "2026-09-25T22:20:07.052279+00:00"
+      },
+      "number.garage_inverter_control_export_calibration": {
+        "state": "0.0",
+        "last_updated": "2026-09-25T22:20:25.894572+00:00"
+      },
+      "sensor.house_battery_control_action": {
+        "state": "IDLE",
+        "last_updated": "2026-09-25T22:20:44.401747+00:00"
+      }
+    },
+    {
+      "at": "2026-09-25T22:21:24.980111+00:00",
+      "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand": {
+        "state": "32.0",
+        "last_updated": "2026-09-25T22:21:07.616410+00:00"
+      },
+      "number.garage_inverter_control_export_calibration": {
+        "state": "0.0",
+        "last_updated": "2026-09-25T22:20:25.894572+00:00"
+      },
+      "sensor.house_battery_control_action": {
+        "state": "IDLE",
+        "last_updated": "2026-09-25T22:21:06.700797+00:00"
+      }
+    },
+    {
+      "at": "2026-09-25T22:21:55.074565+00:00",
+      "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand": {
+        "state": "32.0",
+        "last_updated": "2026-09-25T22:21:07.616410+00:00"
+      },
+      "number.garage_inverter_control_export_calibration": {
+        "state": "0.0",
+        "last_updated": "2026-09-25T22:20:25.894572+00:00"
+      },
+      "sensor.house_battery_control_action": {
+        "state": "IDLE",
+        "last_updated": "2026-09-25T22:21:30.231044+00:00"
+      }
+    },
+    {
+      "at": "2026-09-25T22:22:25.191711+00:00",
+      "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand": {
+        "state": "30.0",
+        "last_updated": "2026-09-25T22:22:07.623074+00:00"
+      },
+      "number.garage_inverter_control_export_calibration": {
+        "state": "0.0",
+        "last_updated": "2026-09-25T22:20:25.894572+00:00"
+      },
+      "sensor.house_battery_control_action": {
+        "state": "IDLE",
+        "last_updated": "2026-09-25T22:22:00.107882+00:00"
+      }
+    },
+    {
+      "at": "2026-09-25T22:22:55.293922+00:00",
+      "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand": {
+        "state": "30.0",
+        "last_updated": "2026-09-25T22:22:07.623074+00:00"
+      },
+      "number.garage_inverter_control_export_calibration": {
+        "state": "0.0",
+        "last_updated": "2026-09-25T22:20:25.894572+00:00"
+      },
+      "sensor.house_battery_control_action": {
+        "state": "IDLE",
+        "last_updated": "2026-09-25T22:22:00.107882+00:00"
+      }
+    },
+    {
+      "at": "2026-09-25T22:23:25.508572+00:00",
+      "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand": {
+        "state": "31.0",
+        "last_updated": "2026-09-25T22:23:07.938730+00:00"
+      },
+      "number.garage_inverter_control_export_calibration": {
+        "state": "0.0",
+        "last_updated": "2026-09-25T22:20:25.894572+00:00"
+      },
+      "sensor.house_battery_control_action": {
+        "state": "IDLE",
+        "last_updated": "2026-09-25T22:23:00.100535+00:00"
+      }
+    },
+    {
+      "at": "2026-09-25T22:23:55.598950+00:00",
+      "sensor.octopus_energy_electricity_21l4421345_2700007165105_current_demand": {
+        "state": "31.0",
+        "last_updated": "2026-09-25T22:23:07.938730+00:00"
+      },
+      "number.garage_inverter_control_export_calibration": {
+        "state": "0.0",
+        "last_updated": "2026-09-25T22:20:25.894572+00:00"
+      },
+      "sensor.house_battery_control_action": {
+        "state": "IDLE",
+        "last_updated": "2026-09-25T22:23:00.100535+00:00"
+      }
+    }
+  ]
+}
