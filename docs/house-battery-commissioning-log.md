@@ -615,6 +615,61 @@ discharge/recharge pair remain unverified; overnight commissioning is therefore
 partial. Evidence is retained in `/tmp/house-battery-overnight-20260911.jsonl`
 and `/tmp/house-battery-overnight-20260911.md` on the observing computer.
 
+
+## 22 September 2026 — IOG settlement charging guard, version 0.2.2
+
+Implemented the agreed current-half-hour qualification guard described in
+[T0051](tasks/T0051-iog-settlement-charge-guard.md). Static 23:30–05:30 London
+permission is unconditional. Bonus permission requires overlapping smart-control
+state and EV power above 50 W, with both input timestamps in the current period;
+the permission then survives until that period ends. Power evidence has a
+two-minute maximum age and Octopus retrieval evidence a five-minute maximum
+age, in addition to current-period and post-start membership. The guard applies
+to recharge intervals and native charge cutoffs without requiring discharge
+intervals to qualify.
+
+Validation: 224 tests passed across the complete house-battery suite and affected
+Octopus preflight, evidence and sentinel tests. The recorded EV-stop projection
+passes for all four 21:30–23:30 periods with synthetic idle reports, for ordinary
+and cycle recharge; 23:30 remains permitted. Sequential replays cover latch
+survival, boundary expiry and native-slot cleanup. HA configuration checks and
+full Ansible deployment passed (152 ok, 20 changed, zero failed/unreachable).
+Home Assistant restarted and exposed the guard diagnostics at 21:57:39 BST.
+
+During startup, missing inverter telemetry temporarily produced degraded health
+and a planner `NoneType.battery_voltage_v` error. All charge slots were off.
+Once telemetry loaded, the error cleared and health became healthy at 21:58:25.
+The first device sample was from 21:52:11, before restart, so its +4,536 W value
+was not accepted as evidence of the new control state.
+
+At 22:00 BST the planner changed to `RESERVE_DISCHARGE`, with slot 2 discharge
+enabled and all six charge directions still off. The user independently
+confirmed that the expected surplus discharge had begun. This demonstrates the
+intended separation between charging qualification and surplus discharge.
+Octopus state after restart was `SMART_CONTROL_CAPABLE`, rather than the earlier
+`SMART_CONTROL_IN_PROGRESS`; this live run therefore does not independently
+prove the smart-state-plus-idle rejection covered by the incident replay.
+
+Physical verification passed at 22:04:27 BST. A device measurement timestamped
+22:02:11 BST, received by HA at 22:03:28, reported **−4,958 W** battery power.
+Four consecutive API observations from 22:03:41 to 22:04:27 showed that new
+post-restart sample, healthy `RESERVE_DISCHARGE`, no pending operation, null
+charging authorization and all six charge switches off. These are repeated
+observations of one fresh device measurement, not four independent measurements.
+The enabled Octopus retrieval entity successfully advanced after restart.
+
+Evidence: `scratch/iog_guard_live_verification_20260922.jsonl`; original incident:
+`scratch/iog_ev_stopped_20260922.json`. Temporary API and vault credential files
+were removed automatically when deployment/verification exited successfully.
+
+Pending natural commissioning: actual new bonus qualification, EV stopping
+after qualification, renewal across a boundary while smart charging continues,
+and overnight ordinary/cycle recharge with this version. Boost and missing/stale
+source cases are covered in simulation, not by deliberately incurring a live
+Boost charge. Billing reconciliation, boundary stop latency and inverter clock
+accuracy are not yet measured. Repeating native schedules retain the existing
+next-day recurrence limitation during a sufficiently long HA outage.
+
 ## 23 September 2026: Battery Saving disabled — initial evidence
 
 **Status at preparation: user-reported change; see 25 September follow-up below.** Connor

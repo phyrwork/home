@@ -1,0 +1,396 @@
+{
+  "source": "Home Assistant recorder; latest state per entity at or before 2026-09-23T20:20:32.447Z, captured via read-only SSH on 2026-09-24. Recorder does not preserve fused tariff arrays or historical last_reported timestamps. Only replay-relevant entities retained. Recorder also omits capability min/max/step/options; these are supplied by the existing Solis fixture.",
+  "states": {
+    "sensor.octopus_energy_electricity_21l4421345_2700007165105_fused_day_rates": {
+      "state": "0.069",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:16:30.778927+00:00"
+    },
+    "sensor.ev_charger_energy_meter_power": {
+      "state": "2.6",
+      "attributes": {
+        "unit_of_measurement": "W"
+      },
+      "last_updated": "2026-09-23T20:20:32.336781+00:00"
+    },
+    "sensor.octopus_energy_00000000_0009_4000_8020_00000007d6b4_intelligent_state": {
+      "state": "SMART_CONTROL_CAPABLE",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:22.963881+00:00"
+    },
+    "datetime.garage_inverter_control_inverter_time": {
+      "state": "2026-09-23T20:21:05+00:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:20:30.602690+00:00"
+    },
+    "number.garage_inverter_control_slot1_charge_current": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.132082+00:00"
+    },
+    "number.garage_inverter_control_slot1_discharge_current": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.132731+00:00"
+    },
+    "number.garage_inverter_control_slot1_charge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.133353+00:00"
+    },
+    "number.garage_inverter_control_slot1_discharge_soc": {
+      "state": "17.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.133875+00:00"
+    },
+    "number.garage_inverter_control_slot2_charge_current": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.134947+00:00"
+    },
+    "number.garage_inverter_control_slot2_discharge_current": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.135696+00:00"
+    },
+    "number.garage_inverter_control_slot2_charge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.136243+00:00"
+    },
+    "number.garage_inverter_control_slot2_discharge_soc": {
+      "state": "21.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.136744+00:00"
+    },
+    "number.garage_inverter_control_slot3_charge_current": {
+      "state": "0.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.137292+00:00"
+    },
+    "number.garage_inverter_control_slot3_discharge_current": {
+      "state": "0.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.137824+00:00"
+    },
+    "number.garage_inverter_control_slot3_charge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.138340+00:00"
+    },
+    "number.garage_inverter_control_slot3_discharge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.138856+00:00"
+    },
+    "number.garage_inverter_control_slot4_charge_current": {
+      "state": "0.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.139489+00:00"
+    },
+    "number.garage_inverter_control_slot4_discharge_current": {
+      "state": "0.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.140424+00:00"
+    },
+    "number.garage_inverter_control_slot4_charge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.141014+00:00"
+    },
+    "number.garage_inverter_control_slot4_discharge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.141526+00:00"
+    },
+    "number.garage_inverter_control_slot5_charge_current": {
+      "state": "0.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.142153+00:00"
+    },
+    "number.garage_inverter_control_slot5_discharge_current": {
+      "state": "0.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.142824+00:00"
+    },
+    "number.garage_inverter_control_slot5_charge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.143420+00:00"
+    },
+    "number.garage_inverter_control_slot5_discharge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.144011+00:00"
+    },
+    "number.garage_inverter_control_slot6_charge_current": {
+      "state": "0.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.144732+00:00"
+    },
+    "number.garage_inverter_control_slot6_discharge_current": {
+      "state": "0.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.145517+00:00"
+    },
+    "number.garage_inverter_control_slot6_charge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.146075+00:00"
+    },
+    "number.garage_inverter_control_slot6_discharge_soc": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.146582+00:00"
+    },
+    "number.garage_inverter_control_battery_reserve_soc": {
+      "state": "10.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:15:23.166945+00:00"
+    },
+    "number.garage_inverter_control_battery_max_charge_current": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.168174+00:00"
+    },
+    "number.garage_inverter_control_battery_max_discharge_current": {
+      "state": "100.0",
+      "attributes": {
+        "unit_of_measurement": "A"
+      },
+      "last_updated": "2026-09-23T20:15:23.168811+00:00"
+    },
+    "select.garage_inverter_control_storage_mode": {
+      "state": "Feed-In Priority",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.172902+00:00"
+    },
+    "switch.garage_inverter_control_slot1_charge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.180529+00:00"
+    },
+    "switch.garage_inverter_control_slot1_discharge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.181160+00:00"
+    },
+    "switch.garage_inverter_control_slot2_charge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.181592+00:00"
+    },
+    "switch.garage_inverter_control_slot2_discharge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.182038+00:00"
+    },
+    "switch.garage_inverter_control_slot3_charge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.182495+00:00"
+    },
+    "switch.garage_inverter_control_slot3_discharge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.183078+00:00"
+    },
+    "switch.garage_inverter_control_slot4_charge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.183830+00:00"
+    },
+    "switch.garage_inverter_control_slot4_discharge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.184298+00:00"
+    },
+    "switch.garage_inverter_control_slot5_charge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.184731+00:00"
+    },
+    "switch.garage_inverter_control_slot5_discharge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.185136+00:00"
+    },
+    "switch.garage_inverter_control_slot6_charge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.187190+00:00"
+    },
+    "switch.garage_inverter_control_slot6_discharge": {
+      "state": "off",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.187813+00:00"
+    },
+    "switch.garage_inverter_control_battery_reserve": {
+      "state": "on",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.188337+00:00"
+    },
+    "switch.garage_inverter_control_allow_grid_charging": {
+      "state": "on",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.188935+00:00"
+    },
+    "text.garage_inverter_control_slot1_charge_time": {
+      "state": "20:48-21:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.193822+00:00"
+    },
+    "text.garage_inverter_control_slot1_discharge_time": {
+      "state": "04:48-05:03",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.194578+00:00"
+    },
+    "text.garage_inverter_control_slot2_charge_time": {
+      "state": "00:00-05:30",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.195197+00:00"
+    },
+    "text.garage_inverter_control_slot2_discharge_time": {
+      "state": "18:00-23:30",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.196076+00:00"
+    },
+    "text.garage_inverter_control_slot3_charge_time": {
+      "state": "00:00-00:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.196682+00:00"
+    },
+    "text.garage_inverter_control_slot3_discharge_time": {
+      "state": "00:00-00:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.197248+00:00"
+    },
+    "text.garage_inverter_control_slot4_charge_time": {
+      "state": "00:00-00:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.198198+00:00"
+    },
+    "text.garage_inverter_control_slot4_discharge_time": {
+      "state": "00:00-00:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.199063+00:00"
+    },
+    "text.garage_inverter_control_slot5_charge_time": {
+      "state": "00:00-00:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.199695+00:00"
+    },
+    "text.garage_inverter_control_slot5_discharge_time": {
+      "state": "00:00-00:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.200205+00:00"
+    },
+    "text.garage_inverter_control_slot6_charge_time": {
+      "state": "00:00-00:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.200698+00:00"
+    },
+    "text.garage_inverter_control_slot6_discharge_time": {
+      "state": "00:00-00:00",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:15:23.202498+00:00"
+    },
+    "sensor.garage_inverter_telemetry_garage_inverter_timestamp_measurements_received": {
+      "state": "1790194629.197",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:17:12.497183+00:00"
+    },
+    "sensor.garage_inverter_telemetry_garage_inverter_battery_power": {
+      "state": "-170.0",
+      "attributes": {
+        "unit_of_measurement": "W"
+      },
+      "last_updated": "2026-09-23T20:17:12.500754+00:00"
+    },
+    "sensor.garage_inverter_telemetry_garage_inverter_battery_voltage": {
+      "state": "53.2",
+      "attributes": {
+        "unit_of_measurement": "V"
+      },
+      "last_updated": "2026-09-23T20:16:36.526790+00:00"
+    },
+    "sensor.garage_inverter_telemetry_garage_inverter_remaining_battery_capacity": {
+      "state": "54.0",
+      "attributes": {
+        "unit_of_measurement": "%"
+      },
+      "last_updated": "2026-09-23T20:16:36.525803+00:00"
+    },
+    "sensor.octopus_energy_electricity_21l4421345_2700009249389_fused_export_day_rates": {
+      "state": "0.12",
+      "attributes": {},
+      "last_updated": "2026-09-23T20:16:30.200797+00:00"
+    },
+    "input_number.house_battery_cycle_discharge_duration_minutes": {
+      "state": "15.0",
+      "attributes": {
+        "unit_of_measurement": "min"
+      },
+      "last_updated": "2026-09-23T20:14:31.774481+00:00"
+    },
+    "sensor.octopus_energy_00000000_0009_4000_8020_00000007d6b4_intelligent_dispatches_data_last_retrieved": {
+      "state": "2026-09-23T20:19:29+00:00",
+      "attributes": {
+        "last_error": "None"
+      },
+      "last_updated": "2026-09-23T20:19:29.496194+00:00"
+    }
+  }
+}

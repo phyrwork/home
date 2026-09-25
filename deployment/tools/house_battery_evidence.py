@@ -47,6 +47,8 @@ EXACT_ENTITIES = frozenset(
         "input_number.house_battery_cycle_discharge_duration_minutes",
         "script.house_battery_fail_safe",
         "sensor.ev_charger_energy_meter_power",
+        "sensor.octopus_energy_00000000_0009_4000_8020_00000007d6b4_intelligent_state",
+        "sensor.octopus_energy_00000000_0009_4000_8020_00000007d6b4_intelligent_dispatches_data_last_retrieved",
         "sensor.current_export_electricity_21l4421345_2700009249389",
     }
 )

@@ -322,8 +322,9 @@ def _assert_plan(
         assert actual.direction is SlotDirection(str(item["direction"])), context
         assert actual.start == _timestamp(item["start"]), context
         assert actual.end == _timestamp(item["end"]), context
-        assert actual.start >= cheap_start and actual.end <= cheap_end, context
-        assert actual.end - actual.start == duration, context
+        if actual.owner is not SlotOwner.RESERVE_EXPORT:
+            assert actual.start >= cheap_start and actual.end <= cheap_end, context
+            assert actual.end - actual.start == duration, context
         expected_target = (
             Decimal("100")
             if actual.direction is SlotDirection.CHARGE
@@ -333,7 +334,7 @@ def _assert_plan(
     for left, right in zip(actual_segments, actual_segments[1:]):
         assert left.end == right.start, f"{context}: schedule is not adjacent"
         assert left.end <= right.start, f"{context}: schedule overlaps"
-    if actual_segments and actual_segments[-1].direction is SlotDirection.DISCHARGE:
+    if actual_segments and actual_segments[-1].owner is SlotOwner.FULL_SOC_CYCLING:
         assert actual_segments[-1].end + duration <= cheap_end, (
             f"{context}: trailing discharge has no cheap authority for recharge"
         )

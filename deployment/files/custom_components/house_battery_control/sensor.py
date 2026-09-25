@@ -108,6 +108,7 @@ class ActionSensor(_SnapshotSensor):
             "cycle_state": data.cycle_state.value,
             "cycle_deadline": None if data.cycle_deadline is None else data.cycle_deadline.isoformat(),
             "charge_lease_deadline": None if data.charge_lease_deadline is None else data.charge_lease_deadline.isoformat(),
+            **(data.charge_authorization or {}),
             "state_of_charge_percent": _float(data.state_of_charge_percent),
             "battery_power_kw": _float(data.battery_power_kw),
             "current_cheap_window": data.current_cheap_window,

@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from custom_components.house_battery_control import config as integration_config
+from custom_components.house_battery_control.charge_authorization import ChargeAuthorization, QualifiedHalfHour, settlement_start
 from custom_components.house_battery_control.model import (
     ControllerHealth,
     CycleState,
@@ -688,6 +689,7 @@ async def _build(
     window_override: CheapWindow | None = None,
     import_rates_override: tuple[AdjustedRateInterval, ...] | None = None,
     export_rates_override: tuple[ExportRateInterval, ...] | None = None,
+    authorization=None,
 ):
     config = _config()
     for entity_id, value in (
@@ -749,6 +751,12 @@ async def _build(
                 observed_at=now,
             ),
             now=now,
+            # Existing economic/phase tests isolate the new authorization
+            # dependency. Guard and incident tests pass the real snapshot.
+            authorization=authorization if authorization is not None else SimpleNamespace(
+                authorized_until=lambda start: start + timedelta(days=1),
+                charge_is_authorized=lambda start, end: start < end,
+            ),
             cycle_state=state,
             cycle_deadline=deadline,
             cycle_observation_gate=cycle_observation_gate,
@@ -842,7 +850,7 @@ async def test_battery_reserve_capability_does_not_quantize_slot_target(hass) ->
     result = await _build(
         hass,
         cheap=False,
-        soc="19",
+        soc="20",
         reserve_energy=Decimal("5.4649418"),
         battery_reserve_step="5",
     )
@@ -853,8 +861,10 @@ async def test_battery_reserve_capability_does_not_quantize_slot_target(hass) ->
 
 
 @pytest.mark.asyncio
-async def test_adjusted_bonus_rate_authorizes_charge_after_dispatch_turns_off(hass) -> None:
-    result = await _build(hass, cheap=True, bonus=True, dispatch_state="off")
+async def test_qualified_bonus_charge_survives_dispatch_turning_off(hass) -> None:
+    start = settlement_start(NOW)
+    permission = ChargeAuthorization(NOW, QualifiedHalfHour(start, start + timedelta(minutes=30), NOW, NOW, NOW))
+    result = await _build(hass, cheap=True, bonus=True, dispatch_state="off", authorization=permission)
     assert result.issue is None
     assert result.action is StrategyAction.CHEAP_CHARGE
     assert result.intent is not None
@@ -998,15 +1008,15 @@ async def test_build_plan_clamps_reserve_to_absolute_soc_floor(hass) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reserve_export_uses_one_percent_soc_uncertainty_band(hass) -> None:
+async def test_reserve_export_uses_two_percent_soc_stopping_margin(hass) -> None:
     at_boundary = await _build(
-        hass, cheap=False, soc="18", reserve_energy=Decimal("5.4649418")
-    )
-    above_boundary = await _build(
         hass, cheap=False, soc="19", reserve_energy=Decimal("5.4649418")
     )
+    above_boundary = await _build(
+        hass, cheap=False, soc="20", reserve_energy=Decimal("5.4649418")
+    )
 
-    assert RESERVE_SOC_UNCERTAINTY_PERCENT == Decimal("1")
+    assert RESERVE_SOC_UNCERTAINTY_PERCENT == Decimal("2")
     assert at_boundary.reserve_energy_kwh == Decimal("5.4649418")
     assert at_boundary.control_reserve_soc_percent == Decimal("17")
     assert at_boundary.control_reserve_energy_kwh == Decimal("5.466112")
@@ -1080,8 +1090,9 @@ async def test_build_plan_cycle_deadline_is_fixed_and_requires_recharge_time(has
     assert continued.action is StrategyAction.CYCLE_DISCHARGE
     assert continued.intent == started.intent
     too_short = await _build(hass, cheap=True, soc="100", window_minutes=19)
-    assert too_short.action is StrategyAction.IDLE
-    assert too_short.intent is None
+    assert too_short.action is StrategyAction.RESERVE_DISCHARGE
+    assert too_short.intent is not None
+    assert all(s.direction is SlotDirection.DISCHARGE for s in too_short.intent.segments)
     exact_fit = await _build(hass, cheap=True, soc="100", window_minutes=20)
     assert exact_fit.action is StrategyAction.CYCLE_DISCHARGE
 
@@ -1183,9 +1194,10 @@ async def test_cycle_finishes_with_recharge_when_no_complete_following_cycle_fit
         now=NOW + timedelta(minutes=20, seconds=5),
         window_minutes=25,
     )
-    assert finished.action is StrategyAction.IDLE
-    assert finished.next_cycle_state is CycleState.STOPPING
-    assert finished.intent is None
+    assert finished.action is StrategyAction.RESERVE_DISCHARGE
+    assert finished.next_cycle_state is CycleState.RESERVE_DISCHARGING
+    assert finished.intent is not None
+    assert all(s.direction is SlotDirection.DISCHARGE for s in finished.intent.segments)
 
 
 @pytest.mark.asyncio
@@ -1198,8 +1210,9 @@ async def test_cycle_repeat_requires_strictly_newer_device_observation(hass) -> 
         device_timestamp=NOW,
         now=NOW + timedelta(minutes=1),
     )
-    assert blocked.action is StrategyAction.IDLE
-    assert blocked.intent is None
+    assert blocked.action is StrategyAction.RESERVE_DISCHARGE
+    assert blocked.intent is not None
+    assert all(s.direction is SlotDirection.DISCHARGE for s in blocked.intent.segments)
 
     allowed = await _build(
         hass,

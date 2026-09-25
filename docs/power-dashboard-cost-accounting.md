@@ -50,6 +50,41 @@ Charging is valued at import price even when solar supplies it. Battery export
 attribution is marginal alongside solar, rather than measured energy provenance.
 Internal battery losses are already reflected in the measured DC flows.
 
+### Known limitation: battery measurement timing
+
+The battery ledgers are estimates, not verified household savings. They combine
+sparse Solis battery power samples with more frequent grid readings, without
+checking freshness or aligning measurement timestamps. When battery discharge
+stops before its reading updates, falling grid export can be misclassified as
+avoided household import. The one-minute integral update continues accumulating
+the old reading; it does not provide a new measurement. Later samples do not
+automatically correct the accumulated error. The same timing mismatch can affect
+export attribution and charging costs.
+
+On 25 September 2026, the battery reading stayed at 4.225 kW discharge for
+18 minutes before reporting 1.590 kW charging. The suspect 11:09–11:19 BST interval
+added 0.642 kWh / £0.194319 of avoided import without a matching tracked appliance
+load. That is the recorded suspect amount, not an exact quantified overstatement.
+See the [event investigation](battery-avoided-import-audit-2026-09-25.md) for
+supporting evidence, genuine appliance events, and attribution limits.
+
+Native cumulative energy counters can verify longer-term totals, but the current
+battery counters advance in whole 1 kWh steps. Coarse totals alone cannot recover
+the timing needed to separate household use from export. Daily netting is a
+different measure: later solar exports can cancel earlier genuine battery use.
+
+Improving this attribution requires sufficiently frequent, time-aligned power
+measurements or sufficiently fine-resolution cumulative energy measurements.
+Delayed delivery is acceptable if original measurement timestamps and interval
+detail are retained and processed accordingly. Eventual delivery of coarse totals
+does not restore that missing detail; changing integration method alone does not
+solve it either.
+
+Decision on 25 September 2026: document and accept this limitation for now. Keep
+the existing accounting and historical totals; do not substitute daily netting
+or claim that the current totals eventually self-correct. Revisit the calculation
+when suitable measurements are available.
+
 ## Entities
 
 - `sensor.ev_charging_total_cost`

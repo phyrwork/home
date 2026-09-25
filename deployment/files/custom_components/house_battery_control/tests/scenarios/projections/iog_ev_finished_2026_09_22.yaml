@@ -1,0 +1,49 @@
+id: iog_ev_finished_2026_09_22
+source: "HA state/history capture on 2026-09-22 at approximately 21:29 Europe/London; user-requested idle projection"
+purpose: "A continuing SMART schedule must not authorize bonus battery charging after the EV has stopped"
+status: implemented_T0051
+inverter_timezone: Europe/London
+
+observed:
+  # Actual source boundaries, not reconstructed from the binary sensor's merged window.
+  planned_dispatches:
+    - {start: "2026-09-22T21:01:00+01:00", end: "2026-09-22T21:30:00+01:00", source: SMART}
+    - {start: "2026-09-22T21:30:00+01:00", end: "2026-09-23T00:30:00+01:00", source: SMART}
+    - {start: "2026-09-23T00:30:00+01:00", end: "2026-09-23T01:00:00+01:00", source: SMART}
+  ev_power:
+    - {at: "2026-09-22T21:09:14.023420+01:00", watts: 7464.0}
+    - {at: "2026-09-22T21:11:07.762196+01:00", watts: 1349.1}
+    - {at: "2026-09-22T21:11:17.740074+01:00", watts: 2.8}
+    - {at: "2026-09-22T21:11:19.733182+01:00", watts: 3.1}
+  intelligent_state: SMART_CONTROL_IN_PROGRESS
+  dispatching: "on"
+  dispatches_retrieved_at: "2026-09-22T21:28:50+01:00"
+  battery_soc_percent: 49
+  battery_power_w: 4536
+  controller_action: CHEAP_CHARGE
+
+projection:
+  # These are synthetic reports of the forward-filled idle value, not later
+  # measurements and not an assertion that the live EV never restarted.
+  ev_power_w: 3.1
+  intelligent_state: SMART_CONTROL_IN_PROGRESS
+  dispatching: "on"
+  fresh_reports_each_step: true
+  note: >-
+    Hold the planned schedule and smart state on; provide new in-period idle
+    power reports and successful Octopus retrievals. This isolates lack of EV
+    charging from stale data. Use representative profitable rates and hold SOC
+    at 49%, with a synthetic 100% variant to exercise cycle recharge.
+
+steps:
+  - {at: "2026-09-22T21:30:01+01:00", charge_allowed: false}
+  - {at: "2026-09-22T22:00:01+01:00", charge_allowed: false}
+  - {at: "2026-09-22T22:30:01+01:00", charge_allowed: false}
+  - {at: "2026-09-22T23:00:01+01:00", charge_allowed: false}
+  - {at: "2026-09-22T23:30:00+01:00", charge_allowed: true}
+
+implementation_notes: >-
+  Sequential tests replay qualification, expiry at 21:30 and armed-slot cleanup.
+  The earlier retrieval sample is synthetic acceptance input.
+  The source retrieval entity was only enabled after the EV stopped, so no
+  historical source-retrieval sample for the earlier power overlap is claimed.
