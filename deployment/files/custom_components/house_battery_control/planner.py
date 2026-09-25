@@ -28,9 +28,10 @@ OCTOPUS_EXPORT_SOURCE_MAX_AGE = timedelta(hours=26)
 OCTOPUS_RATE_SOURCE_MAX_AGE = timedelta(hours=26)
 BONUS_CHARGE_LEASE_DURATION = timedelta(minutes=15)
 OCTOPUS_RATE_UNIT = "GBP/kWh"
-# Solis reports whole-percent SOC. Reserve export must clear the one-percent
-# reporting uncertainty before it can be physically actionable.
-RESERVE_SOC_UNCERTAINTY_PERCENT = Decimal("1")
+# Keep two percentage points above the native reserve-export target. The
+# inverter was observed idle at SOC 19% with a 17% target; use the same margin
+# for stopping and eligibility so that a completed slot is not immediately rearmed.
+RESERVE_SOC_UNCERTAINTY_PERCENT = Decimal("2")
 
 
 @dataclass(frozen=True, slots=True)

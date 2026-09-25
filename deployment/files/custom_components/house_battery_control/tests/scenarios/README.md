@@ -49,3 +49,9 @@ recorded result; this does not claim to replay raw forecast or tariff inputs.
 Additional transition cases are synthetic. The expected behaviour is surplus
 export despite the unqualified cheap period, with authorized charging taking
 priority when available.
+
+`test_reserve_stall_replay.py` uses `incidents/reserve_discharge_stalled_2026_09_25_states.json`
+to replay the enabled-but-idle export incident. Recorded SOC, power and device
+timestamps verify the 2% stopping boundary and refusal to rearm. Capability
+metadata and tariff inputs use fixtures; the reserve forecast result is recorded.
+This verifies controller decisions, not physical load following after disabling.

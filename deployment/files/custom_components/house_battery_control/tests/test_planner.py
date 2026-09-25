@@ -850,7 +850,7 @@ async def test_battery_reserve_capability_does_not_quantize_slot_target(hass) ->
     result = await _build(
         hass,
         cheap=False,
-        soc="19",
+        soc="20",
         reserve_energy=Decimal("5.4649418"),
         battery_reserve_step="5",
     )
@@ -1008,15 +1008,15 @@ async def test_build_plan_clamps_reserve_to_absolute_soc_floor(hass) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reserve_export_uses_one_percent_soc_uncertainty_band(hass) -> None:
+async def test_reserve_export_uses_two_percent_soc_stopping_margin(hass) -> None:
     at_boundary = await _build(
-        hass, cheap=False, soc="18", reserve_energy=Decimal("5.4649418")
-    )
-    above_boundary = await _build(
         hass, cheap=False, soc="19", reserve_energy=Decimal("5.4649418")
     )
+    above_boundary = await _build(
+        hass, cheap=False, soc="20", reserve_energy=Decimal("5.4649418")
+    )
 
-    assert RESERVE_SOC_UNCERTAINTY_PERCENT == Decimal("1")
+    assert RESERVE_SOC_UNCERTAINTY_PERCENT == Decimal("2")
     assert at_boundary.reserve_energy_kwh == Decimal("5.4649418")
     assert at_boundary.control_reserve_soc_percent == Decimal("17")
     assert at_boundary.control_reserve_energy_kwh == Decimal("5.466112")

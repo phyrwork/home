@@ -32,7 +32,8 @@ writer concurrently. `solis_tou` is not installed or deployed.
 - The forecast horizon is the next standard cheap refill, not a speculative
   bonus dispatch. Forecast PV offsets concurrent load but is not banked as
   future stored energy. Dynamic discharge targets round upward to common
-  supported slot increments, with the existing 1% SOC uncertainty allowance.
+  supported slot increments, with a 2% SOC stopping margin. The same margin prevents rearming export
+  at the stopping boundary; the native slot target itself is unchanged.
 - Cheap import opportunities charge toward 100%. Prices and profitability are
   separate from household charging permission. All charge/recharge intervals
   must fit within guaranteed 23:30–05:30 Europe/London off-peak or the currently
