@@ -200,15 +200,14 @@
         component_name: Octopus Energy
         component_full_name: BottlecapDave/HomeAssistant-OctopusEnergy
         component_domain: octopus_energy
-        component_version: "v19.0.1"
+        component_version: "v19.2.1"
 
     - role: custom_component
       vars:
         component_name: Solis Inverter
         component_full_name: hultenvp/solis-sensor
         component_domain: solis
-        component_version: "v4.0.1"
-        component_source_revision: pristine-v4.0.1
+        component_version: "v4.0.3"
 
     - role: custom_component
       vars:
@@ -243,7 +242,7 @@
         component_name: Waste Collection Schedule
         component_full_name: mampfes/hacs_waste_collection_schedule
         component_domain: waste_collection_schedule
-        component_version: "v2.32.0"
+        component_version: "v2.34.2"
 
     - role: custom_component
       vars:
@@ -257,7 +256,7 @@
         component_name: Versatile Thermostat
         component_full_name: jmcollin78/versatile_thermostat
         component_domain: versatile_thermostat
-        component_version: "10.2.0"
+        component_version: "10.4.0"
 
   tasks:
     - name: create zigpy ota directory

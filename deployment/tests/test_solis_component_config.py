@@ -15,8 +15,8 @@ def test_solis_inverter_uses_pristine_pinned_release_without_overlay() -> None:
     )
     solis_block = config[solis_block_start:solis_block_end]
 
-    assert 'component_version: "v4.0.1"' in solis_block
-    assert "component_source_revision: pristine-v4.0.1" in solis_block
+    assert 'component_version: "v4.0.3"' in solis_block
+    assert "component_source_revision" not in solis_block
     assert "component_overlay_dir" not in solis_block
     assert "solis-v4.0.1-poll-recovery" not in config
 

@@ -13,11 +13,11 @@ def test_timeout_patch_is_scoped_guarded_idempotent_and_validated():
     assert patch['when'] == "component_domain == 'solis'"
     before, guard, mutation, validation = patch['block']
     assert before['ansible.builtin.stat']['checksum_algorithm'] == 'sha256'
-    assert '582c5a9841ed069067ab81468e6b9f0fe476050a4bc27677752158a03095d1db' in guard['ansible.builtin.assert']['that'][0]
-    assert '8cc95bb74c7acbd99e4e27c0ce619def9691d65f303de661d2f0d1347c8c5834' in guard['ansible.builtin.assert']['that'][0]
+    assert 'd710319cf46fb204e42270e154daa100fafeba68d4f7b6e8305c51830cb46518' in guard['ansible.builtin.assert']['that'][0]
+    assert 'afa1e8a61f86106ae8a68383c83509b1364d33cca9b0ab44f3fc9cbe63e1c23e' in guard['ansible.builtin.assert']['that'][0]
     edit = mutation['ansible.builtin.replace']
-    source = 'async with async_timeout.timeout(10):\n    await request()\n'
-    expected = 'async with async_timeout.timeout(45):\n    await request()\n'
+    source = 'DEFAULT_REQUEST_TIMEOUT = 30'
+    expected = 'DEFAULT_REQUEST_TIMEOUT = 45'
     result = re.sub(edit['regexp'], edit['replace'], source)
     assert result == expected
     assert re.sub(edit['regexp'], edit['replace'], result) == expected

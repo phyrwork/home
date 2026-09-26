@@ -137,11 +137,12 @@
 
 - name: Allow slow SolisCloud telemetry responses
   block:
-    # hultenvp/solis-sensor v4.0.1: discovery abandons valid inverters when
-    # SolisCloud takes longer than 10 seconds. Recheck this patch on upgrades.
+    # hultenvp/solis-sensor v4.0.3 supports configurable request timeouts.
+    # Preserve our 45-second default for slow telemetry/discovery responses;
+    # an explicit integration option still takes precedence. Recheck on upgrades.
     - name: Inspect Solis client before applying the timeout patch
       ansible.builtin.stat:
-        path: "{{ ha_custom_components_dir }}/solis/soliscloud_api.py"
+        path: "{{ ha_custom_components_dir }}/solis/const.py"
         checksum_algorithm: sha256
       register: solis_timeout_source
 
@@ -150,15 +151,15 @@
         that:
           - >-
             solis_timeout_source.stat.checksum | default('') in
-            ['582c5a9841ed069067ab81468e6b9f0fe476050a4bc27677752158a03095d1db',
-             '8cc95bb74c7acbd99e4e27c0ce619def9691d65f303de661d2f0d1347c8c5834']
+            ['d710319cf46fb204e42270e154daa100fafeba68d4f7b6e8305c51830cb46518',
+             'afa1e8a61f86106ae8a68383c83509b1364d33cca9b0ab44f3fc9cbe63e1c23e']
         fail_msg: Review the Solis telemetry timeout patch against the installed client before deploying.
 
-    - name: Increase legacy Solis API request timeout
+    - name: Preserve the Solis API request timeout default
       ansible.builtin.replace:
-        path: "{{ ha_custom_components_dir }}/solis/soliscloud_api.py"
-        regexp: 'async with async_timeout\.timeout\(10\):'
-        replace: 'async with async_timeout.timeout(45):'
+        path: "{{ ha_custom_components_dir }}/solis/const.py"
+        regexp: '^DEFAULT_REQUEST_TIMEOUT = 30$'
+        replace: 'DEFAULT_REQUEST_TIMEOUT = 45'
       register: solis_timeout_patch
       notify: restart ha
 

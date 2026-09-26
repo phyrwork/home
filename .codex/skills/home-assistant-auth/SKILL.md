@@ -16,11 +16,15 @@ Use this skill for auth-sensitive Home Assistant deployment work in this repo.
 
 ## 1Password
 
+- Use the `my.1password.com` account for Home Assistant secrets. Set
+  `OP_ACCOUNT=my.1password.com` for the shell/session so `op read` and the
+  Ansible vault adapter use the same account.
+
 - The Ansible vault password and Home Assistant API token come from `op`.
-- Before the first `op read` in a new agent/session, run `op signin` so the CLI
-  session is authenticated even when the desktop app is already open.
+- Before the first `op read` in a new agent/session, run
+  `op signin --account my.1password.com` so the CLI session is authenticated even when the desktop app is already open.
 - If `op read` reports that the CLI cannot connect to the desktop app, run
-  `op signin` once and retry the read once before asking Connor for help.
+  `op signin --account my.1password.com` once and retry the read once before asking Connor for help.
 - If `op signin` or the retried `op read` fails or times out, stop and ask
   Connor to retry. Do not bypass `op` for the same secret.
 
