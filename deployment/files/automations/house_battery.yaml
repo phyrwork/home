@@ -3,6 +3,8 @@
   description: >-
     Notify when the controller heartbeat is stale after the startup grace
     period. Never change inverter settings. Dismiss the notice on recovery.
+  # V1 heartbeat is absent while V2 owns control. Restore true for V1 rollback.
+  initial_state: false
   mode: single
   max_exceeded: silent
   trigger:

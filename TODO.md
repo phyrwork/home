@@ -1,5 +1,9 @@
 # TODO
 
+- [ ] Finish the battery controller transition to V2 and clean up remaining V1
+      code, configuration and automations. Keep the legacy V1 heartbeat sentinel
+      disabled while V2 owns control; re-enable it only for an intentional V1 rollback.
+
 - [x] Implement and verify the [IOG settlement-period battery charging guard](docs/tasks/T0051-iog-settlement-charge-guard.md): 0.2.2 deployed, 224 tests passed, physical discharge confirmed.
 - [ ] Complete natural IOG guard commissioning: new qualifying smart charge, boundary renewal/expiry and overnight ordinary/cycle recharge; see [commissioning record](docs/house-battery-commissioning-log.md).
       Scheduled bonus rates are not proof of qualifying EV charging in each
