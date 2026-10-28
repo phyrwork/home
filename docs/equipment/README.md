@@ -1,5 +1,7 @@
 # Equipment documentation
 
+- [Smart socket troubleshooting and address-change incidents](smart-sockets.md)
+
 ## Fogstar Energy FE51.2V-32-LVFB
 
 - [Technical specification](fogstar-energy-fe51.2v-32-lvfb-specification.pdf)
