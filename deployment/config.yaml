@@ -15,11 +15,13 @@
       register: ha_api_token_cmd
       changed_when: false
       no_log: true
+      tags: remote_access
 
     - name: cache home assistant api token
       set_fact:
         ha_api_token: "{{ ha_api_token_cmd.stdout }}"
       no_log: true
+      tags: remote_access
 
     - name: validate required Octopus rate and intelligent entity ids exist and are enabled
       shell: |
@@ -87,6 +89,17 @@
     - name: reload scripts
       ansible.builtin.uri:
         url: "{{ ha_api_url }}/services/script/reload"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ha_api_token }}"
+          Content-Type: "application/json"
+        body: {}
+        body_format: json
+      no_log: true
+
+    - name: reload command line
+      ansible.builtin.uri:
+        url: "{{ ha_api_url }}/services/command_line/reload"
         method: POST
         headers:
           Authorization: "Bearer {{ ha_api_token }}"
@@ -377,7 +390,7 @@
         rsync_opts:
           - "--filter=merge\\ {{ playbook_dir }}/files/command_line/.rsync-filter"
           - "--exclude=.rsync-filter"
-      notify: reload core config
+      notify: reload command line
 
     - name: install input number configuration
       ansible.builtin.synchronize:
@@ -590,6 +603,25 @@
       loop:
         - battery_low
 
+    # A scoped deploy avoids synchronizing unrelated automations or components.
+    # Ordinary full deployments already copy these files through directory sync.
+    - name: install remote access configuration
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ ha_config_dir }}/{{ item.dest }}"
+      loop:
+        - src: automations/letsencrypt.yaml
+          dest: automations/letsencrypt.yaml
+        - src: command_line/home_tls_certificate.yaml
+          dest: command_line/home_tls_certificate.yaml
+      notify:
+        - reload automations
+        - reload command line
+      tags:
+        - never
+        - remote_access
+
     - name: validate Home Assistant configuration before handlers
       ansible.builtin.command: ha core check
       changed_when: false
+      tags: remote_access

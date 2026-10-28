@@ -2,6 +2,9 @@
 
 My Home Assistant deployment.
 
+Direct HTTPS, Namecheap dynamic DNS and certificate renewal:
+[remote access](docs/remote-access.md).
+
 ## Features
 
 House battery behavior and commissioning requirements: [native TOU control](docs/house-battery-control.md).

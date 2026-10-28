@@ -1,6 +1,7 @@
-The `external_ip` sensor is used to trigger DNS update via the Let's Encrypt add-on.
+The router's external IP sensor is informational. Namecheap DynamicDNS updates
+the public A record independently; certificate renewal does not depend on this sensor.
 
 It is configured manually.
 
-Currently, it is provided by the UPnP/IGD integration of the router, with the specific
-sensor being renamed to `external_ip`.
+It is provided by the router's UPnP/IGD integration. At commissioning it was named
+`sensor.internet_external_ip`.

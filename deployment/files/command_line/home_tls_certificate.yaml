@@ -1,0 +1,9 @@
+sensor:
+  name: Home TLS certificate on disk
+  unique_id: home_tls_certificate_on_disk
+  device_class: timestamp
+  scan_interval: 300
+  command: >-
+    python3 -c "import ssl; from datetime import datetime, timezone;
+    cert = ssl._ssl._test_decode_cert('/ssl/fullchain.pem');
+    print(datetime.fromtimestamp(ssl.cert_time_to_seconds(cert['notAfter']), timezone.utc).isoformat())"

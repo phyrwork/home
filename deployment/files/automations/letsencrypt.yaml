@@ -1,17 +1,84 @@
 - id: letsencrypt
   alias: Renew Let's Encrypt Certificates
-  description: Run the Let's Encrypt add-on daily at 03:00 AM or when the external IP changes
+  description: Check for certificate renewal daily using the HTTP challenge on port 80.
   trigger:
     - platform: time
       at: '03:00:00'
-    # Run the add-on when the external IP changes to get certbot to update the external
-    # access DNS entry, even if we don't need to renew certificates.
-    # TODO: This will never work because Namecheap API requires a whitelisted IP. Maybe
-    #   need to change DNS provider to one that supports dynamic DNS updates.
-    - platform: state
-      entity_id: sensor.external_ip
   action:
     - service: hassio.addon_start
       data:
         addon: core_letsencrypt
+  mode: single
+
+- id: letsencrypt_load_renewed_certificate
+  alias: Load renewed Let's Encrypt certificate
+  description: Restart HA only when the certificate on disk changes to a later expiry.
+  trigger:
+    - platform: state
+      entity_id: sensor.home_tls_certificate_on_disk
+  condition:
+    - condition: template
+      value_template: >-
+        {% set old = as_timestamp(trigger.from_state.state, default=none)
+           if trigger.from_state is not none else none %}
+        {% set new = as_timestamp(trigger.to_state.state, default=none)
+           if trigger.to_state is not none else none %}
+        {{ old is not none and new is not none and new > old
+           and new > as_timestamp(now()) }}
+  action:
+    - service: persistent_notification.create
+      data:
+        notification_id: home_tls_certificate_reloaded
+        title: Home Assistant certificate renewed
+        message: >-
+          A renewed TLS certificate was detected. Home Assistant is restarting
+          to load it. This briefly interrupts access and running automations.
+    - service: homeassistant.restart
+  mode: single
+
+- id: letsencrypt_certificate_health
+  alias: Check Home Assistant certificate health
+  description: Warn daily if the served certificate is unavailable or expires within 14 days.
+  trigger:
+    - platform: time
+      at: '09:00:00'
+    - platform: template
+      value_template: >-
+        {% set expiry = as_timestamp(states('sensor.home_newtonho_me_cert_expiry'), default=none) %}
+        {{ expiry is none or expiry <= as_timestamp(now()) + 14 * 86400 }}
+      for:
+        hours: 1
+    - platform: template
+      value_template: >-
+        {% set expiry = as_timestamp(states('sensor.home_newtonho_me_cert_expiry'), default=none) %}
+        {{ expiry is not none and expiry > as_timestamp(now()) + 14 * 86400 }}
+  action:
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >-
+                {% set expiry = as_timestamp(states('sensor.home_newtonho_me_cert_expiry'), default=none) %}
+                {{ expiry is not none and expiry > as_timestamp(now()) + 14 * 86400 }}
+          sequence:
+            - service: persistent_notification.dismiss
+              data:
+                notification_id: home_tls_certificate_health
+      default:
+        - service: persistent_notification.create
+          data:
+            notification_id: home_tls_certificate_health
+            title: Home Assistant HTTPS needs attention
+            message: >-
+              The certificate served by home.newtonho.me is unavailable, invalid,
+              or expires within 14 days. Expiry sensor:
+              {{ states('sensor.home_newtonho_me_cert_expiry') }}.
+              Check Namecheap DDNS, the port 80 forward and the Let's Encrypt app logs.
+        - service: notify.mobile_app_connor_s_phone
+          data:
+            title: Home Assistant HTTPS needs attention
+            message: >-
+              The home.newtonho.me certificate is invalid, unavailable, or expires
+              within 14 days. Check the certificate health notice in Home Assistant.
+            data:
+              tag: home_tls_certificate_health
   mode: single
