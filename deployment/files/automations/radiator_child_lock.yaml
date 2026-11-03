@@ -1,0 +1,40 @@
+- id: radiator_child_lock
+  alias: Keep radiator child locks enabled
+  description: Prevent local TRV controls from overriding room thermostat regulation.
+  trigger:
+    - platform: state
+      entity_id:
+        - switch.kids_bedroom_radiator_child_lock
+        - switch.downstairs_room_radiator_a_child_lock
+        - switch.downstairs_room_radiator_b_child_lock
+        - switch.middle_bathroom_radiator_child_lock
+        - switch.living_room_radiator_child_lock
+        - switch.office_radiator_child_lock
+      to: 'off'
+    - platform: homeassistant
+      event: start
+    - platform: event
+      event_type: automation_reloaded
+    # Retry locks that remained off after a failed Zigbee command.
+    - platform: time_pattern
+      minutes: '/5'
+  action:
+    - variables:
+        child_locks:
+          - switch.kids_bedroom_radiator_child_lock
+          - switch.downstairs_room_radiator_a_child_lock
+          - switch.downstairs_room_radiator_b_child_lock
+          - switch.middle_bathroom_radiator_child_lock
+          - switch.living_room_radiator_child_lock
+          - switch.office_radiator_child_lock
+    - repeat:
+        for_each: >-
+          {{ expand(child_locks) | selectattr('state', 'eq', 'off')
+             | map(attribute='entity_id') | list }}
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: '{{ repeat.item }}'
+            continue_on_error: true
+  mode: queued
+  max: 10

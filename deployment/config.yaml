@@ -15,13 +15,13 @@
       register: ha_api_token_cmd
       changed_when: false
       no_log: true
-      tags: remote_access
+      tags: [remote_access, radiator_child_lock]
 
     - name: cache home assistant api token
       set_fact:
         ha_api_token: "{{ ha_api_token_cmd.stdout }}"
       no_log: true
-      tags: remote_access
+      tags: [remote_access, radiator_child_lock]
 
     - name: validate required Octopus rate and intelligent entity ids exist and are enabled
       shell: |
@@ -306,6 +306,15 @@
           - "--filter=merge\\ {{ playbook_dir }}/files/automations/.rsync-filter"
           - "--exclude=.rsync-filter"
       notify: reload automations
+
+    # Allow this safety setting to deploy without syncing unrelated configuration.
+    - name: install radiator child lock automation
+      ansible.builtin.copy:
+        src: files/automations/radiator_child_lock.yaml
+        dest: "{{ ha_config_dir }}/automations/radiator_child_lock.yaml"
+        mode: '0644'
+      notify: reload automations
+      tags: radiator_child_lock
 
     - name: install blueprint configuration
       ansible.builtin.synchronize:
