@@ -205,6 +205,7 @@ battery_devices:
 
 # VTherm inventory (config-flow only). Keep this as a source of truth for
 # re-creating VTherm entries after a reset or migration.
+# One-time setup and verification: docs/heating-commissioning.md.
 # External temp here refers to "outdoor" proxy (garage temperature in our case).
 # room_follow_zone mirrors landing thermostat temperature and preset mode to room
 # thermostats (plus each room's setpoint offset).
@@ -243,6 +244,9 @@ thermostat_device_defaults:
     max_closing_degree: 100
   tpi:
     use_tpi_central_config: false
+    tpi_coef_int: 0.6
+    tpi_coef_ext: 0.01
+    auto_tpi_mode: false
   advanced:
     use_advanced_central_config: false
 
@@ -293,6 +297,9 @@ thermostat_devices:
     underlying_entities:
       - climate.living_room_radiator_thermostat
     temperature_sensor: sensor.living_room_temperature
+    # Trial applied 2026-11-10; retain when re-creating the config-flow entry.
+    tpi:
+      tpi_coef_ext: 0.03
     valve_regulation:
       opening_degree_entities:
         - number.living_room_radiator_opening_degree

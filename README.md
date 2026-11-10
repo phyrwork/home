@@ -9,6 +9,8 @@ Direct HTTPS, Namecheap dynamic DNS and certificate renewal:
 
 House battery behavior and commissioning requirements: [native TOU control](docs/house-battery-control.md).
 
+Room heating configuration and one-time setup: [VTherm commissioning](docs/heating-commissioning.md).
+
 ### Bindicator
 
 Daily at 4pm, query upcoming refuse collections using local council service API and
