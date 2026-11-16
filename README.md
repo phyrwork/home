@@ -35,6 +35,38 @@ Note: Labels live in Home Assistant's storage and are not currently configurable
 YAML. If we want a scripted approach, use the HA websocket API to set labels in the
 entity registry.
 
+### Thread and Matter
+
+Thread and Matter are managed in Home Assistant OS through Supervisor apps and
+integrations. The Ansible deployment covers the repository configuration.
+
+- **Thread radio** — SONOFF Dongle Plus MG24 (`Dongle-PMG24`), running SONOFF
+  OpenThread RCP `2.4.4.0`. Use its `/dev/serial/by-id/usb-SONOFF_SONOFF_Dongle_Plus_MG24_…`
+  path in OpenThread Border Router, with `460800` baud, hardware flow control off,
+  start on boot and watchdog enabled. The older ITead SONOFF dongle serves ZHA.
+- **Thread network** — `ha-thread-bb2b`, channel 15, preferred in
+  **Settings → Connectivity → Thread**. The Pi's Ethernet interface (`end0`)
+  provides the LAN connection. On a rebuilt host, check `ha docker info`.
+  If `enable_ipv6` is unset or false, run `ha docker options --enable-ipv6=true`
+  and reboot the host to apply it.
+- **Matter controller** — the official Matter Server app (`core_matter_server`)
+  and the Matter integration. For a new Matter-over-Thread device, sync the
+  preferred Thread network to the phone using the Home Assistant Companion app,
+  then go to **Settings → Connectivity → Matter → Add device** and scan the
+  Matter QR code. The IKEA BILRESA was successfully paired on 16 November 2026.
+
+For recovery or a host move, restore a Home Assistant backup that includes Core,
+OpenThread Border Router and Matter Server. Preserve the existing Thread dataset
+and Matter fabric so paired devices can reconnect. Check the radio path and Docker
+IPv6 on the restored host, then confirm the same network is preferred and test a
+press on the BILRESA. Keep the Thread dataset, Matter pairing codes and backup
+encryption key out of Git.
+
+[SONOFF MG24 firmware](https://dongle.sonoff.tech/guide/dongle-pmg24/how_to_flash_openthread_firmware/)
+· [Home Assistant Thread setup](https://www.home-assistant.io/integrations/thread/)
+· [Matter commissioning](https://www.home-assistant.io/integrations/matter/#adding-a-matter-device-to-home-assistant)
+· [Backup and restore](https://www.home-assistant.io/common-tasks/general/backups/#restoring-a-backup)
+
 ## Requirements
 
 Install required packages
