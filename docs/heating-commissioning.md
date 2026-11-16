@@ -7,9 +7,34 @@ temperature proxy; it does not control heating in the garage.
 
 VTherm entries are created through Home Assistant's config flow. The inventory in
 `deployment/group_vars/homeassistant.yaml` records the intended settings for
-rebuilding them; Ansible does not apply those entries or their tuning. The valve
-temperature limits are also live device settings. Configure these once, then
-verify them after replacement, reset or migration. Do not reapply them on a timer.
+rebuilding them; Ansible does not apply those entries or their tuning. Set the
+valve options below once and verify them after replacement, reset or migration.
+
+## Sonoff Adaptive Mode
+
+Set **Adaptive Mode** to **Off** on all six Sonoff TRVZB valves so VTherm's direct
+valve control can set the opening and closing degrees. Sonoff's Adaptive Mode
+uses the valve's own temperature controller and disables manual opening
+percentage control. See the [Sonoff Adaptive Mode documentation](https://sonoff.tech/en-nl/blogs/news/trvzb-upgrade-smart-temperature-control-for-more-stable-room-temperature).
+
+In Home Assistant, use Developer Tools → Actions:
+
+```yaml
+action: switch.turn_off
+target:
+  entity_id:
+    - switch.kids_bedroom_radiator_adaptive_mode
+    - switch.downstairs_room_radiator_a_adaptive_mode
+    - switch.downstairs_room_radiator_b_adaptive_mode
+    - switch.middle_bathroom_radiator_adaptive_mode
+    - switch.living_room_radiator_adaptive_mode
+    - switch.office_radiator_adaptive_mode
+```
+
+Verify that each Adaptive Mode switch reads **Off**. During commissioning, check
+that a radiator warms with the house zone calling and VTherm commanding
+100% opening / 0% closing. With the room satisfied, verify 0% opening / 100%
+closing and check that the radiator cools while another room still calls for heat.
 
 ## Radiator target ceilings
 
