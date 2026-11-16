@@ -257,6 +257,13 @@ thermostat_devices:
     underlying_entities:
       - climate.kids_bedroom_radiator_thermostat
     temperature_sensor: sensor.kids_room_temperature
+    window:
+      use_window_feature: true
+      use_window_central_config: false
+      window_sensor_entity_id: binary_sensor.kids_bedroom_daytime_vacancy
+      window_action: window_turn_off
+      window_delay: 0
+      window_off_delay: 0
     valve_regulation:
       opening_degree_entities:
         - number.kids_bedroom_radiator_opening_degree

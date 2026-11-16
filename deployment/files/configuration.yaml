@@ -52,3 +52,21 @@ input_select: !include_dir_merge_named input_selects/
 input_datetime: !include_dir_merge_named input_datetimes/
 
 input_boolean: !include_dir_merge_named input_booleans/
+
+schedule:
+  room_heating_vacancy_window:
+    name: Room Heating Vacancy Window
+    monday:
+      - {from: "06:00:00", to: "18:00:00"}
+    tuesday:
+      - {from: "06:00:00", to: "18:00:00"}
+    wednesday:
+      - {from: "06:00:00", to: "18:00:00"}
+    thursday:
+      - {from: "06:00:00", to: "18:00:00"}
+    friday:
+      - {from: "06:00:00", to: "18:00:00"}
+    saturday:
+      - {from: "06:00:00", to: "18:00:00"}
+    sunday:
+      - {from: "06:00:00", to: "18:00:00"}

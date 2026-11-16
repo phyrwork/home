@@ -1,0 +1,11 @@
+binary_sensor:
+  - name: Kids Bedroom Daytime Vacancy
+    unique_id: kids_bedroom_daytime_vacancy
+    state: >
+      {% set schedule = states.schedule.room_heating_vacancy_window %}
+      {% set motion = states.binary_sensor.kids_bedroom_motion_sensor %}
+      {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+      {{ schedule is not none and schedule.state == 'on'
+         and motion is not none and motion.state == 'off'
+         and now() - ([schedule.last_changed, motion.last_changed] | max)
+             >= timedelta(minutes=delay) }}

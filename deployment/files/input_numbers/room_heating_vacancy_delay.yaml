@@ -1,0 +1,7 @@
+room_heating_vacancy_delay:
+  name: Room Heating Vacancy Delay
+  min: 0
+  max: 180
+  step: 1
+  unit_of_measurement: min
+  mode: box

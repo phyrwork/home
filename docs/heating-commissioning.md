@@ -10,6 +10,40 @@ VTherm entries are created through Home Assistant's config flow. The inventory i
 rebuilding them; Ansible does not apply those entries or their tuning. Set the
 valve options below once and verify them after replacement, reset or migration.
 
+## Pausing room heating after no motion
+
+The kids' bedroom can pause heating after a period without motion. Its
+VALLHORN reports motion, and Home Assistant checks that the heating vacancy
+schedule is on. VTherm uses **Open Detection → Turn off** to close the valve.
+In logs and charts, `hvac_off_window_detection` for this thermostat means
+`binary_sensor.kids_bedroom_daytime_vacancy` turned on. The signal comes
+from the motion sensor and schedule.
+
+- `schedule.room_heating_vacancy_window` defines when vacancy can pause
+  heating in rooms that use it. It runs daily from 06:00 to 18:00 in Home
+  Assistant local time. Normal Landing control resumes at 18:00 to allow
+  preheating before the 19:00 bedtime and continues overnight.
+- The shared `input_number.room_heating_vacancy_delay` defaults to **60 min**.
+  Deployment sets it to 60 when the helper first appears with a value of zero.
+  Zero also means 60 minutes while the helper is being set up. Home Assistant
+  retains positive values across restarts and deployments.
+- In the kids' bedroom VTherm's configuration, enable Open Detection in sensor
+  mode, select `binary_sensor.kids_bedroom_daytime_vacancy`, choose **Turn off**,
+  and set both VTherm delays to **0 seconds**. Keep the window bypass off.
+
+The schedule must stay on and the motion sensor must stay clear for the full
+delay. The countdown starts from whichever state changed most recently.
+With the default delay and no motion, the earliest pause is 07:00. A restart
+or reload that recreates either state starts a fresh countdown. Home
+Assistant checks the elapsed time every minute and when either input changes.
+Motion, the end of the schedule, or either input becoming unavailable
+clears the pause. VTherm then applies the latest Landing request, including
+Landing Eco.
+
+After wiring the sensor, verify that vacancy commands 0% opening and 100%
+closing, that the Landing-derived target can update during the pause, and that
+motion and the 18:00 schedule boundary both release the pause.
+
 ## Sonoff Adaptive Mode
 
 Set **Adaptive Mode** to **Off** on all six Sonoff TRVZB valves so VTherm's direct
