@@ -12,12 +12,17 @@ valve options below once and verify them after replacement, reset or migration.
 
 ## Pausing room heating after no motion
 
-The kids' bedroom can pause heating after a period without motion. Its
-VALLHORN reports motion, and Home Assistant checks that the heating vacancy
-schedule is on. VTherm uses **Open Detection → Turn off** to close the valve.
-In logs and charts, `hvac_off_window_detection` for this thermostat means
-`binary_sensor.kids_bedroom_daytime_vacancy` turned on. The signal comes
-from the motion sensor and schedule.
+The kids' bedroom, downstairs room, living room, and office can pause heating
+after a period without motion. VTherm uses **Open Detection → Turn off** to
+close the valves. In logs and charts, `hvac_off_window_detection` for these
+thermostats means the corresponding daytime vacancy sensor turned on.
+
+| Thermostat | Motion sensors | Daytime vacancy sensor |
+| --- | --- | --- |
+| Kids' bedroom | `binary_sensor.kids_bedroom_motion_sensor` | `binary_sensor.kids_bedroom_daytime_vacancy` |
+| Downstairs room | `binary_sensor.downstairs_room_family_room_motion_sensor_occupancy`, `binary_sensor.downstairs_room_kitchen_motion_sensor_occupancy` | `binary_sensor.downstairs_room_daytime_vacancy` |
+| Living room | `binary_sensor.living_room_living_room_motion_sensor_occupancy` | `binary_sensor.living_room_daytime_vacancy` |
+| Office | `binary_sensor.office_office_motion_sensor_occupancy` | `binary_sensor.office_daytime_vacancy` |
 
 - `schedule.room_heating_vacancy_window` defines when vacancy can pause
   heating in rooms that use it. It runs daily from 06:00 to 18:00 in Home
@@ -27,16 +32,18 @@ from the motion sensor and schedule.
   Deployment sets it to 60 when the helper first appears with a value of zero.
   Zero also means 60 minutes while the helper is being set up. Home Assistant
   retains positive values across restarts and deployments.
-- In the kids' bedroom VTherm's configuration, enable Open Detection in sensor
-  mode, select `binary_sensor.kids_bedroom_daytime_vacancy`, choose **Turn off**,
+- In each listed VTherm's configuration, enable Open Detection in sensor
+  mode, select its daytime vacancy sensor, choose **Turn off**,
   and set both VTherm delays to **0 seconds**. Keep the window bypass off.
 
-The schedule must stay on and the motion sensor must stay clear for the full
-delay. The countdown starts from whichever state changed most recently.
+The schedule must stay on and every motion sensor for the room must stay
+clear for the full delay. The countdown starts from whichever state changed
+most recently. Downstairs, motion in either the family room or kitchen clears
+vacancy for both radiators.
 With the default delay and no motion, the earliest pause is 07:00. A restart
 or reload that recreates either state starts a fresh countdown. Home
-Assistant checks the elapsed time every minute and when either input changes.
-Motion, the end of the schedule, or either input becoming unavailable
+Assistant checks the elapsed time every minute and when an input changes.
+Motion, the end of the schedule, or any required sensor becoming unavailable
 clears the pause. VTherm then applies the latest Landing request, including
 Landing Eco.
 

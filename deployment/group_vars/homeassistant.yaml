@@ -278,6 +278,13 @@ thermostat_devices:
       - climate.downstairs_room_radiator_a_thermostat
       - climate.downstairs_room_radiator_b_thermostat
     temperature_sensor: sensor.downstairs_room_temperature
+    window:
+      use_window_feature: true
+      use_window_central_config: false
+      window_sensor_entity_id: binary_sensor.downstairs_room_daytime_vacancy
+      window_action: window_turn_off
+      window_delay: 0
+      window_off_delay: 0
     valve_regulation:
       opening_degree_entities:
         - number.downstairs_room_radiator_a_opening_degree
@@ -304,6 +311,13 @@ thermostat_devices:
     underlying_entities:
       - climate.living_room_radiator_thermostat
     temperature_sensor: sensor.living_room_temperature
+    window:
+      use_window_feature: true
+      use_window_central_config: false
+      window_sensor_entity_id: binary_sensor.living_room_daytime_vacancy
+      window_action: window_turn_off
+      window_delay: 0
+      window_off_delay: 0
     # Trial applied 2026-11-10; retain when re-creating the config-flow entry.
     tpi:
       tpi_coef_ext: 0.03
@@ -319,6 +333,13 @@ thermostat_devices:
     underlying_entities:
       - climate.office_radiator_thermostat
     temperature_sensor: sensor.office_temperature
+    window:
+      use_window_feature: true
+      use_window_central_config: false
+      window_sensor_entity_id: binary_sensor.office_daytime_vacancy
+      window_action: window_turn_off
+      window_delay: 0
+      window_off_delay: 0
     valve_regulation:
       opening_degree_entities:
         - number.office_radiator_opening_degree
