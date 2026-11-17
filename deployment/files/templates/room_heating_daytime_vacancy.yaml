@@ -9,3 +9,38 @@ binary_sensor:
          and motion is not none and motion.state == 'off'
          and now() - ([schedule.last_changed, motion.last_changed] | max)
              >= timedelta(minutes=delay) }}
+
+  - name: Downstairs Room Daytime Vacancy
+    unique_id: downstairs_room_daytime_vacancy
+    state: >
+      {% set schedule = states.schedule.room_heating_vacancy_window %}
+      {% set family_room = states.binary_sensor.downstairs_room_family_room_motion_sensor_occupancy %}
+      {% set kitchen = states.binary_sensor.downstairs_room_kitchen_motion_sensor_occupancy %}
+      {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+      {{ schedule is not none and schedule.state == 'on'
+         and family_room is not none and family_room.state == 'off'
+         and kitchen is not none and kitchen.state == 'off'
+         and now() - ([schedule.last_changed, family_room.last_changed, kitchen.last_changed] | max)
+             >= timedelta(minutes=delay) }}
+
+  - name: Living Room Daytime Vacancy
+    unique_id: living_room_daytime_vacancy
+    state: >
+      {% set schedule = states.schedule.room_heating_vacancy_window %}
+      {% set motion = states.binary_sensor.living_room_living_room_motion_sensor_occupancy %}
+      {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+      {{ schedule is not none and schedule.state == 'on'
+         and motion is not none and motion.state == 'off'
+         and now() - ([schedule.last_changed, motion.last_changed] | max)
+             >= timedelta(minutes=delay) }}
+
+  - name: Office Daytime Vacancy
+    unique_id: office_daytime_vacancy
+    state: >
+      {% set schedule = states.schedule.room_heating_vacancy_window %}
+      {% set motion = states.binary_sensor.office_office_motion_sensor_occupancy %}
+      {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+      {{ schedule is not none and schedule.state == 'on'
+         and motion is not none and motion.state == 'off'
+         and now() - ([schedule.last_changed, motion.last_changed] | max)
+             >= timedelta(minutes=delay) }}
