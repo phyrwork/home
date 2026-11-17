@@ -541,7 +541,16 @@
           Authorization: "Bearer {{ ha_api_token }}"
         status_code: [200, 404]
       loop:
-        - entity: schedule.room_heating_vacancy_window
+        - entity: schedule.kids_bedroom_heating_protection
+          configuration_changed: "{{ ha_configuration is changed }}"
+          handler: apply schedules
+        - entity: schedule.master_bedroom_heating_protection
+          configuration_changed: "{{ ha_configuration is changed }}"
+          handler: apply schedules
+        - entity: schedule.downstairs_room_heating_protection
+          configuration_changed: "{{ ha_configuration is changed }}"
+          handler: apply schedules
+        - entity: schedule.living_room_heating_protection
           configuration_changed: "{{ ha_configuration is changed }}"
           handler: apply schedules
         - entity: input_number.room_heating_vacancy_delay

@@ -1,0 +1,60 @@
+# Keep existing unique_id values stable when changing entity names or IDs.
+binary_sensor:
+  - name: Kids Bedroom Heating Vacancy
+    unique_id: kids_bedroom_daytime_vacancy
+    default_entity_id: binary_sensor.kids_bedroom_heating_vacancy
+    state: >
+      {% set protection = states.schedule.kids_bedroom_heating_protection %}
+      {% set motion = states.binary_sensor.kids_bedroom_motion_sensor %}
+      {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+      {{ protection is not none and protection.state == 'off'
+         and motion is not none and motion.state == 'off'
+         and now() - ([protection.last_changed, motion.last_changed] | max)
+             >= timedelta(minutes=delay) }}
+
+  - name: Downstairs Room Heating Vacancy
+    unique_id: downstairs_room_daytime_vacancy
+    default_entity_id: binary_sensor.downstairs_room_heating_vacancy
+    state: >
+      {% set protection = states.schedule.downstairs_room_heating_protection %}
+      {% set family_room = states.binary_sensor.downstairs_room_family_room_motion_sensor_occupancy %}
+      {% set kitchen = states.binary_sensor.downstairs_room_kitchen_motion_sensor_occupancy %}
+      {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+      {{ protection is not none and protection.state == 'off'
+         and family_room is not none and family_room.state == 'off'
+         and kitchen is not none and kitchen.state == 'off'
+         and now() - ([protection.last_changed, family_room.last_changed, kitchen.last_changed] | max)
+             >= timedelta(minutes=delay) }}
+
+  - name: Living Room Heating Vacancy
+    unique_id: living_room_daytime_vacancy
+    default_entity_id: binary_sensor.living_room_heating_vacancy
+    state: >
+      {% set protection = states.schedule.living_room_heating_protection %}
+      {% set motion = states.binary_sensor.living_room_living_room_motion_sensor_occupancy %}
+      {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+      {{ protection is not none and protection.state == 'off'
+         and motion is not none and motion.state == 'off'
+         and now() - ([protection.last_changed, motion.last_changed] | max)
+             >= timedelta(minutes=delay) }}
+
+  - name: Office Heating Vacancy
+    unique_id: office_daytime_vacancy
+    default_entity_id: binary_sensor.office_heating_vacancy
+    state: >
+      {% set motion = states.binary_sensor.office_office_motion_sensor_occupancy %}
+      {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+      {{ motion is not none and motion.state == 'off'
+         and now() - (motion.last_changed)
+             >= timedelta(minutes=delay) }}
+
+  - name: Master Bedroom Heating Vacancy
+    unique_id: master_bedroom_heating_vacancy
+    state: >
+      {% set protection = states.schedule.master_bedroom_heating_protection %}
+      {% set motion = states.binary_sensor.master_bedroom_master_bedroom_motion_sensor_occupancy %}
+      {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+      {{ protection is not none and protection.state == 'off'
+         and motion is not none and motion.state == 'off'
+         and now() - ([protection.last_changed, motion.last_changed] | max)
+             >= timedelta(minutes=delay) }}

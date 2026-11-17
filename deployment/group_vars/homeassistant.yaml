@@ -207,8 +207,8 @@ battery_devices:
 # re-creating VTherm entries after a reset or migration.
 # One-time setup and verification: docs/heating-commissioning.md.
 # External temp here refers to "outdoor" proxy (garage temperature in our case).
-# room_follow_zone mirrors landing thermostat temperature and preset mode to room
-# thermostats (plus each room's setpoint offset).
+# room_follow_zone copies the Landing target plus each room's setpoint offset.
+# Household presence controls VTherm central mode separately.
 zone_configuration_defaults:
   external_temperature_sensor: sensor.garage_temperature
   central_boiler:
@@ -230,6 +230,7 @@ zone_configurations:
 
 thermostat_device_defaults:
   type: thermostat_over_climate
+  use_central_mode: true
   external_temperature_sensor: sensor.garage_temperature
   used_by_controls_central_boiler: true
   type_settings:
@@ -260,7 +261,7 @@ thermostat_devices:
     window:
       use_window_feature: true
       use_window_central_config: false
-      window_sensor_entity_id: binary_sensor.kids_bedroom_daytime_vacancy
+      window_sensor_entity_id: binary_sensor.kids_bedroom_heating_vacancy
       window_action: window_turn_off
       window_delay: 0
       window_off_delay: 0
@@ -281,7 +282,7 @@ thermostat_devices:
     window:
       use_window_feature: true
       use_window_central_config: false
-      window_sensor_entity_id: binary_sensor.downstairs_room_daytime_vacancy
+      window_sensor_entity_id: binary_sensor.downstairs_room_heating_vacancy
       window_action: window_turn_off
       window_delay: 0
       window_off_delay: 0
@@ -314,7 +315,7 @@ thermostat_devices:
     window:
       use_window_feature: true
       use_window_central_config: false
-      window_sensor_entity_id: binary_sensor.living_room_daytime_vacancy
+      window_sensor_entity_id: binary_sensor.living_room_heating_vacancy
       window_action: window_turn_off
       window_delay: 0
       window_off_delay: 0
@@ -336,7 +337,7 @@ thermostat_devices:
     window:
       use_window_feature: true
       use_window_central_config: false
-      window_sensor_entity_id: binary_sensor.office_daytime_vacancy
+      window_sensor_entity_id: binary_sensor.office_heating_vacancy
       window_action: window_turn_off
       window_delay: 0
       window_off_delay: 0

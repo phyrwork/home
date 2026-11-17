@@ -1,0 +1,100 @@
+- id: room_heating_follow_house_presence
+  alias: Room heating follow house presence
+  trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.house_heating_away
+        - select.central_mode
+      to: null
+    - platform: homeassistant
+      event: start
+    - platform: event
+      event_type: automation_reloaded
+  condition:
+    - condition: template
+      value_template: >
+        {{ states('binary_sensor.house_heating_away') in ['on', 'off']
+           and states('select.central_mode') in
+               (state_attr('select.central_mode', 'options') or []) }}
+  action:
+    - variables:
+        central_mode: "{{ 'Stopped' if is_state('binary_sensor.house_heating_away', 'on') else 'Auto' }}"
+    - condition: template
+      value_template: "{{ not is_state('select.central_mode', central_mode) }}"
+    - service: select.select_option
+      target:
+        entity_id: select.central_mode
+      data:
+        option: "{{ central_mode }}"
+  mode: restart
+
+- id: landing_heating_follow_house_presence
+  alias: Landing heating follow house presence
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.house_heating_away
+      to: null
+    - platform: state
+      entity_id: climate.landing
+      to: null
+    - platform: state
+      entity_id: climate.landing
+      attribute: preset_mode
+    - platform: homeassistant
+      event: start
+    - platform: event
+      event_type: automation_reloaded
+  condition:
+    - condition: template
+      value_template: >
+        {{ states('binary_sensor.house_heating_away') in ['on', 'off']
+           and has_value('climate.landing') }}
+  action:
+    - variables:
+        landing_preset: "{{ 'eco' if is_state('binary_sensor.house_heating_away', 'on') else 'none' }}"
+    - condition: template
+      value_template: "{{ state_attr('climate.landing', 'preset_mode') != landing_preset }}"
+    - service: climate.set_preset_mode
+      target:
+        entity_id: climate.landing
+      data:
+        preset_mode: "{{ landing_preset }}"
+  mode: restart
+
+- id: master_bedroom_heating_follow_presence
+  alias: Master bedroom heating follow presence
+  trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.house_heating_away
+        - binary_sensor.master_bedroom_heating_vacancy
+        - climate.master_bedroom
+      to: null
+    - platform: state
+      entity_id: climate.master_bedroom
+      attribute: preset_mode
+    - platform: homeassistant
+      event: start
+    - platform: event
+      event_type: automation_reloaded
+  condition:
+    - condition: template
+      value_template: >
+        {{ states('binary_sensor.house_heating_away') in ['on', 'off']
+           and states('binary_sensor.master_bedroom_heating_vacancy') in ['on', 'off']
+           and has_value('climate.master_bedroom')
+           and not is_state('climate.master_bedroom', 'off') }}
+  action:
+    - variables:
+        master_preset: >
+          {{ 'eco' if is_state('binary_sensor.house_heating_away', 'on')
+                      or is_state('binary_sensor.master_bedroom_heating_vacancy', 'on')
+             else 'none' }}
+    - condition: template
+      value_template: "{{ state_attr('climate.master_bedroom', 'preset_mode') != master_preset }}"
+    - service: climate.set_preset_mode
+      target:
+        entity_id: climate.master_bedroom
+      data:
+        preset_mode: "{{ master_preset }}"
+  mode: restart

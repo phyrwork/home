@@ -54,19 +54,88 @@ input_datetime: !include_dir_merge_named input_datetimes/
 input_boolean: !include_dir_merge_named input_booleans/
 
 schedule:
-  room_heating_vacancy_window:
-    name: Room Heating Vacancy Window
+  kids_bedroom_heating_protection:
+    name: Kids Bedroom Heating Protection
     monday:
-      - {from: "06:00:00", to: "18:00:00"}
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "18:00:00", to: "24:00:00"}
     tuesday:
-      - {from: "06:00:00", to: "18:00:00"}
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "18:00:00", to: "24:00:00"}
     wednesday:
-      - {from: "06:00:00", to: "18:00:00"}
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "18:00:00", to: "24:00:00"}
     thursday:
-      - {from: "06:00:00", to: "18:00:00"}
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "18:00:00", to: "24:00:00"}
     friday:
-      - {from: "06:00:00", to: "18:00:00"}
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "18:00:00", to: "24:00:00"}
     saturday:
-      - {from: "06:00:00", to: "18:00:00"}
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "18:00:00", to: "24:00:00"}
     sunday:
-      - {from: "06:00:00", to: "18:00:00"}
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "18:00:00", to: "24:00:00"}
+  master_bedroom_heating_protection:
+    name: Master Bedroom Heating Protection
+    monday:
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "20:00:00", to: "24:00:00"}
+    tuesday:
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "20:00:00", to: "24:00:00"}
+    wednesday:
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "20:00:00", to: "24:00:00"}
+    thursday:
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "20:00:00", to: "24:00:00"}
+    friday:
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "20:00:00", to: "24:00:00"}
+    saturday:
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "20:00:00", to: "24:00:00"}
+    sunday:
+      - {from: "00:00:00", to: "08:00:00"}
+      - {from: "20:00:00", to: "24:00:00"}
+  downstairs_room_heating_protection:
+    name: Downstairs Room Heating Protection
+    monday:
+      - {from: "06:00:00", to: "08:00:00"}
+      - {from: "16:00:00", to: "18:00:00"}
+    tuesday:
+      - {from: "06:00:00", to: "08:00:00"}
+      - {from: "16:00:00", to: "18:00:00"}
+    wednesday:
+      - {from: "06:00:00", to: "08:00:00"}
+      - {from: "16:00:00", to: "18:00:00"}
+    thursday:
+      - {from: "06:00:00", to: "08:00:00"}
+      - {from: "16:00:00", to: "18:00:00"}
+    friday:
+      - {from: "06:00:00", to: "08:00:00"}
+      - {from: "16:00:00", to: "18:00:00"}
+    saturday:
+      - {from: "06:00:00", to: "08:00:00"}
+      - {from: "16:00:00", to: "18:00:00"}
+    sunday:
+      - {from: "06:00:00", to: "08:00:00"}
+      - {from: "16:00:00", to: "18:00:00"}
+  living_room_heating_protection:
+    name: Living Room Heating Protection
+    monday:
+      - {from: "16:00:00", to: "18:00:00"}
+    tuesday:
+      - {from: "16:00:00", to: "18:00:00"}
+    wednesday:
+      - {from: "16:00:00", to: "18:00:00"}
+    thursday:
+      - {from: "16:00:00", to: "18:00:00"}
+    friday:
+      - {from: "16:00:00", to: "18:00:00"}
+    saturday:
+      - {from: "16:00:00", to: "18:00:00"}
+    sunday:
+      - {from: "16:00:00", to: "18:00:00"}
