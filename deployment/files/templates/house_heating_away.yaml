@@ -1,0 +1,8 @@
+binary_sensor:
+  - name: House Heating Away
+    unique_id: house_heating_away
+    delay_on: "00:05:00"
+    state: >
+      {{ has_value('person.connor') and has_value('person.sonia')
+         and not is_state('person.connor', 'home')
+         and not is_state('person.sonia', 'home') }}
