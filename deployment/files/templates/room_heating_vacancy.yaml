@@ -11,6 +11,20 @@ binary_sensor:
          and motion is not none and motion.state == 'off'
          and now() - ([protection.last_changed, motion.last_changed] | max)
              >= timedelta(minutes=delay) }}
+    attributes:
+      vacancy_countdown: >
+        {% set protection = states.schedule.kids_bedroom_heating_protection %}
+        {% set motion = states.binary_sensor.kids_bedroom_motion_sensor %}
+        {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+        {% if protection is not none and protection.state == 'off' and motion is not none and motion.state == 'off' %}
+          {% set due = as_timestamp(([protection.last_changed, motion.last_changed] | max)) + delay * 60 %}
+          {% set remaining = (due - as_timestamp(now())) / 60 %}
+          {% set protection_start = as_timestamp(protection.attributes.get('next_event'), none) %}
+          {{ 'Vacancy in ' ~ (remaining | round(0, 'ceil') | int) ~ ' min'
+             if remaining > 0 and (protection_start is none or due < protection_start) else none }}
+        {% else %}
+          {{ none }}
+        {% endif %}
 
   - name: Downstairs Room Heating Vacancy
     unique_id: downstairs_room_daytime_vacancy
@@ -25,6 +39,21 @@ binary_sensor:
          and kitchen is not none and kitchen.state == 'off'
          and now() - ([protection.last_changed, family_room.last_changed, kitchen.last_changed] | max)
              >= timedelta(minutes=delay) }}
+    attributes:
+      vacancy_countdown: >
+        {% set protection = states.schedule.downstairs_room_heating_protection %}
+        {% set family_room = states.binary_sensor.downstairs_room_family_room_motion_sensor_occupancy %}
+        {% set kitchen = states.binary_sensor.downstairs_room_kitchen_motion_sensor_occupancy %}
+        {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+        {% if protection is not none and protection.state == 'off' and family_room is not none and family_room.state == 'off' and kitchen is not none and kitchen.state == 'off' %}
+          {% set due = as_timestamp(([protection.last_changed, family_room.last_changed, kitchen.last_changed] | max)) + delay * 60 %}
+          {% set remaining = (due - as_timestamp(now())) / 60 %}
+          {% set protection_start = as_timestamp(protection.attributes.get('next_event'), none) %}
+          {{ 'Vacancy in ' ~ (remaining | round(0, 'ceil') | int) ~ ' min'
+             if remaining > 0 and (protection_start is none or due < protection_start) else none }}
+        {% else %}
+          {{ none }}
+        {% endif %}
 
   - name: Living Room Heating Vacancy
     unique_id: living_room_daytime_vacancy
@@ -37,6 +66,20 @@ binary_sensor:
          and motion is not none and motion.state == 'off'
          and now() - ([protection.last_changed, motion.last_changed] | max)
              >= timedelta(minutes=delay) }}
+    attributes:
+      vacancy_countdown: >
+        {% set protection = states.schedule.living_room_heating_protection %}
+        {% set motion = states.binary_sensor.living_room_living_room_motion_sensor_occupancy %}
+        {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+        {% if protection is not none and protection.state == 'off' and motion is not none and motion.state == 'off' %}
+          {% set due = as_timestamp(([protection.last_changed, motion.last_changed] | max)) + delay * 60 %}
+          {% set remaining = (due - as_timestamp(now())) / 60 %}
+          {% set protection_start = as_timestamp(protection.attributes.get('next_event'), none) %}
+          {{ 'Vacancy in ' ~ (remaining | round(0, 'ceil') | int) ~ ' min'
+             if remaining > 0 and (protection_start is none or due < protection_start) else none }}
+        {% else %}
+          {{ none }}
+        {% endif %}
 
   - name: Office Heating Vacancy
     unique_id: office_daytime_vacancy
@@ -47,6 +90,18 @@ binary_sensor:
       {{ motion is not none and motion.state == 'off'
          and now() - (motion.last_changed)
              >= timedelta(minutes=delay) }}
+    attributes:
+      vacancy_countdown: >
+        {% set motion = states.binary_sensor.office_office_motion_sensor_occupancy %}
+        {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+        {% if motion is not none and motion.state == 'off' %}
+          {% set due = as_timestamp((motion.last_changed)) + delay * 60 %}
+          {% set remaining = (due - as_timestamp(now())) / 60 %}
+          {{ 'Vacancy in ' ~ (remaining | round(0, 'ceil') | int) ~ ' min'
+             if remaining > 0 else none }}
+        {% else %}
+          {{ none }}
+        {% endif %}
 
   - name: Master Bedroom Heating Vacancy
     unique_id: master_bedroom_heating_vacancy
@@ -58,3 +113,18 @@ binary_sensor:
          and motion is not none and motion.state == 'off'
          and now() - ([protection.last_changed, motion.last_changed] | max)
              >= timedelta(minutes=delay) }}
+
+    attributes:
+      vacancy_countdown: >
+        {% set protection = states.schedule.master_bedroom_heating_protection %}
+        {% set motion = states.binary_sensor.master_bedroom_master_bedroom_motion_sensor_occupancy %}
+        {% set delay = states('input_number.room_heating_vacancy_delay') | int(0) or 60 %}
+        {% if protection is not none and protection.state == 'off' and motion is not none and motion.state == 'off' %}
+          {% set due = as_timestamp(([protection.last_changed, motion.last_changed] | max)) + delay * 60 %}
+          {% set remaining = (due - as_timestamp(now())) / 60 %}
+          {% set protection_start = as_timestamp(protection.attributes.get('next_event'), none) %}
+          {{ 'Vacancy in ' ~ (remaining | round(0, 'ceil') | int) ~ ' min'
+             if remaining > 0 and (protection_start is none or due < protection_start) else none }}
+        {% else %}
+          {{ none }}
+        {% endif %}
