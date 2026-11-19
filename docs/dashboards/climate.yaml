@@ -1,0 +1,262 @@
+# Snapshot of the HA-managed Climate dashboard. See README.md for restoration.
+title: Climate
+views:
+- title: Climate
+  path: overview
+  type: sections
+  max_columns: 3
+  sections:
+  - type: grid
+    column_span: 3
+    cards:
+    - type: heading
+      heading: Home
+      heading_style: title
+      icon: mdi:home
+    - type: horizontal-stack
+      grid_options:
+        columns: full
+      cards:
+      - type: tile
+        entity: binary_sensor.house_heating_away
+        name: Household away
+        icon: mdi:home-export-outline
+        tap_action:
+          action: more-info
+        icon_tap_action:
+          action: more-info
+      - type: tile
+        entity: switch.house_heating_zone_call_for_heat
+        name: House call for heat
+        icon: mdi:fire
+        tap_action:
+          action: more-info
+        icon_tap_action:
+          action: more-info
+  - type: grid
+    cards:
+    - type: heading
+      heading: Landing
+      heading_style: title
+    - type: tile
+      entity: climate.landing
+      name: Landing
+      state_content:
+      - hvac_action
+      - current_temperature
+      features:
+      - type: target-temperature
+        style: buttons
+      features_position: inline
+      grid_options:
+        columns: full
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+  - type: grid
+    cards:
+    - type: heading
+      heading: Kids’ bedroom
+      heading_style: title
+    - type: tile
+      entity: climate.kids_bedroom_thermostat
+      name: Kids’ bedroom
+      state_content:
+      - hvac_action
+      - current_temperature
+      features:
+      - type: target-temperature
+        style: buttons
+      features_position: inline
+      grid_options:
+        columns: full
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+    - type: tile
+      entity: binary_sensor.kids_bedroom_heating_vacancy
+      name: Heating vacancy
+      icon: mdi:motion-sensor-off
+      color: amber
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      hold_action:
+        action: none
+      double_tap_action:
+        action: none
+      state_content:
+      - state
+      - vacancy_countdown
+  - type: grid
+    cards:
+    - type: heading
+      heading: Master bedroom
+      heading_style: title
+    - type: tile
+      entity: climate.master_bedroom
+      name: Master bedroom
+      state_content:
+      - hvac_action
+      - current_temperature
+      features:
+      - type: target-temperature
+        style: buttons
+      features_position: inline
+      grid_options:
+        columns: full
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+    - type: tile
+      entity: binary_sensor.master_bedroom_heating_vacancy
+      name: Heating vacancy
+      icon: mdi:motion-sensor-off
+      color: amber
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      hold_action:
+        action: none
+      double_tap_action:
+        action: none
+      state_content:
+      - state
+      - vacancy_countdown
+  - type: grid
+    cards:
+    - type: heading
+      heading: Downstairs
+      heading_style: title
+    - type: tile
+      entity: climate.downstairs_room_thermostat
+      name: Downstairs
+      state_content:
+      - hvac_action
+      - current_temperature
+      features:
+      - type: target-temperature
+        style: buttons
+      features_position: inline
+      grid_options:
+        columns: full
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+    - type: tile
+      entity: binary_sensor.downstairs_room_heating_vacancy
+      name: Heating vacancy
+      icon: mdi:motion-sensor-off
+      color: amber
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      hold_action:
+        action: none
+      double_tap_action:
+        action: none
+      state_content:
+      - state
+      - vacancy_countdown
+  - type: grid
+    cards:
+    - type: heading
+      heading: Living room
+      heading_style: title
+    - type: tile
+      entity: climate.living_room_thermostat
+      name: Living room
+      state_content:
+      - hvac_action
+      - current_temperature
+      features:
+      - type: target-temperature
+        style: buttons
+      features_position: inline
+      grid_options:
+        columns: full
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+    - type: tile
+      entity: binary_sensor.living_room_heating_vacancy
+      name: Heating vacancy
+      icon: mdi:motion-sensor-off
+      color: amber
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      hold_action:
+        action: none
+      double_tap_action:
+        action: none
+      state_content:
+      - state
+      - vacancy_countdown
+  - type: grid
+    cards:
+    - type: heading
+      heading: Office
+      heading_style: title
+    - type: tile
+      entity: climate.office_thermostat
+      name: Office
+      state_content:
+      - hvac_action
+      - current_temperature
+      features:
+      - type: target-temperature
+        style: buttons
+      features_position: inline
+      grid_options:
+        columns: full
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+    - type: tile
+      entity: binary_sensor.office_heating_vacancy
+      name: Heating vacancy
+      icon: mdi:motion-sensor-off
+      color: amber
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      hold_action:
+        action: none
+      double_tap_action:
+        action: none
+      state_content:
+      - state
+      - vacancy_countdown
+  - type: grid
+    cards:
+    - type: heading
+      heading: Bathroom
+      heading_style: title
+    - type: tile
+      entity: climate.middle_bathroom_thermostat
+      name: Bathroom
+      state_content:
+      - hvac_action
+      - current_temperature
+      features:
+      - type: target-temperature
+        style: buttons
+      features_position: inline
+      grid_options:
+        columns: full
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
