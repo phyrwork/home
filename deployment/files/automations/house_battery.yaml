@@ -43,3 +43,65 @@
         - service: persistent_notification.dismiss
           data:
             notification_id: house_battery_stale_heartbeat
+
+- id: house_battery_daily_inverter_clock_sync
+  alias: "House battery daily inverter clock sync"
+  description: >-
+    Synchronise the inverter clock before overnight charging to prevent
+    accumulated drift tripping the controller's one-minute clock safety check.
+  mode: single
+  trigger:
+    - platform: time
+      at: "23:15:00"
+  action:
+    - service: datetime.set_value
+      target:
+        entity_id: datetime.garage_inverter_control_inverter_time
+      data:
+        datetime: "{{ now().isoformat() }}"
+    - service: homeassistant.update_entity
+      target:
+        entity_id: datetime.garage_inverter_control_inverter_time
+
+- id: house_battery_degraded_health_alert
+  alias: "House battery degraded health alert"
+  description: >-
+    Notify after one continuous hour of degraded controller health, allowing
+    transient Solis API failures to recover. Dismiss on healthy recovery.
+    Use the controller's degraded_since timestamp so automation reloads do
+    not restart the one-hour threshold.
+  mode: single
+  trigger:
+    - platform: time_pattern
+      minutes: "/1"
+    - platform: state
+      entity_id: sensor.house_battery_control_health
+      to: "healthy"
+  action:
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >-
+                {% set since = as_timestamp(state_attr('sensor.house_battery_control_heartbeat', 'degraded_since'), default=none) %}
+                {{ is_state('sensor.house_battery_control_health', 'degraded')
+                   and since is not none
+                   and (as_timestamp(now()) - since) >= 3600 }}
+          sequence:
+            - service: persistent_notification.create
+              data:
+                notification_id: house_battery_degraded_health
+                title: House battery controller degraded for one hour
+                message: >-
+                  The battery controller has been degraded since
+                  {{ state_attr('sensor.house_battery_control_heartbeat', 'degraded_since') }}.
+                  Charging or export may not be applied even when the Action
+                  sensor requests it. Last error:
+                  {{ state_attr('sensor.house_battery_control_heartbeat', 'last_error') or 'No error detail available' }}.
+        - conditions:
+            - condition: state
+              entity_id: sensor.house_battery_control_health
+              state: "healthy"
+          sequence:
+            - service: persistent_notification.dismiss
+              data:
+                notification_id: house_battery_degraded_health

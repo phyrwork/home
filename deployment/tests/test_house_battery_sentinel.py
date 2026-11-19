@@ -29,7 +29,7 @@ def test_stale_notification_and_recovery_never_control_inverter():
     assert notice['service'] == 'persistent_notification.create'
     assert clear['service'] == 'persistent_notification.dismiss'
     assert notice['data']['notification_id'] == clear['data']['notification_id']
-    text = AUTOMATION_PATH.read_text()
+    text = yaml.safe_dump(sentinel())
     assert text.count('service:') == 2
     assert 'select.select_option' not in text
     assert 'switch.turn_' not in text
@@ -44,3 +44,31 @@ def test_heartbeat_boundaries():
             as_timestamp=lambda value, default=None: default if value is None else value,
         )
         assert rendered.strip() == str(expected)
+
+
+def test_degraded_alert_requires_continuous_hour_and_current_degradation():
+    automations = yaml.safe_load(AUTOMATION_PATH.read_text())
+    alert = next(a for a in automations if a['id'] == 'house_battery_degraded_health_alert')
+    decision = alert['action'][0]['choose']
+    template = decision[0]['conditions'][0]['value_template']
+    for health, since, expected in [
+        ('degraded', None, False),
+        ('degraded', 6401, False),
+        ('degraded', 6400, True),
+        ('degraded', 6399, True),
+        ('degraded', 10001, False),
+        ('healthy', 6399, False),
+        ('unavailable', 6399, False),
+    ]:
+        rendered = Environment().from_string(template).render(
+            state_attr=lambda *_: since,
+            is_state=lambda _, value: health == value,
+            now=lambda: 10000,
+            as_timestamp=lambda value, default=None: default if value is None else value,
+        )
+        assert rendered.strip() == str(expected)
+    assert decision[1]['conditions'][0]['state'] == 'healthy'
+    notice = decision[0]['sequence'][0]
+    clear = decision[1]['sequence'][0]
+    assert notice['data']['notification_id'] == clear['data']['notification_id']
+    assert alert['trigger'][1]['to'] == 'healthy'

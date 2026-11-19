@@ -22,6 +22,17 @@ Runtime writes are restricted to TOU time/current/target/enable entities in the
 legacy `solis_cloud_control` integration. The controller checks its readable
 commissioning prerequisites before new operations; it does not repair them.
 
+A separate automation synchronises the inverter clock with Home Assistant at
+23:15 Europe/London each day, before the standard overnight charging window,
+then requests a refreshed clock reading. This maintenance write prevents clock
+drift accumulating past the controller's one-minute safety limit; it does not
+change that limit or write TOU schedules. Solis API failures can still prevent
+a sync. A notification-only automation checks controller health every minute
+and raises one persistent notification after an hour of continuous degradation,
+including the last error. It uses the controller's `degraded_since` timestamp
+so automation reloads do not reset the threshold, and dismisses the notice when
+health returns to healthy. These automations live in `automations/house_battery.yaml`.
+
 The legacy peak-shaving entity represents storage-mode register 43110 bit 11.
 The working Grid Peak Shaving control on this inverter is 43483 bit 7 (CID
 9023). Verify the latter independently during commissioning. It has no runtime
